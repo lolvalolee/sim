@@ -192,24 +192,54 @@ router.post('/groups/:groupId/rates', LEC, (req, res) => {
 
 // ── HELPER: generate assignment ───────────────────────────────
 function generateAssignment(studentId, groupId, createdBy) {
-  // Get all active letters
   const allLetters = db.prepare('SELECT id,type FROM letters WHERE active=1').all();
 
-  // Ensure variety: at least one complete, one missing, one form
-  const complete = allLetters.filter(l => l.type === 'complete');
-  const missing  = allLetters.filter(l => l.type === 'missing');
-  const form     = allLetters.filter(l => l.type === 'form');
+  // True Fisher-Yates shuffle
+  function shuffle(arr) {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
 
-  const shuffle = arr => arr.sort(() => Math.random() - 0.5);
+  const complete = shuffle(allLetters.filter(l => l.type === 'complete'));
+  const missing  = shuffle(allLetters.filter(l => l.type === 'missing'));
+  const form     = shuffle(allLetters.filter(l => l.type === 'form'));
+
+  // Check how many letters already used by other students in this group
+  // to ensure variety across students
+  const groupAssignments = db.prepare(
+    'SELECT letter_ids FROM assignments WHERE group_id=?'
+  ).all(groupId);
+
+  // Count usage of each letter in this group
+  const usageCount = {};
+  groupAssignments.forEach(a => {
+    JSON.parse(a.letter_ids).forEach(id => {
+      usageCount[id] = (usageCount[id] || 0) + 1;
+    });
+  });
+
+  // Sort by least used first to maximize variety
+  const sortByUsage = arr => [...arr].sort((a, b) =>
+    (usageCount[a.id] || 0) - (usageCount[b.id] || 0)
+  );
 
   let selected = [];
-  // 2-3 complete, 2-3 missing, 1-2 form = ~6-8 total
-  selected.push(...shuffle(complete).slice(0, Math.min(3, complete.length)));
-  selected.push(...shuffle(missing).slice(0, Math.min(3, missing.length)));
-  selected.push(...shuffle(form).slice(0, Math.min(2, form.length)));
-  selected = shuffle(selected).slice(0, 8);
+  // Take least-used letters from each type
+  selected.push(...sortByUsage(complete).slice(0, Math.min(3, complete.length)));
+  selected.push(...sortByUsage(missing).slice(0, Math.min(3, missing.length)));
+  selected.push(...sortByUsage(form).slice(0, Math.min(2, form.length)));
 
-  // If not enough letters seeded yet, use all
+  // Final shuffle of selected set
+  selected = shuffle(selected);
+
+  // Target 6-8 letters
+  if (selected.length > 8) selected = selected.slice(0, 8);
+
+  // Fallback if DB is empty
   if (selected.length === 0) selected = allLetters;
 
   const id = uuidv4();

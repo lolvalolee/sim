@@ -745,7 +745,7 @@ body {
       </div>
       <div class="nav-item" onclick="go('email')" id="n-email">
         <span class="nav-icon">✉</span><span class="nav-label">Пошта замовників</span>
-        <span class="nav-badge nb-r" id="badge-email">8</span>
+        <span class="nav-badge nb-r" id="badge-email" style="display:none">0</span>
       </div>
       <div class="nav-item locked" onclick="go('carriers')" id="n-carriers">
         <span class="nav-icon">🚛</span><span class="nav-label">Перевізники</span>
@@ -761,9 +761,7 @@ body {
       <div class="nav-item locked" onclick="go('docs')" id="n-docs">
         <span class="nav-icon">📄</span><span class="nav-label">Документи</span>
       </div>
-      <div class="nav-item" onclick="go('admin')" id="n-admin" style="margin-top:8px">
-        <span class="nav-icon">⚙</span><span class="nav-label">Кабінет лектора</span>
-      </div>
+      <!-- admin nav hidden for students -->
     </nav>
 
     <div id="sb-timer">
@@ -1442,7 +1440,11 @@ function unlock(id){document.getElementById('n-'+id)?.classList.remove('locked')
 function updateBadges(){
   const unread=S.emails.filter(e=>e.unread).length;
   const eb=document.getElementById('badge-email');
-  if(eb){eb.textContent=unread;eb.style.display=unread?'':'none';}
+  if(eb){
+    const total=S.emails?S.emails.length:0;
+    eb.textContent=unread||total;
+    eb.style.display=(unread||total)?'':'none';
+  }
   const chats=S.contactedCarriers.size;
   const cb=document.getElementById('badge-chats');
   if(cb){cb.textContent=chats;cb.style.display=chats?'':'none';}
@@ -2331,7 +2333,15 @@ async function callClaude(system,messages,max_tokens){
   }
   if(res.status===429){ throw new Error('rate_limit'); }
   if(!res.ok){ const b=await res.text().catch(()=>''); throw new Error('API '+res.status+': '+b.slice(0,120)); }
-  return await res.json();
+  const data=await res.json();
+  // Extract text from Anthropic API response format
+  if(data.content&&Array.isArray(data.content)){
+    return data.content.map(b=>b.text||'').join('');
+  }
+  // Fallback if server already extracted text
+  if(typeof data==='string') return data;
+  if(data.text) return data.text;
+  return JSON.stringify(data);
 }
 function errMsg(e){
   if(e.message==='no_key') return '🔑 Потрібен API ключ';
