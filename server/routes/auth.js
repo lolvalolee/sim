@@ -23,7 +23,7 @@ router.post('/login', loginLimiter, async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
   // Update last login
-  db.prepare('UPDATE users SET last_login=datetime("now") WHERE id=?').run(user.id);
+  db.prepare("UPDATE users SET last_login=datetime('now') WHERE id=?").run(user.id);
 
   const token = jwt.sign(
     { id: user.id, role: user.role },
