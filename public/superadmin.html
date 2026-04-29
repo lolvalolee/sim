@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Docaa — Адмін</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#151515;--bg2:#1c1c1c;--bg3:#242424;--bg4:#2c2c2c;--b1:#2a2a2a;--b2:#383838;--t1:#f0f0f0;--t2:#a0a0a0;--t3:#606060;--t4:#383838;--acc:#FFBE63;--acc2:#e8a845;--acc-bg:rgba(255,190,99,.08);--acc-br:rgba(255,190,99,.25);--grn:#34d87a;--grn2:#22a85a;--grn-bg:rgba(52,216,122,.08);--red:#f05060;--red2:#c03040;--red-bg:rgba(240,80,96,.08);--sans:'Inter',sans-serif;--mono:'JetBrains Mono',monospace;--r:7px;--r2:11px;--r3:15px}
+html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--sans);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+.app{display:flex;height:100vh;overflow:hidden}
+.sidebar{width:200px;min-width:200px;background:var(--bg2);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.sb-logo{height:52px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid var(--b1);flex-shrink:0}
+.sb-user{padding:10px 12px;border-bottom:1px solid var(--b1);flex-shrink:0}
+.sb-user-name{font-size:12px;font-weight:600;color:var(--t1)}
+.sb-user-role{font-size:10px;color:var(--red);text-transform:uppercase;letter-spacing:.08em}
+.nav{padding:6px;flex:1;min-height:0}
+.nav-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:var(--r);cursor:pointer;color:var(--t3);font-size:13px;font-weight:500;transition:all .1s;margin-bottom:1px}
+.nav-item:hover{background:var(--bg3);color:var(--t1)}
+.nav-item.active{background:var(--acc-bg);color:var(--t1);border:1px solid var(--acc-br)}
+.sb-bottom{padding:10px 12px;border-top:1px solid var(--b1);flex-shrink:0}
+.topbar{height:48px;min-height:48px;display:flex;align-items:center;padding:0 18px;gap:10px;background:var(--bg2);border-bottom:1px solid var(--b1);flex-shrink:0}
+.tb-title{font-size:14px;font-weight:600;color:var(--t1)}
+.tb-right{margin-left:auto;display:flex;gap:8px}
+.content{flex:1;overflow:hidden;display:flex;min-height:0}
+.page{flex:1;overflow-y:auto;padding:20px;min-height:0}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:var(--r);border:1px solid var(--b2);background:transparent;color:var(--t2);font-family:var(--sans);font-size:13px;font-weight:500;cursor:pointer;transition:all .1s;white-space:nowrap}
+.btn:hover{background:var(--bg3);color:var(--t1);border-color:var(--b2)}
+.btn.primary{background:var(--acc);border-color:var(--acc);color:#000;font-weight:600}
+.btn.primary:hover{background:var(--acc2)}
+.btn.danger{background:var(--red2);border-color:var(--red2);color:#fff}
+.btn.sm{padding:5px 11px;font-size:12px}.btn.xs{padding:3px 8px;font-size:11px}
+.btn:disabled{opacity:.35;pointer-events:none}
+.card{background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r2);padding:16px}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{text-align:left;padding:8px 12px;color:var(--t3);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--b1)}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--b1);vertical-align:middle}
+.tbl tr:hover td{background:var(--bg3)}
+.tbl tr:last-child td{border-bottom:none}
+.form-group{margin-bottom:14px}
+.form-label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:5px}
+.form-input{width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:9px 11px;border-radius:var(--r);outline:none;transition:border-color .1s}
+.form-input:focus{border-color:var(--acc)}
+.form-input::placeholder{color:var(--t4)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-box{background:var(--bg2);border:1px solid var(--b2);border-radius:var(--r3);padding:26px;max-width:460px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.modal-title{font-size:16px;font-weight:700;margin-bottom:14px}
+.modal-actions{display:flex;gap:8px;margin-top:16px}
+.tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600}
+.t-active{background:var(--grn-bg);color:var(--grn);border:1px solid rgba(52,216,122,.25)}
+.t-inactive{background:var(--red-bg);color:var(--red);border:1px solid rgba(240,80,96,.25)}
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.kpi{background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r2);padding:14px}
+.kpi-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);font-weight:600;margin-bottom:5px}
+.kpi-val{font-family:var(--mono);font-size:22px;font-weight:600;color:var(--t1)}
+.kpi-val.acc{color:var(--acc)}.kpi-val.grn{color:var(--grn)}
+.notif{position:fixed;bottom:16px;right:16px;background:var(--bg4);border:1px solid var(--b2);border-radius:var(--r2);padding:10px 14px;font-size:13px;color:var(--t1);z-index:9999;max-width:300px;animation:fadeUp .2s ease}
+.notif.ok{border-left:3px solid var(--grn)}.notif.err{border-left:3px solid var(--red)}.notif.warn{border-left:3px solid var(--acc)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{width:20px;height:20px;border:2px solid var(--b2);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-logo">
+      <svg width="80" height="28" viewBox="0 0 800 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M632.258 155.113C632.258 142.625 634.816 131.566 639.932 121.936C645.198 112.307 652.27 104.859 661.147 99.5927C670.175 94.1761 680.105 91.4678 690.938 91.4678C700.718 91.4678 709.219 93.4238 716.441 97.3358C723.814 101.097 729.682 105.837 734.045 111.554V94.499H759V216.855H735.045V199.348C729.682 205.216 723.739 210.106 716.216 214.018C708.693 217.93 700.116 219.886 690.487 219.886C679.804 219.886 670.024 217.178 661.147 211.762C652.27 206.194 645.198 198.521 639.932 188.741C634.816 178.811 632.258 167.601 632.258 155.113ZM734.045 155.564C734.045 146.988 732.24 139.54 728.629 133.221C725.168 126.901 720.579 122.087 714.862 118.776C709.144 115.466 702.975 113.811 696.355 113.811C689.734 113.811 683.566 115.466 677.848 118.776C672.131 121.936 667.466 126.676 663.855 132.995C660.395 139.164 658.664 146.537 658.664 155.113C658.664 163.689 660.395 171.212 663.855 177.682C667.466 184.152 672.131 189.117 677.848 192.578C683.716 195.888 689.885 197.543 696.355 197.543C702.975 197.543 709.144 195.888 714.862 192.578C720.579 189.268 725.168 184.453 728.629 178.133C732.24 171.664 734.045 164.141 734.045 155.564Z" fill="#FFBE63"/>
+        <path d="M353.376 155.564C353.376 142.775 355.934 131.566 361.05 121.936C366.316 112.156 373.538 104.633 382.716 99.367C391.894 94.1008 402.426 91.4678 414.313 91.4678C429.359 91.4678 441.772 95.0788 451.552 102.301C461.168 109.148 467.75 118.888 471.3 131.519H444.577C441.363 126.259 437.834 121.662 433.045 118.325C428.08 114.864 421.836 113.134 414.313 113.134C403.781 113.134 395.355 116.896 389.035 124.419C382.866 131.791 379.782 142.173 379.782 155.564C379.782 168.955 382.866 179.412 389.035 186.935C395.355 194.458 403.781 198.22 414.313 198.22C428.958 198.22 438.73 191.894 443.631 179.24H470.313C467.567 191.901 460.922 201.558 451.326 208.828C441.396 216.2 429.058 219.886 414.313 219.886C402.426 219.886 391.894 217.253 382.716 211.987C373.538 206.571 366.316 199.048 361.05 189.418C355.934 179.638 353.376 168.353 353.376 155.564Z" fill="white"/>
+        <path d="M273.851 219.886C262.115 219.886 251.508 217.253 242.029 211.987C232.55 206.571 225.102 199.048 219.685 189.418C214.269 179.638 211.56 168.353 211.56 155.564C211.56 142.926 214.344 131.716 219.911 121.936C225.478 112.156 233.076 104.633 242.706 99.367C252.335 94.1008 263.093 91.4678 274.98 91.4678C286.866 91.4678 297.624 94.1008 307.254 99.367C316.883 104.633 324.481 112.156 330.049 121.936C335.616 131.716 338.399 142.926 338.399 155.564C338.399 168.203 335.54 179.412 329.823 189.192C324.105 198.972 316.281 206.571 306.351 211.987C296.571 217.253 285.738 219.886 273.851 219.886ZM273.851 197.543C280.472 197.543 286.64 195.963 292.358 192.803C298.226 189.644 302.966 184.904 306.577 178.585C310.188 172.265 311.993 164.592 311.993 155.564C311.993 146.537 310.263 138.938 306.802 132.769C303.342 126.45 298.753 121.71 293.035 118.551C287.318 115.391 281.149 113.811 274.528 113.811C267.908 113.811 261.739 115.391 256.022 118.551C250.455 121.71 246.016 126.45 242.706 132.769C239.396 138.938 237.741 146.537 237.741 155.564C237.741 168.955 241.126 179.337 247.897 186.71C254.818 193.932 263.469 197.543 273.851 197.543Z" fill="white"/>
+        <path fill-rule="evenodd" clip-rule="evenodd" d="M156.796 70.7048C144.307 64.2349 129.713 61 113.011 61H63.3793V112.814H85.9081V81.9893H113.011C131.368 81.9893 145.436 87.105 155.216 97.3364C164.996 107.568 169.886 121.786 169.886 139.992C169.886 158.048 164.996 172.04 155.216 181.971C145.436 191.901 131.368 196.867 113.011 196.867H87.5081V174.317H105.756C107.714 172.49 108.08 171.685 108.08 171.685L75.8465 134.593L42.3289 170.062C41.8495 172.717 43.5317 172.717 43.5317 172.717H60.1793V198.656C60.1793 205.377 61.7793 208.737 63.0872 211.304C64.2377 213.562 66.0734 215.398 68.3314 216.548C70.8983 217.856 74.2586 217.856 80.9793 217.856H113.011C129.713 217.856 144.307 214.771 156.796 208.603C169.434 202.283 179.139 193.255 185.91 181.519C192.831 169.784 196.292 155.941 196.292 139.992C196.292 124.043 192.831 110.126 185.91 98.2392C179.139 86.2023 169.434 77.0241 156.796 70.7048Z" fill="white"/>
+      </svg>
+    </div>
+    <div class="sb-user">
+      <div class="sb-user-name" id="user-name">Адміністратор</div>
+      <div class="sb-user-role">Суперадмін</div>
+    </div>
+    <nav class="nav">
+      <div class="nav-item active" onclick="showPage('overview')" id="n-overview"><span>📊</span><span>Огляд</span></div>
+      <div class="nav-item" onclick="showPage('lecturers')" id="n-lecturers"><span>👨‍🏫</span><span>Лектори</span></div>
+      <div class="nav-item" onclick="showPage('system')" id="n-system"><span>⚙</span><span>Система</span></div>
+    </nav>
+    <div class="sb-bottom">
+      <button class="btn sm" style="width:100%;color:var(--t3)" onclick="logout()">← Вийти</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="tb-title" id="tb-title">Огляд системи</span>
+      <div class="tb-right" id="tb-right"></div>
+    </div>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+
+<!-- ADD LECTURER MODAL -->
+<div id="modal-lec" class="modal-ov" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal-box">
+    <div class="modal-title">Новий лектор</div>
+    <div class="form-group">
+      <label class="form-label">Повне ім'я</label>
+      <input class="form-input" id="new-lec-name" placeholder="Прізвище Ім'я По-батькові">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input class="form-input" id="new-lec-email" placeholder="lecturer@docaa.net">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Пароль</label>
+        <input class="form-input" id="new-lec-pass" type="password" placeholder="мін. 8 символів">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn primary" style="flex:1" onclick="createLecturer()">Створити лектора</button>
+      <button class="btn" onclick="document.getElementById('modal-lec').style.display='none'">Скасувати</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_ADMIN='/api/admin';
+const API_AUTH='/api/auth';
+let TOKEN=localStorage.getItem('docaa_token');
+let USER=JSON.parse(localStorage.getItem('docaa_user')||'null');
+
+if(!TOKEN||!USER){ location.href='/login.html'; }
+if(USER.role!=='superadmin'){ location.href='/login.html'; }
+document.getElementById('user-name').textContent=USER.name||'Адміністратор';
+
+async function api(method,path,body){
+  const res=await fetch(path,{
+    method,headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},
+    body:body?JSON.stringify(body):undefined
+  });
+  if(res.status===401){logout();return null;}
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error||'Error '+res.status);
+  return data;
+}
+
+function showPage(page){
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('n-'+page)?.classList.add('active');
+  const titles={overview:'Огляд системи',lecturers:'Управління лекторами',system:'Налаштування системи'};
+  document.getElementById('tb-title').textContent=titles[page]||page;
+  ({overview:renderOverview,lecturers:renderLecturers,system:renderSystem}[page]||renderOverview)();
+}
+
+// ── OVERVIEW ─────────────────────────────────────────────────
+async function renderOverview(){
+  document.getElementById('tb-right').innerHTML='';
+  document.getElementById('content').innerHTML=`<div class="page">
+    <div class="kpi-row" id="kpi-row">
+      ${[1,2,3,4].map(()=>`<div class="kpi"><div style="height:22px;background:var(--b1);border-radius:4px;animation:pulse 1.5s infinite"></div></div>`).join('')}
+    </div>
+    <div id="overview-body"></div>
+  </div>`;
+
+  try{
+    const stats=await api('GET',API_ADMIN+'/stats');
+    const keyStatus=await api('GET',API_ADMIN+'/api-key-status');
+    document.getElementById('kpi-row').innerHTML=`
+      <div class="kpi"><div class="kpi-label">Лекторів</div><div class="kpi-val acc">${stats.lecturers}</div></div>
+      <div class="kpi"><div class="kpi-label">Студентів</div><div class="kpi-val">${stats.students}</div></div>
+      <div class="kpi"><div class="kpi-label">Груп</div><div class="kpi-val">${stats.groups}</div></div>
+      <div class="kpi"><div class="kpi-label">Активних сесій</div><div class="kpi-val grn">${stats.sessions}</div></div>`;
+
+    document.getElementById('overview-body').innerHTML=`
+      <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:10px;height:10px;border-radius:50%;background:${keyStatus?.configured?'var(--grn)':'var(--red)'}"></div>
+          <div>
+            <div style="font-size:14px;font-weight:600">Anthropic API ключ</div>
+            <div style="font-size:12px;color:var(--t3)">${keyStatus?.configured?keyStatus.prefix+' — активний':'Не налаштований — додайте в .env'}</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-size:14px;font-weight:600;margin-bottom:12px">Швидкі дії</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="showPage('lecturers');setTimeout(()=>document.getElementById('modal-lec').style.display='flex',100)">+ Новий лектор</button>
+          <button class="btn" onclick="showPage('lecturers')">Переглянути лекторів</button>
+        </div>
+      </div>`;
+  }catch(e){ notify(e.message,'err'); }
+}
+
+// ── LECTURERS ─────────────────────────────────────────────────
+async function renderLecturers(){
+  document.getElementById('tb-right').innerHTML=`<button class="btn primary" onclick="document.getElementById('modal-lec').style.display='flex'">+ Новий лектор</button>`;
+  document.getElementById('content').innerHTML=`<div class="page">
+    <div style="text-align:center;padding:20px;color:var(--t3)"><div class="spinner" style="margin:0 auto 10px"></div>Завантаження...</div>
+  </div>`;
+
+  try{
+    const lecturers=await api('GET',API_ADMIN+'/lecturers')||[];
+    const el=document.querySelector('.page');
+    if(!lecturers.length){
+      el.innerHTML=`<div style="text-align:center;padding:50px;color:var(--t3)">
+        <div style="font-size:32px;margin-bottom:12px">👨‍🏫</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:8px">Лекторів ще немає</div>
+        <div style="margin-bottom:16px">Створіть першого лектора</div>
+        <button class="btn primary" onclick="document.getElementById('modal-lec').style.display='flex'">+ Новий лектор</button>
+      </div>`; return;
+    }
+    el.innerHTML=`<table class="tbl">
+      <thead><tr><th>Ім'я</th><th>Email</th><th>Груп</th><th>Статус</th><th>Останній вхід</th><th>Дії</th></tr></thead>
+      <tbody>${lecturers.map(l=>`
+        <tr>
+          <td style="font-weight:500">${l.name}</td>
+          <td style="color:var(--t3)">${l.email}</td>
+          <td style="font-family:var(--mono)">${l.groups_count||0}</td>
+          <td><span class="tag ${l.active?'t-active':'t-inactive'}">${l.active?'Активний':'Вимкнено'}</span></td>
+          <td style="color:var(--t3);font-size:12px">${l.last_login?l.last_login.slice(0,16).replace('T',' '):'Ніколи'}</td>
+          <td>
+            <div style="display:flex;gap:4px">
+              <button class="btn xs ${l.active?'danger':''}" onclick="toggleLecturer('${l.id}',${!l.active},'${l.name}')">
+                ${l.active?'Вимкнути':'Увімкнути'}
+              </button>
+            </div>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  }catch(e){ notify(e.message,'err'); }
+}
+
+async function createLecturer(){
+  const name=document.getElementById('new-lec-name').value.trim();
+  const email=document.getElementById('new-lec-email').value.trim();
+  const password=document.getElementById('new-lec-pass').value;
+  if(!name||!email||!password){ notify('Заповніть всі поля','err'); return; }
+  if(password.length<8){ notify('Пароль мінімум 8 символів','err'); return; }
+  try{
+    await api('POST',API_ADMIN+'/lecturers',{name,email,password});
+    document.getElementById('modal-lec').style.display='none';
+    document.getElementById('new-lec-name').value='';
+    document.getElementById('new-lec-email').value='';
+    document.getElementById('new-lec-pass').value='';
+    notify(`Лектора ${name} створено ✓`,'ok');
+    renderLecturers();
+  }catch(e){ notify(e.message,'err'); }
+}
+
+async function toggleLecturer(id,active,name){
+  const msg=active?`Увімкнути ${name}?`:`Вимкнути ${name}? Лектор більше не зможе увійти.`;
+  if(!confirm(msg)) return;
+  try{
+    await api('PATCH',API_ADMIN+'/lecturers/'+id,{active});
+    notify(`${name} — ${active?'увімкнено':'вимкнено'}`,'ok');
+    renderLecturers();
+  }catch(e){ notify(e.message,'err'); }
+}
+
+// ── SYSTEM ────────────────────────────────────────────────────
+async function renderSystem(){
+  document.getElementById('tb-right').innerHTML='';
+  document.getElementById('content').innerHTML=`<div class="page" style="max-width:600px">
+    <div class="card" style="margin-bottom:14px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:12px">API Ключ Anthropic</div>
+      <div style="font-size:13px;color:var(--t2);line-height:1.7;margin-bottom:12px">
+        Ключ зберігається в файлі <code style="background:var(--bg4);padding:2px 8px;border-radius:4px;font-family:var(--mono)">.env</code> на сервері.<br>
+        Для зміни — відредагуйте файл і перезапустіть сервер:<br>
+        <code style="background:var(--bg4);padding:4px 10px;border-radius:4px;font-family:var(--mono);display:block;margin-top:6px">pm2 restart docaa-sim</code>
+      </div>
+      <div id="api-status" style="color:var(--t3);font-size:12px">Перевірка...</div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:12px">Команди сервера</div>
+      ${[
+        ['Статус','pm2 status'],
+        ['Логи','pm2 logs docaa-sim --lines 50'],
+        ['Перезапуск','pm2 restart docaa-sim'],
+        ['Резервна копія БД','cp /var/www/sim-docaa/data/simulator.db ~/backup.db'],
+      ].map(([label,cmd])=>`
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${label}</div>
+          <code style="background:var(--bg4);padding:6px 10px;border-radius:var(--r);font-family:var(--mono);font-size:12px;display:block;color:var(--acc)">${cmd}</code>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px">Інформація про систему</div>
+      <div id="sys-info" style="font-size:12px;color:var(--t3);font-family:var(--mono)">Завантаження...</div>
+    </div>
+  </div>`;
+
+  try{
+    const ks=await api('GET',API_ADMIN+'/api-key-status');
+    document.getElementById('api-status').innerHTML=ks?.configured
+      ?`<span style="color:var(--grn)">✓ Ключ налаштований: ${ks.prefix}</span>`
+      :`<span style="color:var(--red)">✗ Ключ не налаштований</span>`;
+
+    const stats=await api('GET',API_ADMIN+'/stats');
+    document.getElementById('sys-info').innerHTML=
+      `Лекторів: ${stats.lecturers} | Студентів: ${stats.students} | Груп: ${stats.groups} | Сесій: ${stats.sessions}`;
+  }catch(e){}
+}
+
+function notify(msg,type=''){
+  const el=document.createElement('div');
+  el.className='notif '+(type==='ok'?'ok':type==='err'?'err':'warn');
+  el.textContent=msg; document.body.appendChild(el);
+  setTimeout(()=>el.remove(),3500);
+}
+
+function logout(){
+  localStorage.removeItem('docaa_token');
+  localStorage.removeItem('docaa_user');
+  location.href='/login.html';
+}
+
+window.addEventListener('load',()=>showPage('overview'));
+</script>
+</body>
+</html>
