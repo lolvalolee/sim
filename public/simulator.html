@@ -1227,76 +1227,8 @@ const PERSONA_PROMPTS = {
 Іноді є питання з датою: "уточню з водієм"`,
 };
 
-const CARRIERS_RAW = [
-  ['c001','TranzMax Logistics','Андрій Сич','+380 67 301 22 33',['DE','PL','BE','NL','UA'],['Тент','Мега'],1.8,2.4,'tough',0.85,0.60],
-  ['c002','WestTrans Sp. z o.o.','Marcin Nowak','+48 22 777 4321',['PL','DE','NL','BE','FR'],['Тент','Мега'],1.7,2.3,'polish',0.88,0.55],
-  ['c003','BalticRoad OÜ','Тарас Сенченко','+372 555 8821',['DE','PL','LT','LV','EE','UA'],['Тент','Реф'],1.5,2.1,'unreliable',0.55,0.70],
-  ['c004','IberTruck SL','Carlos Martínez','+34 935 001 221',['ES','FR','BE','PL','UA'],['Тент','Реф'],2.0,2.7,'tough',0.90,0.45],
-  ['c005','EuroVantazh ТОВ','Катерина Яценко','+380 63 222 99 55',['PL','DE','UA'],['Тент','Борт'],1.4,1.9,'local',0.65,0.75],
-  ['c006','CoolTrans UA','Світлана Ковтун','+380 50 412 88 77',['PL','CZ','SK','UA'],['Реф'],2.2,3.0,'fridge',0.92,0.40],
-  ['c007','FreshLine Kft.','Anna Szabó','+36 30 555 8821',['HU','AT','SK','CZ','UA'],['Реф'],2.3,3.1,'fridge',0.87,0.45],
-  ['c008','FarmaLogix','Оксана Білик','+380 44 360 77 22',['PL','CZ','SK','AT','UA'],['Реф GDP'],3.0,4.2,'pharma',0.95,0.30],
-  ['c009','ChemFreight GmbH','Олег Яровий','+49 40 7721 9900',['DE','BE','FR','UA'],['ADR Цистерна','ADR Тент'],2.5,3.5,'adr',0.93,0.35],
-  ['c010','УкрADR','Богдан Данильченко','+380 44 500 11 22',['UA','PL','HU','DE'],['ADR Тент','ADR Цистерна'],2.0,2.8,'adr',0.78,0.50],
-  ['c011','SpecTrans Group','Максим Дорошенко','+380 44 500 31 10',['RO','HU','SK','UA'],['Тент','Низькорамник'],2.3,3.2,'specialist',0.89,0.35],
-  ['c012','ZernoCargo','Василь Петренко','+380 97 887 44 11',['UA','RO','PL'],['Зерновоз','Самоскид'],0.9,1.3,'agrarian',0.82,0.65],
-  ['c013','DunaTrans Kft.','László Horváth','+36 1 442 8800',['HU','RO','SK','UA','AT'],['Тент','Реф'],1.8,2.5,'eastern',0.83,0.50],
-  ['c014','BucharestTrans SRL','Gheorghe Ionescu','+40 21 555 8800',['RO','BG','MD','UA','HU'],['Тент','Реф'],1.5,2.2,'eastern',0.75,0.60],
-  ['c015','MilanoCargo Srl','Marco Rossi','+39 02 555 7700',['IT','AT','CH','FR','DE'],['Тент','Реф'],2.1,2.9,'tough',0.86,0.40],
-  ['c016','NordCargo AS','Erik Lindqvist','+372 555 0011',['DE','PL','SE','NO'],['Тент','Мега'],1.9,2.6,'tough',0.88,0.45],
-  ['c017','FrancoCargo SARL','Pierre Martin','+33 1 555 0033',['FR','BE','NL','DE'],['Тент','Мега'],1.9,2.7,'tough',0.87,0.45],
-  ['c018','BerlinSpeed GmbH','Dieter Schulz','+49 30 555 0044',['DE','PL','CZ','AT'],['Тент','Мега'],1.8,2.5,'tough',0.86,0.50],
-  ['c019','WarsawLog Sp.','Tomasz Wiśniewski','+48 22 555 0077',['PL','DE','LT'],['Тент','Мега','Реф'],1.6,2.2,'polish',0.87,0.55],
-  ['c020','PragueTrans s.r.o.','Jiří Novotný','+420 2 555 0088',['CZ','DE','AT','SK','PL'],['Тент','Реф'],1.7,2.4,'polish',0.86,0.50],
-  ['c021','ViennaTrans GmbH','Ernst Gruber','+43 1 555 0099',['AT','DE','CH','IT'],['Тент','Реф'],2.2,3.0,'tough',0.91,0.38],
-  ['c022','TurkFreight AŞ','Mehmet Yıldız','+90 212 555 0100',['TR','BG','RO','UA'],['Тент','Реф'],1.6,2.3,'eastern',0.78,0.60],
-  ['c023','GreeceLog EPE','Nikos Papadopoulos','+30 210 555 0111',['GR','BG','RO','UA'],['Тент','Реф'],1.9,2.6,'eastern',0.80,0.50],
-  ['c024','KrakówTrans Sp.','Adam Kowalczyk','+48 12 555 0133',['PL','SK','CZ','UA'],['Тент','Реф'],1.6,2.2,'polish',0.85,0.55],
-  ['c025','CargoNet UA','Ірина Дем\'яненко','+380 50 555 0155',['UA','PL','SK'],['Тент'],1.3,1.8,'local',0.70,0.70],
-  ['c026','KyivFreight','Олег Мороз','+380 44 555 0166',['UA','PL','DE'],['Тент','Мега'],1.4,2.0,'local',0.75,0.65],
-  ['c027','LvivLogistics','Тарас Федів','+380 32 555 0177',['UA','PL','SK','HU'],['Тент','Реф'],1.3,1.9,'local',0.73,0.68],
-  ['c028','CarpathianLog','Роман Стець','+380 97 555 0200',['UA','SK','HU','RO','PL'],['Тент','Реф'],1.4,1.9,'local',0.76,0.63],
-  ['c029','HeavyMove PL','Krzysztof Jabłoński','+48 22 555 0266',['PL','DE','CZ','UA'],['Низькорамник','Тал'],2.3,3.2,'specialist',0.88,0.35],
-  ['c030','TankLogEU GmbH','Günther Braun','+49 40 555 0288',['DE','NL','BE','FR'],['Цистерна','ADR Цистерна'],2.2,3.0,'adr',0.92,0.35],
-  ['c031','TankUkraine','Ярослав Горобець','+380 44 555 0299',['UA','RO','HU','PL'],['Цистерна','ADR Цистерна'],1.7,2.4,'adr',0.80,0.48],
-  ['c032','PharmaTrans UA','Ірина Кисленко','+380 44 555 0300',['UA','PL','DE'],['Реф GDP'],2.8,4.0,'pharma',0.94,0.28],
-  ['c033','ChillChain GmbH','Thomas Braun','+49 89 555 0311',['DE','AT','PL','CZ'],['Реф GDP'],3.0,4.2,'pharma',0.96,0.25],
-  ['c034','ThermoLog UA','Ганна Свириденко','+380 97 555 0333',['UA','PL','HU'],['Реф'],2.0,2.7,'fridge',0.88,0.42],
-  ['c035','GrainMaster UA','Петро Коваль','+380 97 555 0233',['UA','RO','PL','HU'],['Зерновоз'],0.9,1.2,'agrarian',0.83,0.65],
-  ['c036','AgriTrans UA','Сергій Бойченко','+380 63 555 0255',['UA','RO','PL'],['Зерновоз','Самоскид'],0.8,1.2,'agrarian',0.82,0.66],
-  ['c037','OmegaTrans UA','Костянтин Вовченко','+380 67 555 0188',['UA','PL','DE','NL'],['Тент','Мега','Реф'],1.5,2.1,'tough',0.82,0.58],
-  ['c038','IstanbulCargo AŞ','Hasan Demir','+90 212 555 0344',['TR','GR','BG','UA'],['Тент','Реф'],1.7,2.4,'eastern',0.77,0.55],
-  ['c039','LithuaniaLog UAB','Darius Kazlauskas','+370 5 555 0366',['LT','LV','PL','DE'],['Тент','Мега'],1.8,2.5,'polish',0.87,0.48],
-  ['c040','MoldoTrans SRL','Ion Popa','+373 22 555 0377',['MD','RO','UA','BG'],['Тент','Реф'],1.3,1.8,'local',0.72,0.65],
-];
-
-function buildCarriers(){
-  const all = CARRIERS_RAW.map(r=>({
-    id:r[0],name:r[1],person:r[2],phone:r[3],dirs:r[4],types:r[5],
-    rateMin:r[6],rateMax:r[7],personality:r[8],reliability:r[9],availability:r[10]
-  }));
-  const pKeys=Object.keys(PERSONA_PROMPTS);
-  const dirSets=[['DE','PL','UA'],['PL','CZ','SK'],['UA','PL'],['FR','BE','NL'],['IT','AT','DE'],['HU','RO','UA'],['BG','GR'],['PL','LT','LV'],['ES','FR','UA'],['CZ','SK','AT']];
-  const typeSets=[['Тент'],['Тент','Мега'],['Реф'],['Тент','Реф'],['ADR Тент'],['Зерновоз'],['Борт','Тент'],['Цистерна'],['Низькорамник'],['Мега']];
-  const names=['Alpha','Beta','Gamma','Delta','Epsilon','Zeta','Eta','Theta','Iota','Kappa','Lambda','Mu','Nu','Xi','Omicron','Pi','Rho','Sigma','Tau','Upsilon','Phi','Chi','Psi','Omega'];
-  const sfx=['Trans','Cargo','Log','Freight','Route','Link','Line','Move','Express','Hub'];
-  const pers=['Олег К.','Ірина М.','Петро С.','Наталя Б.','Андрій Г.','Юлія П.','Дмитро Л.','Оксана В.','Василь Т.','Людмила Ш.'];
-  while(all.length<200){
-    const i=all.length;
-    const base=1.2+(i%8)*0.18;
-    all.push({
-      id:`c${String(i+1).padStart(3,'0')}`,
-      name:`${names[i%names.length]}${sfx[i%sfx.length]}`,
-      person:pers[i%pers.length],
-      phone:`+380 ${50+i%5} ${100+i} ${10+i%90} ${10+i%80}`,
-      dirs:dirSets[i%dirSets.length], types:typeSets[i%typeSets.length],
-      rateMin:Math.round(base*10)/10, rateMax:Math.round((base+0.6)*10)/10,
-      personality:pKeys[i%pKeys.length], reliability:0.68+i%4*0.06, availability:0.38+i%5*0.08,
-    });
-  }
-  return all;
-}
-const CARRIERS = buildCarriers();
+// Carriers loaded from server in loadSessionFromServer()
+const CARRIERS = [];
 
 // ================================================================
 // STATE
@@ -1336,7 +1268,7 @@ const S = {
 
   emails: [], // built after orders
   selectedEmail: null,
-  carriers: CARRIERS,
+  carriers: [], // loaded from server
   selectedCarrier: null,
   chats: {}, deals: {},
   contactedCarriers: new Set(),
@@ -1543,7 +1475,7 @@ function renderWelcome(){
         <div class="wc-chip">📄 Заявки та документи</div>
       </div>
       <button class="btn primary" style="font-size:14px;padding:10px 32px;border-radius:10px"
-        onclick="go('email');['carriers','chats','orders','docs'].forEach(unlock)">
+        onclick="go('email');['carriers','chats','orders','docs','exchange'].forEach(unlock)">
         Почати роботу →
       </button>
     </div>
@@ -3012,6 +2944,8 @@ window.addEventListener('load',()=>{
   document.getElementById('sb-company-name').textContent=user.name||'Студент';
 
   loadSessionFromServer(token).then(()=>{
+    // Unlock all navigation items
+    ['email','carriers','chats','orders','docs','exchange'].forEach(unlock);
     go('welcome');
     startAutosave(token);
   }).catch(e=>{
@@ -3124,6 +3058,51 @@ async function loadSessionFromServer(token){
     S.deals[chat.carrier_id]=chat.deal_status||'none';
     if(chat.messages.length>0) S.contactedCarriers.add(chat.carrier_id);
   });
+
+  // Load carriers from server
+  try{
+    const cRes=await fetch('/api/student/carriers',{
+      headers:{'Authorization':'Bearer '+token}
+    });
+    if(cRes.ok){
+      const cData=await cRes.json();
+      S.carriers.length=0;
+      cData.forEach(c=>{
+        S.carriers.push({
+          id:c.id,
+          name:c.name,
+          person:c.person,
+          phone:c.phone||'',
+          dirs:typeof c.dirs==='string'?JSON.parse(c.dirs):c.dirs,
+          types:typeof c.vehicle_types==='string'?JSON.parse(c.vehicle_types):c.vehicle_types,
+          rateMin:1.2,
+          rateMax:2.2,
+          personality:c.personality||'tough',
+          reliability:c.reliability||0.85,
+          availability:c.availability||0.60,
+          nationality:c.nationality||'UA',
+        });
+      });
+      console.log('Loaded '+S.carriers.length+' carriers from server');
+    }
+  }catch(e){
+    console.warn('Could not load carriers from server:',e.message);
+    // Fallback: generate minimal carrier set if server unavailable
+    if(S.carriers.length===0){
+      for(let i=0;i<20;i++){
+        S.carriers.push({
+          id:'fallback_'+i,
+          name:'Перевізник '+(i+1),
+          person:'Менеджер',
+          phone:'+380 67 000 00 0'+i,
+          dirs:['UA','PL'],
+          types:['Тент'],
+          rateMin:1.2,rateMax:2.0,
+          personality:'tough',reliability:0.85,availability:0.6,nationality:'UA'
+        });
+      }
+    }
+  }
 
   // Update UI
   const simDate=addDays(S.startDate,S.timerDay-1);

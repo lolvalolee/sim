@@ -225,3 +225,11 @@ function getSession(studentId) {
 }
 
 module.exports = router;
+
+// GET /api/student/carriers — all active carriers
+router.get('/carriers', STU, (req, res) => {
+  const carriers = db.prepare(
+    'SELECT id,name,person,phone,dirs,vehicle_types,reliability,availability,personality,nationality FROM carriers WHERE active=1 ORDER BY nationality,name'
+  ).all();
+  res.json(carriers);
+});
