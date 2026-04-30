@@ -761,6 +761,10 @@ body {
       <div class="nav-item locked" onclick="go('docs')" id="n-docs">
         <span class="nav-icon">📄</span><span class="nav-label">Документи</span>
       </div>
+      <div class="nav-item locked" onclick="go('exchange')" id="n-exchange">
+        <span class="nav-icon">📦</span><span class="nav-label">Біржа вантажів</span>
+        <span class="nav-badge nb-g" id="badge-exchange" style="display:none">0</span>
+      </div>
       <!-- admin nav hidden for students -->
     </nav>
 
@@ -1307,6 +1311,7 @@ const S = {
   module: 'welcome',
   sessionId: null,
   confirmations: {},
+  cargoBoard: [],
   startDate: new Date(),
   rates: JSON.parse(localStorage.getItem('fd_rates')||'null') || DEFAULT_RATES.slice(),
 
@@ -1454,9 +1459,10 @@ const TB={
   chats:['Переговори','Активні діалоги'],
   orders:['Замовлення','Стан перевезень'],
   docs:['Документи','Підготовка документів'],
+  exchange:['Біржа вантажів','Розміщення вантажів'],
   admin:['Кабінет лектора','Налаштування курсу'],
 };
-const RENDERERS={welcome:renderWelcome,email:renderEmail,carriers:renderCarriers,chats:renderChats,orders:renderOrders,docs:renderDocs,admin:renderAdmin};
+const RENDERERS={welcome:renderWelcome,email:renderEmail,carriers:renderCarriers,chats:renderChats,orders:renderOrders,docs:renderDocs,exchange:renderExchange,admin:renderAdmin};
 
 function go(mod){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -1778,7 +1784,7 @@ ${missingList}
 }
 
 function renderCarriers(){
-  ['carriers','chats','orders','docs'].forEach(unlock);
+  ['carriers','chats','orders','docs','exchange'].forEach(unlock);
   document.getElementById('tb-right').innerHTML=
     `<button class="btn secondary" onclick="go('email')">← Пошта</button>
      <button class="btn secondary" onclick="go('chats')">Переговори →</button>`;
@@ -1797,7 +1803,7 @@ function renderCarriers(){
           ${['Тент','Тент штора','Реф','Ізотерм','Цільнометалевий','Платформа','Мега','Юмбо','Сцепка','Цистерна хімічна','Автовоз','Низькорамний трал','Бус 1-1.5т','Бус 3т-3.5т','Бус 5т','Самоскидний','Контейнеровоз','Зерновоз','Тваринний причіп','Лісовоз','Рухома підлога','Модульний причіп','Бункерний причіп','Бічний навантажувач','Крита','Цистерна харчова','Бензовоз','Бітумовоз'].map(t=>`<option value="${t}" ${S.carrierFilter.type===t?'selected':''}>${t}</option>`).join('')}
         </select>
         <select class="ct-sel" id="cf-special" onchange="applyCarF()" title="ADR / Дозволи">
-          <option value="all">ADR / Дозволи</option>
+          <option value="all" selected>Всі дозволи</option>
           <optgroup label="ADR та дозволи">
             ${['TIR Carnet','ЄКМТ','Carnet ATA','Макулатура','Ветеринарні товари','Під митним контролем'].map(p=>`<option value="perm_${p}" ${S.carrierFilter.special==='perm_'+p?'selected':''}>${p}</option>`).join('')}
           </optgroup>
@@ -1805,7 +1811,7 @@ function renderCarriers(){
             ${['Мультилок','Гідроборт','Допельшток','Рухома підлога'].map(p=>`<option value="equip_${p}" ${S.carrierFilter.special==='equip_'+p?'selected':''}>${p}</option>`).join('')}
           </optgroup>
         </select>
-        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="${S.carrierFilter.q||''}">
+        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="">
         <button class="btn sm" onclick="resetCarF()" title="Скинути фільтри">✕ Скинути</button>
       </div>
     </div>
@@ -1821,7 +1827,7 @@ function applyCarF(){
   S.carrierFilter.dir=document.getElementById('cf-dir')?.value||'all';
   S.carrierFilter.type=document.getElementById('cf-type')?.value||'all';
   S.carrierFilter.special=document.getElementById('cf-special')?.value||'all';
-  S.carrierFilter.q=(document.getElementById('cf-q')?.value||'').toLowerCase();
+  S.carrierFilter.q=(document.getElementById('cf-q')?.value||'').toLowerCase().trim();
   renderCarrierList();
 }
 
@@ -2454,7 +2460,7 @@ function openCarrierChatFromCard(cid){
   S.contactedCarriers.add(cid);
   if(!S.chats[cid]) S.chats[cid]=[];
   if(!S.deals[cid]) S.deals[cid]='none';
-  ['carriers','chats','orders','docs'].forEach(unlock);
+  ['carriers','chats','orders','docs','exchange'].forEach(unlock);
   updateBadges();
   // If already on chats page — re-render
   if(S.module==='chats'){
@@ -2773,6 +2779,211 @@ async function doConfirmCarrier(cid, btn){
     if(resultEl) resultEl.textContent=errMsg(e);
   }
   btn.disabled=false;
+}
+
+
+function renderExchange(){
+  ['carriers','chats','orders','docs','exchange'].forEach(unlock);
+  document.getElementById('tb-right').innerHTML=
+    `<button class="btn primary" onclick="openAddCargo()">+ Додати вантаж</button>`;
+
+  document.getElementById('content').innerHTML=`
+  <div style="flex:1;overflow-y:auto;padding:18px;min-height:0">
+    <div id="exchange-list"></div>
+  </div>`;
+  renderExchangeList();
+}
+
+function renderExchangeList(){
+  const el=document.getElementById('exchange-list'); if(!el) return;
+  const items=S.cargoBoard||[];
+  if(!items.length){
+    el.innerHTML=`<div style="text-align:center;padding:60px 20px;color:var(--t4)">
+      <div style="font-size:36px;opacity:.15;margin-bottom:12px">📦</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:6px">Біржа порожня</div>
+      <div style="font-size:13px;margin-bottom:20px">Розмістіть вантаж — перевізники побачать і запропонують транспорт</div>
+      <button class="btn primary" onclick="openAddCargo()">+ Додати вантаж</button>
+    </div>`;
+    return;
+  }
+  el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+    ${items.map((c,i)=>`
+      <div style="background:var(--bg2);border:1px solid ${c.status==='active'?'var(--acc-br)':'var(--b1)'};border-radius:var(--r2);padding:16px">
+        <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:10px">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:var(--t1);margin-bottom:2px">${c.route}</div>
+            <div style="font-size:12px;color:var(--t3)">${c.vehicle_type}${c.weight?' · '+c.weight:''}${c.volume?' · '+c.volume:''}</div>
+          </div>
+          <span style="font-size:10px;padding:2px 8px;border-radius:20px;font-weight:600;${c.status==='active'?'background:var(--grn-bg);color:var(--grn);border:1px solid rgba(52,216,122,.25)':'background:var(--bg4);color:var(--t3);border:1px solid var(--b1)'}">
+            ${c.status==='active'?'Активний':'Неактивний'}
+          </span>
+        </div>
+        ${c.load_date?`<div style="font-size:12px;color:var(--t2);margin-bottom:6px">📅 Завантаження: ${c.load_date}</div>`:''}
+        ${c.notes?`<div style="font-size:12px;color:var(--t2);margin-bottom:10px">${c.notes}</div>`:''}
+        <div style="font-size:10px;color:var(--t4);margin-bottom:10px">Оновлено: ${c.updated_at||'щойно'}${c.status==='active'?' · видно перевізникам':' · оновіть щоб підняти'}</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn sm primary" onclick="updateCargo(${i})">🔄 Оновити</button>
+          <button class="btn sm secondary" onclick="editCargo(${i})">✎ Редагувати</button>
+          <button class="btn sm danger" onclick="deleteCargo(${i})">✕</button>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function openAddCargo(editIdx){
+  const isEdit = editIdx !== undefined;
+  const existing = isEdit ? (S.cargoBoard||[])[editIdx] : {};
+  const mo=document.createElement('div');
+  mo.className='modal-ov';
+  mo.onclick=e=>{if(e.target===mo)mo.remove();};
+  mo.innerHTML=`<div class="modal-box" style="max-width:500px">
+    <div class="modal-title">${isEdit?'Редагувати вантаж':'Розмістити вантаж на біржу'}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:16px">
+      <div style="grid-column:1/-1">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Маршрут *</label>
+        <input id="cb-route" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="Наприклад: Київ → Варшава" value="${existing.route||''}">
+      </div>
+      <div>
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Тип авто *</label>
+        <select id="cb-vehicle" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none">
+          ${['Тент','Тент штора','Реф','Ізотерм','Мега','Юмбо','Сцепка','Цистерна хімічна','Автовоз','Низькорамний трал','Бус 5т','Самоскидний','Контейнеровоз','Зерновоз','Рухома підлога','Крита','Цистерна харчова','Бензовоз'].map(t=>`<option ${existing.vehicle_type===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Дата завантаження</label>
+        <input id="cb-date" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="дд.мм.рррр" value="${existing.load_date||''}">
+      </div>
+      <div>
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Вага</label>
+        <input id="cb-weight" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="напр. 22т" value="${existing.weight||''}">
+      </div>
+      <div>
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Обʼєм</label>
+        <input id="cb-volume" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="напр. 82 куб.м" value="${existing.volume||''}">
+      </div>
+      <div style="grid-column:1/-1">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Примітки</label>
+        <textarea id="cb-notes" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:60px" placeholder="Додаткова інформація про вантаж...">${existing.notes||''}</textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn primary" style="flex:1" onclick="saveCargo(${isEdit?editIdx:'undefined'})">
+        ${isEdit?'Зберегти зміни':'Розмістити'}
+      </button>
+      <button class="btn" onclick="this.closest('.modal-ov').remove()">Скасувати</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+function saveCargo(editIdx){
+  const route=document.getElementById('cb-route')?.value.trim();
+  if(!route){notify('Введіть маршрут','err');return;}
+  const item={
+    route,
+    vehicle_type:document.getElementById('cb-vehicle')?.value||'Тент',
+    load_date:document.getElementById('cb-date')?.value||'',
+    weight:document.getElementById('cb-weight')?.value||'',
+    volume:document.getElementById('cb-volume')?.value||'',
+    notes:document.getElementById('cb-notes')?.value||'',
+    status:'active',
+    updated_at:new Date().toLocaleString('uk'),
+  };
+  if(!S.cargoBoard) S.cargoBoard=[];
+  if(editIdx!==undefined&&editIdx!==null&&editIdx!=='undefined'){
+    S.cargoBoard[editIdx]={...S.cargoBoard[editIdx],...item};
+    notify('Вантаж оновлено ✓','ok');
+  } else {
+    S.cargoBoard.push(item);
+    notify('Вантаж розміщено ✓','ok');
+    // Schedule carrier AI response after 15-40 min real time
+    scheduleCarrierFromExchange(S.cargoBoard.length-1);
+  }
+  document.querySelector('.modal-ov')?.remove();
+  renderExchangeList();
+  saveCargoBoardToServer();
+}
+
+function editCargo(i){ openAddCargo(i); }
+
+function deleteCargo(i){
+  if(!confirm('Видалити вантаж з біржі?')) return;
+  S.cargoBoard.splice(i,1);
+  renderExchangeList();
+  saveCargoBoardToServer();
+  notify('Видалено','warn');
+}
+
+function updateCargo(i){
+  if(!S.cargoBoard[i]) return;
+  S.cargoBoard[i].status='active';
+  S.cargoBoard[i].updated_at=new Date().toLocaleString('uk');
+  renderExchangeList();
+  saveCargoBoardToServer();
+  notify('Вантаж оновлено — тепер видно перевізникам ✓','ok');
+  // Re-schedule carrier responses after update
+  scheduleCarrierFromExchange(i);
+}
+
+function saveCargoBoardToServer(){
+  const token=localStorage.getItem('docaa_token');
+  if(!token||!S.sessionId) return;
+  // Save each cargo item
+  (S.cargoBoard||[]).forEach((c,i)=>{
+    fetch('/api/student/cargo/'+i,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify(c)
+    }).catch(()=>{});
+  });
+}
+
+// AI carrier initiates chat from exchange board
+function scheduleCarrierFromExchange(cargoIdx){
+  const cargo=S.cargoBoard?.[cargoIdx]; if(!cargo) return;
+  // Pick 1-3 matching carriers
+  const matching=S.carriers.filter(c=>{
+    const typeMatch=c.types?.some(t=>
+      t===cargo.vehicle_type||
+      t.toLowerCase().includes(cargo.vehicle_type.toLowerCase().split(' ')[0].toLowerCase())
+    );
+    return typeMatch && (c.availability||0.6)>0.4;
+  });
+  if(!matching.length) return;
+  // Shuffle and pick 1-3
+  const shuffled=[...matching].sort(()=>Math.random()-0.5);
+  const picks=shuffled.slice(0,1+Math.floor(Math.random()*2)); // 1-2 carriers
+  // Schedule responses: 15-40 min real time = 900-2400 seconds
+  picks.forEach((carrier,i)=>{
+    const delayMs=(900+Math.random()*1500+i*600)*1000; // stagger
+    setTimeout(()=>{
+      if(S.cargoBoard?.[cargoIdx]?.status!=='active') return;
+      initCarrierFromExchange(carrier,cargo,cargoIdx);
+    }, delayMs);
+  });
+}
+
+async function initCarrierFromExchange(carrier, cargo, cargoIdx){
+  if(!S.chats[carrier.id]) S.chats[carrier.id]=[];
+  if(!S.deals[carrier.id]) S.deals[carrier.id]='talk';
+  S.contactedCarriers.add(carrier.id);
+  // Build opening message from carrier
+  const sys=buildCarrierSys(carrier,{
+    route:cargo.route, cargo:cargo.vehicle_type,
+    vehicle:cargo.vehicle_type,
+    loadDate:cargo.load_date||'уточнюється',
+    delivDate:''
+  });
+  const prompt=`Ти бачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?' '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. Напиши перше коротке повідомлення — пропонуєш своє авто або запитуєш деталі. Стиль як у реальних переговорах: дуже коротко.`;
+  try{
+    const data=await callClaude(sys,[{role:'user',content:prompt}]);
+    const text=typeof data==='string'?data:(data.content?.[0]?.text||'');
+    S.chats[carrier.id].push({role:'carrier',text,time:nowTime(),fromExchange:true});
+    updateBadges();
+    notify('📦 '+carrier.name+' пропонує транспорт по вашому вантажу','warn');
+    if(S.module==='chats') renderChats();
+    saveChatToServer(carrier.id);
+  }catch(e){}
 }
 
 window.addEventListener('load',()=>{
