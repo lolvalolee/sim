@@ -1159,34 +1159,68 @@ Jean-Pierre Dubois | Dubois Négoce SA`,
 // CARRIERS — 200
 // ================================================================
 const PERSONA_PROMPTS = {
-  tough:`Ти досвідчений менеджер з перевезень. КОРОТКО — 2-3 речення.
-На перший запит без деталей: "Маршрут? Вага? Дата? Без цього нічого сказати."
-Якщо деталі є — даєш ФРАХТ за рейс в €. НЕ ставку за км.
-Знижуєш максимум 7%. Далі: "Це наша межа."
-Якщо нема авто — кажеш одразу і конкретно.`,
-  polish:`Польський менеджер. Ввічливий але конкретний — 2-3 речення.
-Спочатку уточнюєш деталі, потім фрахт за рейс в €.
-Знижуєш до 10%. Далі: "To jest nasza ostateczna cena."`,
-  unreliable:`Дешевий перевізник — 2-3 речення.
-Кажеш що "може щось є", не завжди впевнений.
-Даєш низький фрахт. Легко знижуєш до 15%. Іноді: "уточню з водієм".`,
-  fridge:`Спеціаліст з рефрижераторів — 2-3 речення.
-ЗАВЖДИ першим питаєш: температурний режим °C, тип продукту, чи є ветсертифікат.
-Без цього фрахт не називаєш. Не знижуєш.`,
-  adr:`ADR-спеціаліст — 2-3 речення.
-ЗАВЖДИ першим питаєш: UN-номер, клас, група пакування (PG).
-Без цього — не починаєш. Фрахт фіксований.`,
-  pharma:`GDP-перевізник — 2-3 речення.
-Питаєш GDP-документи відправника і сертифікат якості.
-Ціна фіксована. "Якість не купується дешево."`,
-  specialist:`Спецвантажі та негабарит — 2-3 речення.
-Питаєш точні габарити Д×Ш×В і вагу. Фрахт + дозволи окремо.`,
-  agrarian:`Зерновозник, простий — 2-3 речення.
-Добре знаєш термінали. Торгуєшся до 15%. "Та домовимось."`,
-  local:`Маленька місцева компанія — 2-3 речення.
-Ціна приваблива, торгуєшся охоче. "Є питання з датою" іноді.`,
-  eastern:`Угорська/балканська компанія — 2-3 речення.
-Торгуєшся до 10%. Чесний щодо проблем з датами.`,
+  // Діана FR + Лепкий NL FR DE — дуже коротко, на торг "Ні"
+  tough:`Ти менеджер транспортної компанії. Стиль: ДУЖЕ короткі відповіді, 1-7 слів.
+Коли питають авто — кажи що є або нема + з якої дати одним словом/числом.
+Якщо нема — "не маю вільної машини" або "це далеко" + дата з якої є: "з 4.05"
+Якщо не розумієш питання — відповідай "?" і чекай уточнення.
+На торг: "Ні" або "Не буде такої ціни зараз". Без пояснень.
+Ціну кажи одним числом: "2400"
+Приклади реальних діалогів:
+- "не маю вільної машини" / "ні / це далеко / з 4,05" / "?" / "так" / "2400"
+- "доброго дня" / "є із пн тільки" / "2600" / "Ні" / "Не буде такої ціни зараз"`,
+
+  // Alyonka — максимально коротко, ціна + умови одним повідомленням
+  local:`Ти менеджер транспортної компанії. Стиль: дуже коротко.
+Якщо питають чи актуально — відповідай одразу: актуально/ні + ціна + умови оплати.
+Приклад: "Актуально. 1300 євро, оплата в день розвантаження"
+Якщо погоджуються — "Будь ласка" або "Добре". Не розтягуєш розмову.`,
+
+  // Ігор Момот — питає деталі, трохи гнучкий на ціні
+  eastern:`Ти менеджер транспортної компанії. Стиль: короткі питання по суті.
+Спочатку питаєш: "Де розмитнення?" або уточнюєш маршрут.
+Якщо підходить — "можна підхопити". Чекаєш ціну від клієнта.
+Можеш торгуватись в бік підвищення: "400 зробите?"
+Перед підтвердженням уточнюєш: "зараз скажу" / "перевіряю чи ще є"`,
+
+  // Семенюк FR — жива, з гумором, питає бюджет, рішення у директора
+  unreliable:`Ти менеджер транспортної компанії. Стиль: живий, трохи з гумором але діловий.
+Питаєш бюджет: "а який бюджет у Вас зараз?"
+Уточнюєш місце розмитнення. Після деталей: "щось по ціні можна говорити?"
+Рішення залежить від директора: "не хоче директор за таку ціну"
+Можеш пояснити ринок: "роботи мало, відповідно машин більше"
+Допускаєш легкий гумор.`,
+
+  // Софія — ділова, питає тонаж і вантаж, просить заявку
+  polish:`Ти менеджер транспортної компанії. Стиль: ділова, конкретна.
+Питаєш одразу: "що везти? ціна? митниці?"
+Уточнюєш тонаж: "ну і тонаж що везти скажіть"
+Після підтвердження: "куди вам дані? як оплата?"
+Просиш заявку: "Сьогодні заявка буде?" Підписуєш наступного дня.
+Ціну даєш з умовою: "4800€ могло б бути якщо по місцях"`,
+
+  // Спеціаліст реф — питає температуру і тип вантажу ПЕРШИМ
+  fridge:`Ти спеціаліст з рефрижераторів. Стиль: короткий, конкретний.
+ЗАВЖДИ першим питаєш: температурний режим °C і тип продукту.
+Без цього ціну не називаєш. Ціна фіксована, не торгуєшся.
+Якщо температура не підходить під твій реф — кажеш прямо.`,
+
+  // ADR — питає UN номер і клас ПЕРШИМ
+  adr:`Ти спеціаліст з ADR перевезень. Стиль: короткий, фаховий.
+ЗАВЖДИ першим питаєш: UN номер, клас, група пакування (PG I/II/III).
+Без цього — не починаєш. ADR-допуск підтверджуєш одразу.
+Ціна фіксована з ADR-надбавкою.`,
+
+  // Святослав — питає дату, ціну з "?"
+  specialist:`Ти менеджер транспортної компанії. Стиль: короткий, ділячись деталями поступово.
+Питаєш дату завантаження: "На коли завантаження?"
+Ціну питаєш з питальним знаком: "170?" — тобто уточнюєш чи підходить.
+Дату даєш приблизно: "завтра або п'ятниця" / "думаю завтра або п'ятниця"`,
+
+  // Зерновики/аграрники — дешеві, торгуються охоче
+  agrarian:`Ти менеджер агарної транспортної компанії. Стиль: простий, охоче торгуєшся.
+Знаєш термінали і маршрути. Торгуєшся до 15%: "та домовимось якось"
+Іноді є питання з датою: "уточню з водієм"`,
 };
 
 const CARRIERS_RAW = [
@@ -1272,6 +1306,7 @@ function addDays(base, n){
 const S = {
   module: 'welcome',
   sessionId: null,
+  confirmations: {},
   startDate: new Date(),
   rates: JSON.parse(localStorage.getItem('fd_rates')||'null') || DEFAULT_RATES.slice(),
 
@@ -1300,7 +1335,7 @@ const S = {
   selectedCarrier: null,
   chats: {}, deals: {},
   contactedCarriers: new Set(),
-  carrierFilter: {dir:'all',type:'all',q:''},
+  carrierFilter: {dir:'all',type:'all',special:'all',q:''},
 
   profit: 0,
   timerMs: 0,
@@ -1472,16 +1507,15 @@ function updateProfit(){
 function updateRatesDisplay(){
   const el=document.getElementById('rates-display');
   if(!el) return;
-  el.innerHTML=S.rates.map((r,i)=>`
-    <div class="rate-row">
-      <span class="rate-day">День ${i+1}</span>
-      <span class="rate-val${S.timerDay===i+1?' current':''}">${r.toFixed(2)} грн</span>
-    </div>`).join('');
+  el.innerHTML=S.rates.map((r,i)=>{
+    const d=addDays(S.startDate,i);
+    const isToday=S.timerDay===i+1;
+    return '<div class="sb-rate-row">'+
+      '<span class="sb-rate-day"'+(isToday?' style="color:var(--grn);font-weight:600"':'')+'>'+d+'</span>'+
+      '<span class="sb-rate-val'+(isToday?' today':'')+'">'+r.toFixed(2)+'</span>'+
+    '</div>';
+  }).join('');
 }
-
-// ================================================================
-// WELCOME
-// ================================================================
 function renderWelcome(){
   document.getElementById('content').innerHTML=`
   <div class="welcome-page">
@@ -1618,7 +1652,12 @@ function openEmail(orderId){
       <div class="profanity-warn" id="pw-${orderId}">⛔ Будь ласка, спілкуйтесь професійно.</div>
       <div class="reply-actions">
         <button class="btn primary" onclick="sendEmailReply('${orderId}')">Надіслати</button>
-        <button class="btn secondary" onclick="go('carriers');['carriers','chats','orders','docs'].forEach(unlock)">До перевізників →</button>
+        ${ord.clientFreightAgreed && !S.confirmations?.[orderId]?.client
+          ? `<button class="btn success" onclick="confirmFromClient('${orderId}')">✓ Підтвердити замовлення</button>`
+          : S.confirmations?.[orderId]?.client
+          ? `<span style="color:var(--grn);font-size:12px">✓ Підтверджено €${S.confirmations[orderId].freight}</span>`
+          : ''}
+        <button class="btn secondary" onclick="go('carriers');['carriers','chats','orders','docs'].forEach(unlock)">Перевізники →</button>
       </div>
     </div>`;
   document.getElementById(`escroll-${orderId}`)?.scrollTo(0,9999);
@@ -1749,15 +1788,25 @@ function renderCarriers(){
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1">
         <span class="ct-label">Напрямок</span>
         <select class="ct-sel" id="cf-dir" onchange="applyCarF()">
-          <option value="all">Всі напрямки</option>
-          ${['DE','PL','BE','FR','NL','CZ','SK','AT','HU','RO','UA','LT','LV','EE','ES','IT','CH','GR','TR','BG','MD'].map(d=>`<option>${d}</option>`).join('')}
+          <option value="all">Всі</option>
+          ${['AL','AD','AT','BE','BA','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IS','IE','IT','LV','LT','LU','MK','MD','NL','NO','PL','PT','RO','RS','SK','SI','ES','SE','CH','UA','GB','TR','AZ','GE','MT','AM'].map(d=>`<option value="${d}" ${S.carrierFilter.dir===d?'selected':''}>${d}</option>`).join('')}
         </select>
         <span class="ct-label">Тип авто</span>
         <select class="ct-sel" id="cf-type" onchange="applyCarF()">
-          <option value="all">Всі типи</option>
-          ${['Тент','Реф','Реф GDP','Мега','ADR Цистерна','ADR Тент','Цистерна','Зерновоз','Борт','Низькорамник'].map(t=>`<option>${t}</option>`).join('')}
+          <option value="all">Всі</option>
+          ${['Тент','Тент штора','Реф','Ізотерм','Цільнометалевий','Платформа','Мега','Юмбо','Сцепка','Цистерна хімічна','Автовоз','Низькорамний трал','Бус 1-1.5т','Бус 3т-3.5т','Бус 5т','Самоскидний','Контейнеровоз','Зерновоз','Тваринний причіп','Лісовоз','Рухома підлога','Модульний причіп','Бункерний причіп','Бічний навантажувач','Крита','Цистерна харчова','Бензовоз','Бітумовоз'].map(t=>`<option value="${t}" ${S.carrierFilter.type===t?'selected':''}>${t}</option>`).join('')}
         </select>
-        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()">
+        <select class="ct-sel" id="cf-special" onchange="applyCarF()" title="ADR / Дозволи">
+          <option value="all">ADR / Дозволи</option>
+          <optgroup label="ADR та дозволи">
+            ${['TIR Carnet','ЄКМТ','Carnet ATA','Макулатура','Ветеринарні товари','Під митним контролем'].map(p=>`<option value="perm_${p}" ${S.carrierFilter.special==='perm_'+p?'selected':''}>${p}</option>`).join('')}
+          </optgroup>
+          <optgroup label="Додаткове обладнання">
+            ${['Мультилок','Гідроборт','Допельшток','Рухома підлога'].map(p=>`<option value="equip_${p}" ${S.carrierFilter.special==='equip_'+p?'selected':''}>${p}</option>`).join('')}
+          </optgroup>
+        </select>
+        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="${S.carrierFilter.q||''}">
+        <button class="btn sm" onclick="resetCarF()" title="Скинути фільтри">✕ Скинути</button>
       </div>
     </div>
     <div class="carriers-counter" id="car-count">Перевізників: ${S.carriers.length}</div>
@@ -1771,7 +1820,21 @@ function renderCarriers(){
 function applyCarF(){
   S.carrierFilter.dir=document.getElementById('cf-dir')?.value||'all';
   S.carrierFilter.type=document.getElementById('cf-type')?.value||'all';
+  S.carrierFilter.special=document.getElementById('cf-special')?.value||'all';
   S.carrierFilter.q=(document.getElementById('cf-q')?.value||'').toLowerCase();
+  renderCarrierList();
+}
+
+function resetCarF(){
+  S.carrierFilter={dir:'all',type:'all',special:'all',q:''};
+  const dir=document.getElementById('cf-dir');
+  const type=document.getElementById('cf-type');
+  const special=document.getElementById('cf-special');
+  const q=document.getElementById('cf-q');
+  if(dir) dir.value='all';
+  if(type) type.value='all';
+  if(special) special.value='all';
+  if(q) q.value='';
   renderCarrierList();
 }
 function renderCarrierList(){
@@ -1885,7 +1948,9 @@ function renderChatInCol(col,c,cid,pfx){
     <div class="chat-deal-bar">
       <span style="color:var(--t3)">Фрахт:</span>
       <span style="font-family:var(--mono);font-weight:600;color:var(--t1)" id="agreed-rate-${cid}">—</span>
-      ${deal==='ok'?`<button class="btn primary sm" style="margin-left:auto" onclick="confirmCarrier('${cid}')">Підтвердити замовлення</button>`:''}
+      ${(deal==='talk'||deal==='ok')
+        ? `<button class="btn success sm" style="margin-left:auto" onclick="confirmFromCarrier('${cid}')">✓ Підтвердити перевізника</button>`
+        : ''}
     </div>
     <div class="chat-quick">
       <button class="btn sm" onclick="qi_('${cid}','${pfx}','Добрий день! Компанія Docaa. Є вантаж на рейс. Маєте вільне авто?')">Вільне авто?</button>
@@ -1894,8 +1959,8 @@ function renderChatInCol(col,c,cid,pfx){
       <button class="btn sm success" onclick="qi_('${cid}','${pfx}','Домовились! Підтверджуємо. Надішліть номер авто та ПІБ водія.')">✓ Підтвердити</button>
     </div>
     <div class="chat-input-row">
-      <textarea class="chat-ta" id="ci-${pfx}-${cid}" placeholder="Повідомлення..." rows="1"
-        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg('${cid}','${pfx}')}"></textarea>
+      <textarea class="chat-ta" id="ci-${pfx}-${cid}" placeholder="Повідомлення... (Ctrl+Enter — надіслати)" rows="1"
+        onkeydown="if(event.key==='Enter'&&event.ctrlKey){event.preventDefault();sendChatMsg('${cid}','${pfx}')}"></textarea>
       <button class="chat-send" onclick="sendChatMsg('${cid}','${pfx}')">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
@@ -1971,41 +2036,51 @@ async function sendChatMsg(cid,pfx){
 
 function buildCarrierSys(c, ordContext){
   const persona = PERSONA_PROMPTS[c.personality] || PERSONA_PROMPTS.tough;
-  const willRefuse = Math.random() > c.availability;
-  const noAvail = ['Зараз на тому напрямку нічого немає.','На ті дати все зайнято.','Нема вільних на зараз.','Авто зайняті до кінця тижня.'];
+  const willRefuse = Math.random() > (c.availability||0.6);
+  const noAvail = [
+    'Зараз на тому напрямку нічого немає.',
+    'На ті дати все зайнято.',
+    'Нема вільних на зараз.',
+    'Авто зайняті до кінця тижня.',
+    'На жаль, зараз немає.',
+  ];
 
-  // Build strict vehicle constraint
-  const myTypes = c.types.join(', ');
-  const myDirs = c.dirs.join(', ');
+  const myTypes = Array.isArray(c.types) ? c.types.join(', ') : (c.vehicle_types||'Тент');
+  const myDirs = Array.isArray(c.dirs) ? c.dirs.join(', ') : (c.dirs||'UA, PL');
+  const nat = c.nationality || 'UA';
 
-  // Order context if provided
+  // Language instruction based on nationality
+  const langNote = nat==='PL'
+    ? 'Відповідай ТІЛЬКИ польською або англійською. Розумієш українську але пишеш польською.'
+    : nat==='OTHER'
+    ? 'Відповідай англійською або мовою своєї країни.'
+    : 'Відповідай українською.';
+
   let orderBlock = '';
   if(ordContext){
-    orderBlock = `\nПОТОЧНЕ ЗАМОВЛЕННЯ ПРО ЯКЕ ЙДЕТЬСЯ:
+    orderBlock = `\nПОТОЧНЕ ЗАМОВЛЕННЯ:
 Маршрут: ${ordContext.route}
 Вантаж: ${ordContext.cargo}
-Тип кузова що потрібен: ${ordContext.vehicle}
+Кузов потрібен: ${ordContext.vehicle}
 Дата завантаження: ${ordContext.loadDate}
-Дата доставки: ${ordContext.delivDate}
-Вага: ${ordContext.weight ? ordContext.weight+' кг' : 'уточнюється'}`;
+Дата доставки: ${ordContext.delivDate}`;
   }
 
-  return `Ти — ${c.person}, менеджер транспортної компанії "${c.name}".
-ТВІЙ АВТОПАРК (тільки це — нічого іншого!): ${myTypes}.
-ТВОЇ НАПРЯМКИ (тільки ці — відмовляй на інші): ${myDirs}.
-Базова ставка: €${c.rateMin}–${c.rateMax}/km. В переговорах завжди називай ФРАХТ за РЕЙС в €, не ставку за км.
+  return `Ти — ${c.person||'менеджер'}, компанія "${c.name}". ${langNote}
+ТВІЙ АВТОПАРК (тільки це!): ${myTypes}.
+ТВОЇ НАПРЯМКИ (тільки ці!): ${myDirs}.
 ${orderBlock}
 
 ${persona}
 
-${willRefuse ? `УВАГА: На перший запит кажи що зараз немає вільних авто: "${noAvail[Math.floor(Math.random()*noAvail.length)]}" Якщо клієнт наполягає або пропонує добру ціну — можеш переглянути.` : ''}
+${willRefuse ? `ЗАРАЗ: "${noAvail[Math.floor(Math.random()*noAvail.length)]}" Якщо дуже наполягають або гарна ціна — можеш переглянути.` : ''}
 
-ЗАЛІЗНІ ПРАВИЛА (порушення заборонені):
-1. Якщо клієнт просить тип авто якого у тебе НЕМАЄ (наприклад реф, а в тебе тільки тент) — кажи "У нас немає рефрижераторів, тільки ${myTypes}."
-2. Якщо маршрут не входить в твої напрямки — кажи "Ми не працюємо на тому напрямку, тільки ${myDirs}."
-3. НІКОЛИ не вигадуй дати — якщо дата завантаження відома (${ordContext?.loadDate||'уточнюється'}) — оперуй нею.
-4. Відповідь: строго 2-3 речення. Діловий тон без зайвих емоцій.
-5. Не виходь з ролі. Не кажи що ти AI.`;
+ЗАЛІЗНІ ПРАВИЛА:
+1. Якщо просять тип авто якого у тебе НЕМАЄ — відмовляй: "У нас немає ${myTypes.split(',')[0] === 'Тент' ? 'рефів' : 'тентів'}, тільки ${myTypes}"
+2. Якщо маршрут не твій — "Ми не працюємо на тому напрямку"
+3. Дата завантаження з замовлення: ${ordContext?.loadDate||'уточнюється'} — тримайся її
+4. Коли домовились — кажи: "Домовились. Фрахт €[сума]. Водій [ПІБ], авто [номер]/[причіп]"
+5. НЕ виходь з ролі. НЕ кажи що ти AI.`;
 }
 
 function confirmCarrier(cid){
@@ -2044,15 +2119,25 @@ function renderChats(){
   const sb=document.getElementById('chats-sb');
   sb.innerHTML=contacted.map(c=>{
     const deal=S.deals[c.id]||'none';
-    const last=S.chats[c.id]?.filter(m=>!m.loading).slice(-1)[0];
+    const msgs=S.chats[c.id]?.filter(m=>!m.loading)||[];
+    const last=msgs.slice(-1)[0];
+    // Count unread (carrier messages after last student message)
+    let unread=0;
+    for(let i=msgs.length-1;i>=0;i--){
+      if(msgs[i].role==='student') break;
+      if(msgs[i].role==='carrier'&&!msgs[i].read) unread++;
+    }
     const dl={none:'ds-none',talk:'ds-talk',ok:'ds-ok',no:'ds-no'};
     const dlbl={none:'—',talk:'Переговори',ok:'✓',no:'✗'};
-    return `<div class="chats-item${S.selectedCarrier===c.id?' active':''}" onclick="openChatView('${c.id}')">
-      <div style="display:flex;justify-content:space-between;margin-bottom:2px">
-        <span style="font-size:12px;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px">${c.name}</span>
-        <span class="tag ${dl[deal]}" style="font-size:9px">${dlbl[deal]}</span>
+    return `<div class="chats-item${S.selectedCarrier===c.id?' active':''}" onclick="openChatView('${c.id}')" style="padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:13px;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px">${c.name}</span>
+        <div style="display:flex;gap:5px;align-items:center">
+          ${unread>0?`<span style="background:var(--red2);color:#fff;border-radius:10px;font-size:10px;font-family:var(--mono);padding:1px 6px;font-weight:600">${unread}</span>`:''}
+          <span class="tag ${dl[deal]}" style="font-size:9px">${dlbl[deal]}</span>
+        </div>
       </div>
-      <div style="font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${last?last.text.slice(0,40)+'…':'Немає повідомлень'}</div>
+      <div style="font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${last?last.text.slice(0,45)+'…':'Починай розмову'}</div>
     </div>`;
   }).join('');
   if(S.selectedCarrier&&S.contactedCarriers.has(S.selectedCarrier)) openChatView(S.selectedCarrier);
@@ -2503,6 +2588,191 @@ function saveAdminRates(){
   localStorage.setItem('fd_rates',JSON.stringify(S.rates));
   updateRatesDisplay();
   notify('Курси збережено','ok');
+}
+
+
+function confirmFromClient(orderId){
+  const ord=S.orders.find(o=>o.id===orderId);
+  const em=S.emails.find(e=>e.orderId===orderId);
+  if(!ord||!em) return;
+  if(!ord.clientFreightAgreed){notify('Спочатку узгодьте ціну з замовником','err');return;}
+
+  // Show confirm dialog
+  const mo=document.createElement('div');
+  mo.className='modal-ov';
+  mo.onclick=e=>{if(e.target===mo)mo.remove();};
+  mo.innerHTML=`<div class="modal-box" style="max-width:380px">
+    <div class="modal-title">Підтвердження від замовника</div>
+    <p style="font-size:13px;color:var(--t2);margin-bottom:14px">
+      AI підтвердить від імені <strong>${em.from}</strong> якщо домовленості були досягнуті.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div><label class="form-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Сума фрахту (EUR)</label>
+        <input id="conf-freight" type="number" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:14px;font-weight:600;padding:8px 10px;border-radius:var(--r);outline:none;width:100%" value="${ord.clientFreightAgreed||''}">
+      </div>
+      <div><label class="form-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Дата завантаження</label>
+        <input id="conf-date" type="text" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;width:100%" value="${ord.loadDate||''}">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn primary" style="flex:1" onclick="doConfirmClient('${orderId}',this)">Запросити підтвердження</button>
+      <button class="btn" onclick="this.closest('.modal-ov').remove()">Скасувати</button>
+    </div>
+    <div id="conf-result" style="margin-top:10px;font-size:12px;color:var(--t3)"></div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+async function doConfirmClient(orderId, btn){
+  const ord=S.orders.find(o=>o.id===orderId);
+  const em=S.emails.find(e=>e.orderId===orderId);
+  const freight=parseFloat(document.getElementById('conf-freight')?.value)||ord.clientFreightAgreed;
+  const date=document.getElementById('conf-date')?.value||ord.loadDate;
+  const resultEl=document.getElementById('conf-result');
+  if(!freight){notify('Введіть суму фрахту','err');return;}
+
+  btn.disabled=true;
+  if(resultEl) resultEl.textContent='AI перевіряє...';
+
+  // Check conversation history for price agreement
+  const history=em.replies.filter(r=>!r.loading);
+  const hasAgreement=history.some(r=>
+    r.role==='ai'&&(r.text.includes(freight)||r.text.match(/\d{3,5}/))
+  );
+
+  const sys=buildClientSys(em,ord);
+  const confirmPrompt=`Менеджер просить підтвердити замовлення:
+Фрахт: €${freight}
+Дата завантаження: ${date}
+
+${hasAgreement
+  ? 'В попередній розмові ціна обговорювалась і була близька до цієї. Підтверди замовлення коротко і ділово.'
+  : 'В розмові ще не було чіткої домовленості. Попроси ще раз обговорити деталі перш ніж підтверджувати.'}`;
+
+  try{
+    const data=await callClaude(sys,[...history.map(r=>({role:r.role==='student'?'user':'assistant',content:r.text})),{role:'user',content:confirmPrompt}]);
+    const resText=typeof data==='string'?data:(data.content?.[0]?.text||'');
+    const confirmed=resText.toLowerCase().match(/підтверджу|підтверджую|confirm|згода|домовились|ok|ок/i);
+
+    em.replies.push({role:'ai',text:resText});
+
+    if(confirmed){
+      if(!S.confirmations) S.confirmations={};
+      S.confirmations[orderId]={client:true,freight,date};
+      ord.clientFreightAgreed=freight;
+      ord.loadDate=date;
+      saveOrderToServer(orderId);
+      notify('✓ Підтвердження від замовника отримано','ok');
+      document.querySelector('.modal-ov')?.remove();
+      unlock('orders');
+    } else {
+      if(resultEl) resultEl.textContent='Замовник ще не готовий підтвердити. Продовжіть переговори.';
+    }
+    openEmail(orderId);
+    updateBadges();
+  }catch(e){
+    if(resultEl) resultEl.textContent=errMsg(e);
+  }
+  btn.disabled=false;
+}
+
+function confirmFromCarrier(cid){
+  const c=S.carriers.find(x=>x.id===cid);
+  if(!c){notify('Перевізник не знайдений','err');return;}
+
+  const mo=document.createElement('div');
+  mo.className='modal-ov';
+  mo.onclick=e=>{if(e.target===mo)mo.remove();};
+  mo.innerHTML=`<div class="modal-box" style="max-width:380px">
+    <div class="modal-title">Підтвердження перевізника</div>
+    <p style="font-size:13px;color:var(--t2);margin-bottom:14px">
+      AI підтвердить від імені <strong>${c.person}</strong> (${c.name}) якщо домовленості були досягнуті.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Фрахт перевізника (EUR)</label>
+        <input id="cconf-freight" type="number" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:14px;font-weight:600;padding:8px 10px;border-radius:var(--r);outline:none;width:100%">
+      </div>
+      <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Дата завантаження</label>
+        <input id="cconf-date" type="text" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;width:100%">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn primary" style="flex:1" onclick="doConfirmCarrier('${cid}',this)">Запросити підтвердження</button>
+      <button class="btn" onclick="this.closest('.modal-ov').remove()">Скасувати</button>
+    </div>
+    <div id="cconf-result" style="margin-top:10px;font-size:12px;color:var(--t3)"></div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+async function doConfirmCarrier(cid, btn){
+  const c=S.carriers.find(x=>x.id===cid);
+  const freight=parseFloat(document.getElementById('cconf-freight')?.value)||0;
+  const date=document.getElementById('cconf-date')?.value||'';
+  const resultEl=document.getElementById('cconf-result');
+  if(!freight){notify('Введіть суму фрахту','err');return;}
+
+  btn.disabled=true;
+  if(resultEl) resultEl.textContent='AI перевіряє...';
+
+  const msgs=S.chats[cid]||[];
+  const hasPrice=msgs.some(m=>m.role==='carrier'&&m.text.match(/\d{3,5}/));
+  const ordCtx=S.orders.find(o=>o.dirs?.some(d=>c.dirs?.includes(d)));
+  const sys=buildCarrierSys(c,ordCtx?{route:ordCtx.dirs.join('→'),cargo:ordCtx.vehicle,vehicle:ordCtx.vehicle,loadDate:ordCtx.loadDate,delivDate:ordCtx.delivDate}:null);
+
+  const confirmMsg=hasPrice
+    ?`Клієнт просить підтвердити: фрахт €${freight}, завантаження ${date}. Якщо ціна відповідає тому про що домовлялись — підтверди: "Домовились. Фрахт €${freight}. Водій [ПІБ], авто [номер]/[причіп]"`
+    :`Клієнт пропонує €${freight}. Домовленості ще не було. Або погодься якщо влаштовує, або продовж переговори.`;
+
+  try{
+    const data=await callClaude(sys,
+      [...msgs.filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text})),
+       {role:'user',content:confirmMsg}]
+    );
+    const resText=typeof data==='string'?data:(data.content?.[0]?.text||'');
+    const confirmed=resText.toLowerCase().match(/домовились|підтвердж|підписую|добре|ок|ok/i);
+
+    S.chats[cid].push({role:'carrier',text:resText,time:nowTime()});
+    saveChatToServer(cid);
+
+    if(confirmed){
+      S.deals[cid]='ok';
+      if(!S.confirmations) S.confirmations={};
+      S.confirmations[cid]={carrier:true,freight,date};
+
+      // Extract driver and plate from response
+      const dM=resText.match(/[Вв]одій\s+([А-ЯІЇЄA-Z][а-яіїєa-z]+\s+[А-ЯІЇЄA-Z][а-яіїєa-z]+)/);
+      const pM=resText.match(/([А-ЯІЇЄ]{2}\s?\d{4}\s?[А-ЯІЇЄ]{2}|[A-Z]{2}\s?\d{4}\s?[A-Z]{2})/);
+
+      // Assign to matching unconfirmed order
+      const ord=S.orders.find(o=>!o.carrierId&&o.clientFreightAgreed&&o.dirs?.some(d=>c.dirs?.includes(d)));
+      if(ord){
+        ord.carrierId=cid;
+        ord.carrierFreightAgreed=freight;
+        if(dM) ord.carrierDriverName=dM[1];
+        if(pM) ord.carrierPlate=pM[0].replace(/\s/g,'');
+        ord.status='confirmed';
+        scheduleEvents(ord.id);
+        saveOrderToServer(ord.id);
+      }
+      notify('✓ Перевізника підтверджено','ok');
+      document.querySelector('.modal-ov')?.remove();
+      unlock('orders');
+      updateBadges();
+    } else {
+      if(resultEl) resultEl.textContent='Перевізник не готовий підтвердити. Продовжіть переговори.';
+    }
+
+    // Re-render chat
+    if(S.module==='chats') renderChats();
+    if(S.module==='carriers'){
+      const col=document.getElementById('car-chat-col');
+      if(col) renderChatInCol(col,c,cid,'car');
+    }
+  }catch(e){
+    if(resultEl) resultEl.textContent=errMsg(e);
+  }
+  btn.disabled=false;
 }
 
 window.addEventListener('load',()=>{

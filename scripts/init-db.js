@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS letters (
   distance    INTEGER,
   load_day_offset  INTEGER DEFAULT 4,
   deliv_day_offset INTEGER DEFAULT 8,
+  difficulty  TEXT DEFAULT 'СЕРЕДНЄ',
+  task_hint   TEXT,
+  has_photo   INTEGER DEFAULT 0,
+  photo_file  TEXT,
+  contract_number TEXT,
+  per_tonne_rate REAL,
   created_by  TEXT,
   active      INTEGER DEFAULT 1,
   created_at  TEXT DEFAULT (datetime('now'))
