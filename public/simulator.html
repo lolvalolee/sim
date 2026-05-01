@@ -1786,42 +1786,64 @@ async function saveThreadToServer(orderId){
   }).catch(()=>{});
 }
 
-function buildClientSys(em,ord){
+function buildClientSys(em, ord){
   const langMap = {
-    DE:'Відповідай ТІЛЬКИ German (або English якщо питають англійською).',
-    PL:'Відповідай Polish або Ukrainian.',
-    FR:'Відповідай French або English.',
-    AE:'Відповідай English.',
-    ES:'Відповідай English або Spanish.'
+    DE:'Відповідай ТІЛЬКИ German.',
+    PL:'Відповідай ТІЛЬКИ Polish.',
+    FR:'Відповідай ТІЛЬКИ French.',
+    IT:'Відповідай ТІЛЬКИ Italian.',
+    ES:'Відповідай ТІЛЬКИ Spanish.',
+    NL:'Відповідай ТІЛЬКИ Dutch.',
+    CZ:'Відповідай ТІЛЬКИ Czech.',
+    SK:'Відповідай ТІЛЬКИ Slovak або Czech.',
+    HU:'Відповідай ТІЛЬКИ Hungarian.',
+    RO:'Відповідай ТІЛЬКИ Romanian.',
+    NO:'Відповідай ТІЛЬКИ English.',
+    SE:'Відповідай ТІЛЬКИ English.',
+    DK:'Відповідай ТІЛЬКИ English.',
+    GB:'Відповідай ТІЛЬКИ English.',
+    CH:'Відповідай ТІЛЬКИ German або English.',
+    AT:'Відповідай ТІЛЬКИ German.',
+    BE:'Відповідай ТІЛЬКИ French або Dutch.',
   };
-  const lang = langMap[em.country] || 'Відповідай Ukrainian.';
-  const curr = ord.freightUAH
-    ? `гривнях (орієнтовний курс EUR ~${S.rates[S.timerDay-1]} грн)`
-    : 'євро (€)';
+  const lang = em.country === 'UA' ? 'Відповідай ТІЛЬКИ українською.' : (langMap[em.country] || 'Відповідай ТІЛЬКИ English.');
 
-  // Build full order profile from the actual letter
-  const missingList = em.missing?.length
-    ? `У твоєму першому листі НЕ БУЛО цих даних: ${em.missing.join('; ')}. Якщо менеджер запитує — вигадуй реалістичні конкретні дані (справжні адреси, точна вага тощо) і ТРИМАЙСЯ їх протягом усієї розмови.`
-    : 'Всі дані є в листі.';
+  // Scenario behaviour
+  const scenario = ord.scenario || em.scenario || 'agree';
+  const freight = ord.clientFreightAgreed || ord.clientFreight || ord.freightMax || ord.freightMin || 0;
 
-  return `Ти — ${em.from}, представник компанії "${em.company}". ${lang}
+  const scenarioPrompt = {
+    agree: `Ти готовий заплатити €${freight}. Якщо менеджер пропонує близьку ціну (±5%) — погоджуєшся. Якщо пропонує дорожче ніж на 10% — питаєш чи можна дешевше.`,
+    negotiate_down: `Орієнтовний фрахт €${freight}. Ти ЗАВЖДИ намагаєшся знизити ціну. Стратегія: спочатку кажеш що "маю інші варіанти дешевше" або "колеги пропонують менше". Знижуєш поступово: спочатку на 150€, потім на 100€, потім на 50€. Якщо менеджер тримає ціну — можеш погодитись на оригінальну.`,
+    urgent: `Вантаж ТЕРМІНОВИЙ, потрібно відправити якнайшвидше. Ти готовий платити €${freight} або навіть на 10-15% більше якщо є авто на потрібні дати. Акцентуєш на терміновості.`,
+    strict: `Твій бюджет СТРОГО €${freight}. Якщо менеджер називає вищу ціну — відповідаєш "На жаль це поза нашим бюджетом" або "Маємо інші пропозиції в межах нашого бюджету". Можеш дати шанс якщо менеджер наполягає і є вагомі аргументи.`,
+  }[scenario] || `Ти готовий платити €${freight}.`;
 
-ТВОЄ ЗАМОВЛЕННЯ (профіль — не відступай від нього!):
-- Маршрут: ${ord.dirs.join(' → ')}
-- Вантаж: ${ord.vehicle}
-- Дата завантаження: ${ord.loadDate} (ЦЯ ДАТА ФІКСОВАНА — не називай інших!)
-- Дата доставки: ${ord.delivDate}
-- Фрахт: ти готовий платити €${ord.freightMin||'?'}–€${ord.freightMax||ord.clientFreight||'?'} у ${curr}
-${ord.freightFixed ? `- Фрахт фіксований: €${ord.clientFreight} — не знижуй і не підвищуй.` : ''}
+  // Incoterms context
+  const incoterms = ord.incoterms || '';
+  const incotermsNote = incoterms ? `Умови поставки: ${incoterms}. ` : '';
 
-${missingList}
+  // Missing data — if student asks — answer with realistic invented data
+  const missingNote = em.missing?.length
+    ? `У твоєму листі не вказано: ${em.missing.join('; ')}. Якщо менеджер запитує — відповідай конкретними реалістичними даними (адреса, вага, дата тощо) і тримайся їх.`
+    : '';
 
-ЗАЛІЗНІ ПРАВИЛА:
-1. ЗАВЖДИ посилайся на дату завантаження ${ord.loadDate} — ніколи не називай інших дат.
-2. Якщо питають про готовність вантажу — відповідай "Вантаж готовий до ${ord.loadDate}."
-3. Якщо торгуєшся — не виходь за межі €${ord.freightMin||0}–€${ord.freightMax||ord.clientFreight||9999}.
-4. Відповідь: 2-4 речення. Діловий тон.
-5. Не кажи що ти AI. Не виходь з ролі.`;
+  return `Ти — ${em.from}, представник "${em.company}". ${lang}
+
+ПРОФІЛЬ ЗАМОВЛЕННЯ:
+Маршрут: ${ord.dirs?.join(' → ') || ''}
+Тип кузова: ${ord.vehicle || ''}
+Дата завантаження: ${ord.loadDate} (ФІКСОВАНА — не змінюй!)
+Дата доставки: ${ord.delivDate}
+${incotermsNote}${scenarioPrompt}
+
+${missingNote}
+
+ПРАВИЛА:
+1. Дата завантаження ЗАВЖДИ ${ord.loadDate} — ніколи не називай іншої дати.
+2. На питання "коли готовий вантаж" — "Вантаж готовий до ${ord.loadDate}."
+3. Відповідь: 2-4 речення. Діловий тон.
+4. НЕ виходь з ролі. НЕ кажи що ти AI.`;
 }
 
 function renderCarriers(){
