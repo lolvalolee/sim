@@ -145,12 +145,63 @@ router.post('/sessions/:studentId/resume', LEC, (req, res) => {
 });
 
 // POST /api/lecturer/sessions/:studentId/reset
+// Скидає сесію і генерує новий набір листів
 router.post('/sessions/:studentId/reset', LEC, (req, res) => {
-  db.prepare('DELETE FROM sessions WHERE student_id=?').run(req.params.studentId);
-  db.prepare('DELETE FROM email_threads WHERE session_id IN (SELECT id FROM sessions WHERE student_id=?)').run(req.params.studentId);
-  db.prepare('DELETE FROM carrier_chats WHERE session_id IN (SELECT id FROM sessions WHERE student_id=?)').run(req.params.studentId);
-  db.prepare('DELETE FROM order_progress WHERE session_id IN (SELECT id FROM sessions WHERE student_id=?)').run(req.params.studentId);
-  res.json({ ok: true });
+  const studentId = req.params.studentId;
+
+  // Get current session id before deleting
+  const session = db.prepare('SELECT id FROM sessions WHERE student_id=?').get(studentId);
+
+  // Delete in correct order (children first)
+  if (session) {
+    db.prepare('DELETE FROM email_threads WHERE session_id=?').run(session.id);
+    db.prepare('DELETE FROM carrier_chats WHERE session_id=?').run(session.id);
+    db.prepare('DELETE FROM order_progress WHERE session_id=?').run(session.id);
+    db.prepare('DELETE FROM confirmations WHERE session_id=?').run(session.id).catch?.(() => {});
+    db.prepare('DELETE FROM sessions WHERE id=?').run(session.id);
+  }
+
+  // Delete old assignment and generate new one
+  const oldAssignment = db.prepare('SELECT * FROM assignments WHERE student_id=?').get(studentId);
+  if (oldAssignment) {
+    db.prepare('DELETE FROM assignments WHERE student_id=?').run(studentId);
+  }
+
+  // Find group for this student
+  const member = db.prepare('SELECT group_id FROM group_members WHERE student_id=?').get(studentId);
+  if (!member) return res.status(404).json({ error: 'Student not in any group' });
+
+  // Generate fresh assignment
+  const newAssignment = generateAssignment(studentId, member.group_id, req.user.id);
+
+  res.json({ ok: true, new_assignment_id: newAssignment.id, letter_count: newAssignment.letter_ids.length });
+});
+
+// POST /api/lecturer/groups/:groupId/reset — рестарт всієї групи
+router.post('/groups/:groupId/reset', LEC, (req, res) => {
+  const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.groupId, req.user.id);
+  if (!g) return res.status(404).json({ error: 'Group not found' });
+
+  const members = db.prepare('SELECT student_id FROM group_members WHERE group_id=?').all(req.params.groupId);
+  const results = [];
+
+  for (const m of members) {
+    const studentId = m.student_id;
+    const session = db.prepare('SELECT id FROM sessions WHERE student_id=?').get(studentId);
+
+    if (session) {
+      db.prepare('DELETE FROM email_threads WHERE session_id=?').run(session.id);
+      db.prepare('DELETE FROM carrier_chats WHERE session_id=?').run(session.id);
+      db.prepare('DELETE FROM order_progress WHERE session_id=?').run(session.id);
+      db.prepare('DELETE FROM sessions WHERE id=?').run(session.id);
+    }
+
+    db.prepare('DELETE FROM assignments WHERE student_id=?').run(studentId);
+    const newAssignment = generateAssignment(studentId, req.params.groupId, req.user.id);
+    results.push({ student_id: studentId, letters: newAssignment.letter_ids.length });
+  }
+
+  res.json({ ok: true, students_reset: results.length, results });
 });
 
 // GET /api/lecturer/sessions/:studentId — view student progress

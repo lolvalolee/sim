@@ -123,7 +123,27 @@ html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--san
 .order-margin{font-family:var(--mono);font-size:12px;font-weight:600}
 .order-margin.pos{color:var(--grn)}.order-margin.neg{color:var(--red)}.order-margin.pend{color:var(--t3)}
 .order-cargo{font-size:11px;color:var(--t3)}
+
+@media (max-width: 768px) {
+  .sidebar { position:fixed;left:-220px;top:0;height:100vh;z-index:500;transition:left .25s;box-shadow:4px 0 20px rgba(0,0,0,.5); }
+  .sidebar.open { left:0; }
+  .main { width:100vw; }
+  #mob-ov { display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:499; }
+  #mob-ov.show { display:block; }
+  #mob-btn { display:block !important; }
+  .kpi-row { grid-template-columns:repeat(2,1fr) !important; }
+  .tbl { font-size:11px; }
+  .tbl th,.tbl td { padding:6px 8px; }
+  .modal-box { width:calc(100% - 20px) !important; max-width:unset !important; margin:10px; }
+  .form-row { grid-template-columns:1fr !important; }
+  .admin-stat-grid { grid-template-columns:repeat(2,1fr) !important; }
+  /* Groups panel stacks */
+  [style*="width:420px"] { width:100% !important; min-width:unset !important; border-left:none !important; border-top:1px solid var(--b1); }
+  [style*="display:flex;flex:1;overflow:hidden"] { flex-direction:column !important; }
+}
 </style>
+<script>window.addEventListener("resize",()=>{var b=document.getElementById("mob-btn");if(b)b.style.display=window.innerWidth<=768?"block":"none";});window.addEventListener("load",()=>{var b=document.getElementById("mob-btn");if(b)b.style.display=window.innerWidth<=768?"block":"none";});</script>
+
 </head>
 <body>
 <div class="app">
@@ -163,7 +183,9 @@ html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--san
 
   <!-- MAIN -->
   <main class="main">
+    <div id="mob-ov" onclick="document.getElementById('sidebar').classList.remove('open');this.classList.remove('show')"></div>
     <div class="topbar">
+      <button id="mob-btn" onclick="document.getElementById('sidebar').classList.toggle('open');document.getElementById('mob-ov').classList.toggle('show')" style="display:none;background:none;border:none;color:var(--t2);cursor:pointer;padding:6px;font-size:18px;flex-shrink:0">☰</button>
       <span class="tb-title" id="tb-title">Групи та студенти</span>
       <div class="tb-right" id="tb-right"></div>
     </div>

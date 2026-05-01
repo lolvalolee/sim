@@ -8,7 +8,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',sans-serif;background:#151515;color:#f0f0f0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:#1c1c1c;border:1px solid #2a2a2a;border-radius:16px;padding:40px;width:100%;max-width:380px}
+.card{background:#1c1c1c;border:1px solid #2a2a2a;border-radius:16px;padding:30px 24px;width:100%;max-width:380px}
 .logo{display:flex;justify-content:center;margin-bottom:8px}
 .logo svg{width:110px}
 .subtitle{text-align:center;font-size:12px;color:#606060;text-transform:uppercase;letter-spacing:.12em;margin-bottom:32px}
@@ -21,7 +21,7 @@ body{font-family:'Inter',sans-serif;background:#151515;color:#f0f0f0;min-height:
 .btn-login:disabled{opacity:.5;cursor:not-allowed}
 .error{background:rgba(240,80,96,.1);border:1px solid rgba(240,80,96,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:#f05060;margin-bottom:14px;display:none}
 .loading{display:none;text-align:center;color:#606060;font-size:13px;margin-top:12px}
-</style>
+@media(max-width:480px){body{padding:12px}.card{border-radius:12px;padding:24px 18px}}</style>
 </head>
 <body>
 <div class="card">
