@@ -1362,11 +1362,16 @@ const S = {
     return {
       ...def,
       status:'new',
+      orderState: 'new',           // state machine
+      eventLog: [],                // [{at, type, by, text}] — single source of truth for AI memory (separate from def.events which are scheduled scenarios)
       clientFreightAgreed: def.freightFixed ? def.clientFreight : null,
       carrierFreightAgreed: null,
       carrierId: null,
+      carrierName: null,           // cached for prompts even after carrier swap
       carrierDriverName: null,
       carrierPlate: null,
+      carrierRefused: false,
+      clientNotifiedOfIssue: false, // чи студент повідомив замовника про проблему
       timeline: [],
       firedEvents: new Set(),
       confirmedAt: null,
@@ -1402,6 +1407,87 @@ S.emails = S.orders.map(o=>({
   // inject dates into body
   bodyText: o.email.body(o.loadDate, o.delivDate),
 }));
+
+// ================================================================
+// ORDER STATE MACHINE & EVENT LOG
+// ================================================================
+// Single source of truth: what happened with this order.
+// Both client and carrier AI prompts read from here.
+
+function recordEvent(orderId, type, by, text){
+  const ord = S.orders.find(o=>o.id===orderId);
+  if(!ord) return;
+  ord.eventLog = ord.eventLog || [];
+  ord.eventLog.push({
+    at: new Date().toISOString(),
+    day: S.timerDay,
+    type, by, text
+  });
+}
+
+function setOrderState(orderId, newState, reason){
+  const ord = S.orders.find(o=>o.id===orderId);
+  if(!ord) return;
+  const old = ord.orderState;
+  ord.orderState = newState;
+  recordEvent(orderId, 'state_change', 'system', `${old} → ${newState}${reason?': '+reason:''}`);
+}
+
+// Get short factual summary of order state for AI prompts.
+// This is what makes client and carrier "remember" everything.
+function getOrderContext(orderId){
+  const ord = S.orders.find(o=>o.id===orderId);
+  if(!ord) return '';
+
+  const lines = [];
+  lines.push(`СТАН РЕЙСУ: ${ord.orderState}`);
+  lines.push(`Маршрут: ${(ord.dirs||[]).join(' → ')}`);
+  lines.push(`Тип авто: ${ord.vehicle}`);
+  lines.push(`Дата завантаження: ${ord.loadDate}`);
+  lines.push(`Дата доставки: ${ord.delivDate}`);
+
+  if(ord.clientFreightAgreed){
+    lines.push(`Фрахт із замовником УЗГОДЖЕНО: €${ord.clientFreightAgreed}`);
+  } else if(ord.freightFixed){
+    lines.push(`Фрахт замовника (фіксований): €${ord.clientFreight}`);
+  } else {
+    lines.push(`Фрахт замовника: ще НЕ узгоджено (діапазон €${ord.freightMin}–${ord.freightMax})`);
+  }
+
+  if(ord.carrierId){
+    const c = S.carriers.find(cc=>cc.id===ord.carrierId);
+    const cname = c?.name || ord.carrierName || '(невідомо)';
+    lines.push(`Перевізник: ${cname}`);
+    if(ord.carrierFreightAgreed) lines.push(`Фрахт перевізнику: €${ord.carrierFreightAgreed}`);
+    if(ord.carrierPlate) lines.push(`Номер авто: ${ord.carrierPlate}`);
+    if(ord.carrierDriverName) lines.push(`Водій: ${ord.carrierDriverName}`);
+  } else {
+    lines.push(`Перевізник: ще НЕ призначений`);
+  }
+
+  if(ord.carrierRefused){
+    lines.push(`УВАГА: попередній перевізник відмовився від рейсу.`);
+  }
+
+  // Last 5 important events from eventLog
+  const importantEvents = (ord.eventLog||[]).filter(e=>
+    e.type!=='message' && e.type!=='state_change'
+  ).slice(-5);
+  if(importantEvents.length){
+    lines.push('\nОстанні події по рейсу:');
+    importantEvents.forEach(e=>{
+      lines.push(`- День ${e.day}: ${e.text}`);
+    });
+  }
+
+  return lines.join('\n');
+}
+
+// Trim AI history to recent messages but keep first 2 (initial context)
+function trimHistory(hist, maxRecent=18){
+  if(hist.length <= maxRecent + 2) return hist;
+  return [...hist.slice(0,2), {role:'user',content:'[...попередня переписка скорочена...]'}, ...hist.slice(-maxRecent)];
+}
 
 // ================================================================
 // TIMER
@@ -1469,17 +1555,21 @@ function checkEvents(){
       ev.fired=true;
       if(ev.special==='cancel'){
         ord.status='cancelled';
+        setOrderState(ord.id, 'cancelled', 'замовник скасував');
+        recordEvent(ord.id, 'order_cancelled', 'client', ord.cancelMsg||'Замовник відмовився від перевезення');
         const em=S.emails.find(e=>e.orderId===ord.id);
         if(em){ em.replies.push({role:'ai',text:ord.cancelMsg}); em.unread=true; }
         notify(`❌ ${ord.id}: замовник відмовився від перевезення!`,'err');
       } else if(ev.from==='carrier'&&ord.carrierId){
         if(!S.chats[ord.carrierId]) S.chats[ord.carrierId]=[];
         S.chats[ord.carrierId].push({role:'carrier',text:ev.text,time:nowTime(),event:true});
+        recordEvent(ord.id, 'carrier_event', 'carrier', ev.text.slice(0,120));
         if(ev.severity==='critical') ord.status='problem';
         notify(`${ev.severity==='critical'?'🚨':'📨'} Перевізник по ${ord.id}: нове повідомлення`,'warn');
       } else if(ev.from==='client'){
         const em=S.emails.find(e=>e.orderId===ord.id);
         if(em){ em.replies.push({role:'ai',text:ev.text}); em.unread=true; }
+        recordEvent(ord.id, 'client_event', 'client', ev.text.slice(0,120));
         notify(`📬 ${ord.from.split(' ')[0]} написав по ${ord.id}`,'warn');
       }
       updateBadges();
@@ -1755,11 +1845,23 @@ async function sendEmailReply(orderId){
   const txt=ta?.value?.trim();
   if(!txt){notify('Введіть текст','err');return;}
   if(hasProfanity(txt)){document.getElementById(`pw-${orderId}`).style.display='block';return;}
+
+  // Detect if student is notifying client about a problem with carrier
+  if(ord && ord.carrierRefused && !ord.clientNotifiedOfIssue){
+    const lo = txt.toLowerCase();
+    if(/проблем|відмов|зрив|зам[іе]н|нов(ий|ого) перевізник|шукаю|перевізник.*не/.test(lo)){
+      ord.clientNotifiedOfIssue = true;
+      recordEvent(ord.id, 'client_notified', 'student', 'Студент повідомив замовника про проблему з перевізником');
+    }
+  }
+
   em.replies.push({role:'student',text:txt}); ta.value='';
   em.replies.push({role:'ai',text:'',loading:true});
   openEmail(orderId);
   const sys=buildClientSys(em,ord);
-  const hist=em.replies.filter(r=>!r.loading).map(r=>({role:r.role==='student'?'user':'assistant',content:r.text}));
+  const hist=trimHistory(
+    em.replies.filter(r=>!r.loading).map(r=>({role:r.role==='student'?'user':'assistant',content:r.text}))
+  );
   try{
     const res=await callClaude(sys,hist);
     em.replies=em.replies.filter(r=>!r.loading);
@@ -1767,7 +1869,21 @@ async function sendEmailReply(orderId){
     // auto-detect freight agreement
     if(!ord.clientFreightAgreed&&!ord.freightFixed){
       const m=res.match(/€\s?(\d{3,6})/);
-      if(m){const v=parseInt(m[1]);if(v>=(ord.freightMin||0)&&v<=(ord.freightMax||99999)){ord.clientFreightAgreed=v;notify(`✓ Фрахт €${v} узгоджено з ${em.from}`,'ok');}}
+      if(m){
+        const v=parseInt(m[1]);
+        if(v>=(ord.freightMin||0)&&v<=(ord.freightMax||99999)){
+          ord.clientFreightAgreed=v;
+          recordEvent(ord.id, 'client_freight_agreed', 'system', `Узгоджено фрахт із замовником: €${v}`);
+          if(ord.orderState==='new'||ord.orderState==='client_negotiating'){
+            setOrderState(ord.id, 'client_confirmed');
+          }
+          notify(`✓ Фрахт €${v} узгоджено з ${em.from}`,'ok');
+        }
+      }
+    }
+    // Move state on first real exchange
+    if(ord.orderState==='new' && em.replies.length>=2){
+      setOrderState(ord.id, 'client_negotiating');
     }
     updateBadges();
     saveThreadToServer(orderId);
@@ -1805,24 +1921,44 @@ function buildClientSys(em, ord){
   const scenarioText=scenarios[scenario]||scenarios.agree;
 
   const exwText=incoterms==='EXW'?`\nУмови EXW: у довідці про транспортні витрати має бути текст про включення вартості навантажувальних робіт.`:'';
-  const missingText=em.missing&&em.missing.length?`\nУ листі не вказано: ${em.missing.join(', ')}. Відповідай реалістичними даними якщо питають.`:'';
+  const missingText=em.missing&&em.missing.length?`\nУ листі не вказано: ${em.missing.join(', ')}. Відповідай реалістичними даними якщо питають, але ЗАПАМ'ЯТОВУЙ що відповів — потім тримайся цих самих даних.`:'';
+
+  // ── ORDER CONTEXT: that's what makes client "remember" everything ──
+  const orderCtx = getOrderContext(ord.id);
+
+  // ── Reaction to carrier issues (if student told client) ──
+  let issueReaction = '';
+  if(ord.carrierRefused && ord.clientNotifiedOfIssue){
+    issueReaction = `\nКЛЮЧОВИЙ КОНТЕКСТ: експедитор повідомив тебе що перевізник відмовився від рейсу. Реагуєш згідно свого характеру (${scenario}):
+- agree/urgent: занепокоєний, але терпеливий: "Коли буде заміна? Дата завантаження горить."
+- negotiate_down: різкий: "Це ваша відповідальність. Скільки днів затримка?"
+- strict: жорсткий: "Ми домовлялись на конкретну дату. Якщо не буде заміни — шукаємо іншого експедитора."`;
+  } else if(ord.carrierRefused && !ord.clientNotifiedOfIssue){
+    issueReaction = `\nКЛЮЧОВИЙ КОНТЕКСТ: перевізник відмовився від рейсу, АЛЕ експедитор тебе про це ще НЕ повідомив. Ти не знаєш про проблему. Якщо запитує про статус — спокійно нагадуєш про дату. Не вигадуй проблем самостійно.`;
+  }
 
   return `Ти - ${em.from}, компанія "${em.company}". ${lang}
 
 ТВІЙ ОРИГІНАЛЬНИЙ ЛИСТ СТУДЕНТУ:
 ${letterText}
 
+${orderCtx}
+${issueReaction}
+
 Ти вже надіслав цей лист. Тепер ведеш переговори з експедитором.
-СТРОГО відповідай згідно даних листа: тип авто ${vehicle}, той самий вантаж, ті самі вимоги.
+СТРОГО відповідай згідно даних свого листа: тип авто ${vehicle}, той самий вантаж, ті самі вимоги.
 Якщо пропонують інший тип авто - виправляй: "Нам потрібен ${vehicle}, не інше."
+Пам'ятай ВСЕ що було сказано в попередніх повідомленнях нижче — не повторюй питань, не суперечь сам собі.
 ${missingText}${exwText}
 
 ЦІНА: ${scenarioText}
-ДАТА ЗАВАНТАЖЕННЯ: ${ord.loadDate} - НЕЗМІННА.
+ДАТА ЗАВАНТАЖЕННЯ: ${ord.loadDate} - НЕЗМІННА (хіба що сам погодишся посунути ±2 дні).
 ${incoterms?'Умови поставки: '+incoterms:''}
 
-Після домовленості - надішли повні адреси завантаження і розвантаження.
-Відповідь 2-4 речення. Діловий тон. НЕ виходь з ролі.`;
+Після домовленості по ціні - надішли повні адреси завантаження і розвантаження (вул., буд., індекс).
+Заявку від тебе студент НЕ просить — це він тобі готує заявку. Ти йому надсилаєш ДАНІ для заявки після підтвердження.
+
+Відповідь 2-4 речення. Діловий тон. НЕ виходь з ролі. НЕ кажи що ти AI.`;
 }
 
 function renderCarriers(){
@@ -2031,23 +2167,29 @@ async function sendChatMsg(cid,pfx){
   if(pfx==='car') renderChatInCol(document.getElementById('car-chat-col'),c,cid,'car');
   else renderChats();
   updateBadges();
-  // Find order matching this carrier's directions
-  const ordCtx = S.orders.find(o=>!o.carrierId&&o.dirs.some(d=>c.dirs.includes(d))&&o.clientFreightAgreed);
-  const sys=buildCarrierSys(c, ordCtx ? {
-    route: ordCtx.dirs.join(' → '),
-    cargo: ordCtx.vehicle,
-    vehicle: ordCtx.vehicle,
-    loadDate: ordCtx.loadDate,
-    delivDate: ordCtx.delivDate,
-    weight: ordCtx.email?.weight||''
-  } : null);
-  const hist=S.chats[cid].filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
+  // Find order: prefer one already assigned to this carrier; otherwise best matching unbooked
+  let ordCtx = S.orders.find(o=>o.carrierId===cid);
+  if(!ordCtx){
+    ordCtx = S.orders.find(o=>!o.carrierId&&o.dirs.some(d=>c.dirs.includes(d))&&o.clientFreightAgreed);
+  }
+  const sys=buildCarrierSys(c, ordCtx || null);
+  const hist=trimHistory(
+    S.chats[cid].filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}))
+  );
   try{
     const res=await callClaude(sys,hist);
     S.chats[cid]=S.chats[cid].filter(m=>!m.loading);
     S.chats[cid].push({role:'carrier',text:res,time:nowTime()});
     const lo=res.toLowerCase();
-    if(lo.includes('відмовля')||lo.includes('немає вільних')||lo.includes('на жаль')) S.deals[cid]='no';
+    if(lo.includes('відмовля')||lo.includes('немає вільних')||lo.includes('на жаль')) {
+      S.deals[cid]='no';
+      // If this carrier was already assigned to an order — that's a refusal mid-deal
+      if(ordCtx && ordCtx.carrierId===cid){
+        ordCtx.carrierRefused = true;
+        recordEvent(ordCtx.id, 'carrier_refused', 'carrier', `Перевізник ${c.name} відмовився від рейсу`);
+        setOrderState(ordCtx.id, 'carrier_refused', `${c.name} відмовився`);
+      }
+    }
     else if(lo.includes('домовились')||lo.includes('підтверджуємо')||lo.includes('угода')) {
       S.deals[cid]='ok';
       // detect rate
@@ -2105,19 +2247,40 @@ function buildCarrierSys(c, ordContext){
     : 'Відповідай українською.';
 
   let orderBlock = '';
+  let stateBlock = '';
+
   if(ordContext){
-    orderBlock = `\nПОТОЧНЕ ЗАМОВЛЕННЯ:
-Маршрут: ${ordContext.route}
-Вантаж: ${ordContext.cargo}
-Кузов потрібен: ${ordContext.vehicle}
-Дата завантаження: ${ordContext.loadDate}
-Дата доставки: ${ordContext.delivDate}`;
+    // ordContext now is the full order object — use getOrderContext for state
+    const ord = typeof ordContext === 'object' && ordContext.id
+      ? S.orders.find(o=>o.id===ordContext.id)
+      : null;
+
+    if(ord){
+      stateBlock = `\n${getOrderContext(ord.id)}\n`;
+
+      orderBlock = `
+ВАНТАЖ ЯКИЙ ПРОПОНУЄ ЕКСПЕДИТОР:
+Маршрут: ${(ord.dirs||[]).join(' → ')}
+Тип кузова: ${ord.vehicle}
+Дата завантаження: ${ord.loadDate}
+Дата доставки: ${ord.delivDate}
+${ord.email?.weight?'Вага: '+ord.email.weight:''}
+${ord.email?.cargoType?'Вантаж: '+ord.email.cargoType:''}
+${ord.incoterms?'Умови: '+ord.incoterms:''}`;
+    } else {
+      // Fallback to simple object
+      orderBlock = `\nВАНТАЖ ЯКИЙ ПРОПОНУЄ ЕКСПЕДИТОР:
+Маршрут: ${ordContext.route||''}
+Кузов: ${ordContext.vehicle||''}
+Дата завантаження: ${ordContext.loadDate||''}
+Дата доставки: ${ordContext.delivDate||''}`;
+    }
   }
 
   return `Ти — ${c.person||'менеджер'}, компанія "${c.name}". ${langNote}
 ТВІЙ АВТОПАРК (тільки це!): ${myTypes}.
-ТВОЇ НАПРЯМКИ (тільки ці!): ${myDirs}.
-${orderBlock}
+ТВОЇ НАПРЯМКИ РОБОТИ: ${myDirs}.
+${stateBlock}${orderBlock}
 
 ${persona}
 
@@ -2125,17 +2288,26 @@ ${willRefuse ? `ЗАРАЗ: "${noAvail[Math.floor(Math.random()*noAvail.length)]
 
 ЗАЛІЗНІ ПРАВИЛА:
 1. Якщо просять тип авто якого у тебе НЕМАЄ — відмовляй: "У нас немає ${myTypes.split(',')[0] === 'Тент' ? 'рефів' : 'тентів'}, тільки ${myTypes}"
-2. Якщо маршрут не твій — "Ми не працюємо на тому напрямку"
-3. Дата завантаження з замовлення: ${ordContext?.loadDate||'уточнюється'} — тримайся її
-4. Коли домовились — кажи: "Домовились. Фрахт €[сума]. Водій [ПІБ], авто [номер]/[причіп]"
-5. НЕ виходь з ролі. НЕ кажи що ти AI.`;
+2. Маршрут "твій" якщо ХОЧА Б ОДНА країна з маршруту (відправлення АБО призначення) є у твоїх напрямках. Україна (UA) у твоїх напрямках = ти регулярно возиш в/з України.
+   - Приклад: твої напрямки ${myDirs}. Маршрут Швейцарія→Україна — якщо в твоїх напрямках є CH або UA — це твій рейс.
+   - Не відмовляй лише через одну "чужу" країну в маршруті — це нормально для міжнародних перевезень.
+3. ОБГОВОРЮЄШ ТІЛЬКИ вантаж який вище в "ВАНТАЖ ЯКИЙ ПРОПОНУЄ ЕКСПЕДИТОР". Не вигадуй інший рейс. Не змінюй маршрут, тип авто, дату.
+4. Пам'ятай ВСЕ що сказали в попередніх повідомленнях нижче — твої ціни, дати, обіцянки. Не суперечь сам собі.
+5. Коли домовились — кажи: "Домовились. Фрахт €[сума]. Водій [ПІБ], авто [номер]/[причіп]"
+6. НЕ виходь з ролі. НЕ кажи що ти AI.`;
 }
 
 function confirmCarrier(cid){
   const ord=S.orders.find(o=>!o.carrierId&&o.clientFreightAgreed&&
     S.carriers.find(c=>c.id===cid)?.dirs.some(d=>o.dirs.includes(d)));
   if(!ord){notify('Спочатку узгодьте фрахт із замовником','warn');return;}
-  ord.carrierId=cid; ord.status='confirmed';
+  const carrier = S.carriers.find(c=>c.id===cid);
+  ord.carrierId=cid;
+  ord.carrierName = carrier?.name || '';
+  ord.status='confirmed';
+  ord.carrierRefused = false;
+  setOrderState(ord.id, 'carrier_confirmed');
+  recordEvent(ord.id, 'carrier_assigned', 'student', `Перевізник ${carrier?.name||cid} призначений на рейс`);
   scheduleEvents(ord.id);
   notify(`✓ Перевізник призначений на ${ord.id}`,'ok');
   updateBadges(); unlock('orders'); go('orders');
@@ -2698,7 +2870,8 @@ ${hasAgreement
   : 'В розмові ще не було чіткої домовленості. Попроси ще раз обговорити деталі перш ніж підтверджувати.'}`;
 
   try{
-    const data=await callClaude(sys,[...history.map(r=>({role:r.role==='student'?'user':'assistant',content:r.text})),{role:'user',content:confirmPrompt}]);
+    const historyMsgs = history.map(r=>({role:r.role==='student'?'user':'assistant',content:r.text}));
+    const data=await callClaude(sys, trimHistory([...historyMsgs,{role:'user',content:confirmPrompt}]));
     const resText=typeof data==='string'?data:(data.content?.[0]?.text||'');
     const confirmed=resText.toLowerCase().match(/підтверджу|підтверджую|confirm|згода|домовились|ok|ок/i);
 
@@ -2709,6 +2882,10 @@ ${hasAgreement
       S.confirmations[orderId]={client:true,freight,date};
       ord.clientFreightAgreed=freight;
       ord.loadDate=date;
+      recordEvent(ord.id, 'client_confirmed_explicit', 'system', `Замовник підтвердив замовлення: €${freight}, дата ${date}`);
+      if(ord.orderState==='new'||ord.orderState==='client_negotiating'){
+        setOrderState(ord.id, 'client_confirmed');
+      }
       saveOrderToServer(orderId);
       notify('✓ Підтвердження від замовника отримано','ok');
       document.querySelector('.modal-ov')?.remove();
@@ -2766,17 +2943,15 @@ async function doConfirmCarrier(cid, btn){
   const msgs=S.chats[cid]||[];
   const hasPrice=msgs.some(m=>m.role==='carrier'&&m.text.match(/\d{3,5}/));
   const ordCtx=S.orders.find(o=>o.dirs?.some(d=>c.dirs?.includes(d)));
-  const sys=buildCarrierSys(c,ordCtx?{route:ordCtx.dirs.join('→'),cargo:ordCtx.vehicle,vehicle:ordCtx.vehicle,loadDate:ordCtx.loadDate,delivDate:ordCtx.delivDate}:null);
+  const sys=buildCarrierSys(c, ordCtx || null);
 
   const confirmMsg=hasPrice
     ?`Клієнт просить підтвердити: фрахт €${freight}, завантаження ${date}. Якщо ціна відповідає тому про що домовлялись — підтверди: "Домовились. Фрахт €${freight}. Водій [ПІБ], авто [номер]/[причіп]"`
     :`Клієнт пропонує €${freight}. Домовленості ще не було. Або погодься якщо влаштовує, або продовж переговори.`;
 
   try{
-    const data=await callClaude(sys,
-      [...msgs.filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text})),
-       {role:'user',content:confirmMsg}]
-    );
+    const historyMsgs = msgs.filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
+    const data=await callClaude(sys, trimHistory([...historyMsgs,{role:'user',content:confirmMsg}]));
     const resText=typeof data==='string'?data:(data.content?.[0]?.text||'');
     const confirmed=resText.toLowerCase().match(/домовились|підтвердж|підписую|добре|ок|ok/i);
 
@@ -2796,10 +2971,14 @@ async function doConfirmCarrier(cid, btn){
       const ord=S.orders.find(o=>!o.carrierId&&o.clientFreightAgreed&&o.dirs?.some(d=>c.dirs?.includes(d)));
       if(ord){
         ord.carrierId=cid;
+        ord.carrierName=c.name;
         ord.carrierFreightAgreed=freight;
         if(dM) ord.carrierDriverName=dM[1];
         if(pM) ord.carrierPlate=pM[0].replace(/\s/g,'');
         ord.status='confirmed';
+        ord.carrierRefused=false;
+        setOrderState(ord.id, 'carrier_confirmed');
+        recordEvent(ord.id, 'carrier_confirmed_explicit', 'system', `Перевізник ${c.name} підтвердив рейс: €${freight}, дата ${date}${dM?', водій '+dM[1]:''}${pM?', авто '+pM[0]:''}`);
         scheduleEvents(ord.id);
         saveOrderToServer(ord.id);
       }
@@ -3018,12 +3197,12 @@ async function initCarrierFromExchange(carrier, cargo, cargoIdx){
   if(!S.chats[carrier.id]) S.chats[carrier.id]=[];
   if(!S.deals[carrier.id]) S.deals[carrier.id]='talk';
   S.contactedCarriers.add(carrier.id);
-  // Build opening message from carrier
+  // Build opening message from carrier — exchange has no real order yet, pass cargo as fake context
   const sys=buildCarrierSys(carrier,{
-    route:cargo.route, cargo:cargo.vehicle_type,
-    vehicle:cargo.vehicle_type,
-    loadDate:cargo.load_date||'уточнюється',
-    delivDate:''
+    route: cargo.route,
+    vehicle: cargo.vehicle_type,
+    loadDate: cargo.load_date||'уточнюється',
+    delivDate: ''
   });
   const prompt=`Ти бачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?' '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. Напиши перше коротке повідомлення — пропонуєш своє авто або запитуєш деталі. Стиль як у реальних переговорах: дуже коротко.`;
   try{
