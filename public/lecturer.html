@@ -429,6 +429,34 @@ async function resetSession(studentId){
   }catch(e){ notify(e.message,'err'); }
 }
 
+async function restartStudent(studentId, name){
+  if(!confirm(`Рестарт студента ${name}?\n\nЦе скине весь прогрес і призначить НОВИЙ набір листів.`)) return;
+  try{
+    const res=await api('POST',`/sessions/${studentId}/reset`);
+    notify(`✓ ${name} — рестарт виконано. Нових листів: ${res?.letter_count||8}`,'ok');
+    selectGroup(STATE.selectedGroup.id);
+  }catch(e){ notify(e.message,'err'); }
+}
+
+async function restartGroup(groupId){
+  const g=STATE.groups.find(x=>x.id===groupId);
+  if(!confirm(`Рестарт ВСІЄЇ групи "${g?.name}"?\n\nВесь прогрес скидається. Кожен студент отримає новий набір листів.`)) return;
+  try{
+    const res=await api('POST',`/groups/${groupId}/reset`);
+    notify(`✓ Група "${g?.name}" — рестарт виконано. Студентів: ${res?.students_reset||0}`,'ok');
+    selectGroup(groupId);
+  }catch(e){ notify(e.message,'err'); }
+}
+
+async function removeStudent(studentId){
+  if(!STATE.selectedGroup) return;
+  try{
+    await api('DELETE',`/groups/${STATE.selectedGroup.id}/students/${studentId}`);
+    notify('Студента деактивовано','warn');
+    selectGroup(STATE.selectedGroup.id);
+  }catch(e){ notify(e.message,'err'); }
+}
+
 // ── PROGRESS PAGE ─────────────────────────────────────────────
 async function renderProgress(){
   document.getElementById('tb-right').innerHTML=`

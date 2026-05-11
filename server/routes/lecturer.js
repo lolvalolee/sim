@@ -279,19 +279,27 @@ function generateAssignment(studentId, groupId, createdBy) {
   );
 
   let selected = [];
-  // Take least-used letters from each type
-  selected.push(...sortByUsage(complete).slice(0, Math.min(3, complete.length)));
-  selected.push(...sortByUsage(missing).slice(0, Math.min(3, missing.length)));
-  selected.push(...sortByUsage(form).slice(0, Math.min(2, form.length)));
 
-  // Final shuffle of selected set
-  selected = shuffle(selected);
+  // Take least-used letters from each type — guaranteed 8 total
+  // Distribution: 3 complete + 3 missing + 2 form = 8
+  const pickComplete = sortByUsage(complete).slice(0, Math.min(3, complete.length));
+  const pickMissing  = sortByUsage(missing).slice(0, Math.min(3, missing.length));
+  const pickForm     = sortByUsage(form).slice(0, Math.min(2, form.length));
 
-  // Target 6-8 letters
-  if (selected.length > 8) selected = selected.slice(0, 8);
+  selected.push(...pickComplete, ...pickMissing, ...pickForm);
+
+  // If still less than 8 — fill from remaining letters
+  if (selected.length < 8) {
+    const selectedIds = new Set(selected.map(l => l.id));
+    const remaining = shuffle(allLetters.filter(l => !selectedIds.has(l.id)));
+    selected.push(...remaining.slice(0, 8 - selected.length));
+  }
+
+  // Final shuffle
+  selected = shuffle(selected).slice(0, 8);
 
   // Fallback if DB is empty
-  if (selected.length === 0) selected = allLetters;
+  if (selected.length === 0) selected = allLetters.slice(0, 8);
 
   const id = uuidv4();
   db.prepare('INSERT INTO assignments (id,student_id,group_id,letter_ids,created_by) VALUES (?,?,?,?,?)')
