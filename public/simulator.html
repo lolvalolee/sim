@@ -393,12 +393,20 @@ body {
 
 /* Thread */
 .thread { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
-.tmsg { border-radius: var(--r2); padding: 12px 14px; font-size: 13px; line-height: 1.75; white-space: pre-wrap; animation: fadeUp .2s ease; }
+.tmsg { border-radius: var(--r2); padding: 12px 14px; font-size: 13px; line-height: 1.75; animation: fadeUp .2s ease; }
 .tmsg.out { background: var(--acc-bg); border: 1px solid var(--acc-br); }
 .tmsg.in { background: var(--bg3); border: 1px solid var(--b1); }
-.tmsg-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin-bottom: 5px; }
-.tmsg.out .tmsg-lbl { color: var(--acc); }
-.tmsg.in .tmsg-lbl { color: var(--t3); }
+.tmsg.has-request-data { border-left: 3px solid var(--acc); background: linear-gradient(90deg, rgba(255,190,99,0.06), var(--bg3)); }
+.tmsg-label, .tmsg-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin-bottom: 5px; }
+.tmsg.out .tmsg-lbl, .tmsg.out .tmsg-label { color: var(--acc); }
+.tmsg.in .tmsg-lbl, .tmsg.in .tmsg-label { color: var(--t3); }
+.attach-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 10px; padding: 7px 11px;
+  background: var(--bg2); border: 1px solid var(--b2); border-radius: 6px;
+  cursor: pointer; transition: all .12s;
+}
+.attach-pill:hover { background: var(--bg3); border-color: var(--acc); }
 
 /* Reply box */
 .reply-box {
@@ -1347,6 +1355,15 @@ function addDays(base, n){
   return d.toLocaleDateString('uk-UA',{day:'2-digit',month:'2-digit',year:'numeric'});
 }
 
+// Persistent contract number for each order (used in documents)
+function makeContractNo(orderId){
+  const seed = parseInt((orderId||'').replace(/\D/g,'')) || Math.floor(Math.random()*999);
+  const prefixes = ['ІФ','КВ','ЛВ','ХР','ОД','ДП','ЗП','ВН','ЧК','РВ'];
+  const pfx = prefixes[seed % prefixes.length];
+  const num = 200 + (seed*7) % 800;
+  return `${pfx}/${num}`;
+}
+
 const S = {
   module: 'welcome',
   sessionId: null,
@@ -1359,19 +1376,28 @@ const S = {
   // Build order runtime from definitions
   orders: ORDERS_DEF.map(def=>{
     const start = new Date();
+    // Variant of how client delivers request data after confirmation:
+    //   A (35%)  — PDF-like заявка з усіма даними одним блоком
+    //   C (60%)  — текстом всі необхідні дані
+    //   C_inc (5%) — текстом але деяких полів не вистачає, студент має запитати
+    const rnd = Math.random();
+    const variant = rnd < 0.35 ? 'A' : (rnd < 0.95 ? 'C' : 'C_inc');
     return {
       ...def,
       status:'new',
       orderState: 'new',           // state machine
-      eventLog: [],                // [{at, type, by, text}] — single source of truth for AI memory (separate from def.events which are scheduled scenarios)
+      eventLog: [],                // [{at, type, by, text}] — for AI memory
       clientFreightAgreed: def.freightFixed ? def.clientFreight : null,
       carrierFreightAgreed: null,
       carrierId: null,
-      carrierName: null,           // cached for prompts even after carrier swap
+      carrierName: null,
       carrierDriverName: null,
       carrierPlate: null,
       carrierRefused: false,
-      clientNotifiedOfIssue: false, // чи студент повідомив замовника про проблему
+      clientNotifiedOfIssue: false,
+      clientRequestVariant: variant,    // A | C | C_inc
+      clientRequestSent: false,         // whether request data already arrived
+      contractNo: def.contractNo || makeContractNo(def.id),  // постійний номер договору
       timeline: [],
       firedEvents: new Set(),
       confirmedAt: null,
@@ -1467,6 +1493,12 @@ function getOrderContext(orderId){
 
   if(ord.carrierRefused){
     lines.push(`УВАГА: попередній перевізник відмовився від рейсу.`);
+  }
+
+  if(ord.clientRequestSent){
+    lines.push(`ВАЖЛИВО: ти ВЖЕ надіслав експедитору ${ord.clientRequestVariant==='A'?'PDF заявку':ord.clientRequestVariant==='C_inc'?'основні дані (неповні — деяких полів немає)':'повні дані для оформлення'} після підтвердження. Не повторюй їх знову. Якщо студент перепитує адресу/контакти — нагадай коротко з уже надісланого, не вигадуй нових.`);
+  } else if(ord.orderState==='client_confirmed'){
+    lines.push(`Ти підтвердив домовленість, але ще НЕ встиг надіслати дані для оформлення — це буде окремим листом найближчим часом.`);
   }
 
   // Last 5 important events from eventLog
@@ -1721,11 +1753,13 @@ function renderEmailList(filter){
   const list=f==='all'?S.emails:S.emails.filter(e=>e.type===f);
   el.innerHTML=list.map(e=>{
     const ord=S.orders.find(o=>o.id===e.orderId);
+    const hasRequestData = e.replies.some(r=>r.isRequestData);
     const tags=[
       e.type==='complete'?`<span class="tag t-complete">Повна</span>`:'',
       e.type==='missing'?`<span class="tag t-missing">Неповна</span>`:'',
       e.type==='form'?`<span class="tag t-form">Заявка</span>`:'',
       e.replies.some(r=>r.role==='student')?`<span class="tag t-replied">Відповідь</span>`:'',
+      hasRequestData?`<span class="tag t-freight" style="background:rgba(255,190,99,.15);color:var(--acc)">📎 Дані</span>`:'',
       ord?.clientFreightAgreed?`<span class="tag t-freight">€${ord.clientFreightAgreed}</span>`:'',
     ].filter(Boolean).join('');
     return `<div class="email-row${e.unread?' unread':''}${S.selectedEmail===e.orderId?' active':''}" onclick="openEmail('${e.orderId}')">
@@ -1764,11 +1798,21 @@ function openEmail(orderId){
   }
 
   const threadHtml=em.replies.length?`
-    <div class="thread">${em.replies.map(r=>`
-      <div class="tmsg ${r.role==='student'?'out':'in'}">
-        <div class="tmsg-label">${r.role==='student'?'↑ Ви (Docaa)':'↩ '+em.from}</div>
-        ${r.loading?`<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`:r.text}
-      </div>`).join('')}
+    <div class="thread">${em.replies.map(r=>{
+      const attachBadge = r.attachment
+        ? `<div class="attach-pill" onclick="previewClientRequest('${orderId}')">
+             <span style="font-size:14px">📎</span>
+             <span style="font-family:var(--mono);font-size:11px">${r.attachment}</span>
+             <span style="font-size:10px;color:var(--t3)">· натисніть щоб переглянути</span>
+           </div>`
+        : '';
+      const reqDataClass = r.isRequestData ? ' has-request-data' : '';
+      return `<div class="tmsg ${r.role==='student'?'out':'in'}${reqDataClass}">
+        <div class="tmsg-label">${r.role==='student'?'↑ Ви (Docaa)':'↩ '+em.from}${r.isRequestData?' · <span style="color:var(--acc);font-weight:700">ДАНІ ДЛЯ ЗАЯВКИ</span>':''}</div>
+        ${r.loading?`<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`:`<div style="white-space:pre-wrap">${escapeHtml(r.text)}</div>`}
+        ${attachBadge}
+      </div>`;
+    }).join('')}
     </div>`:'';
 
   document.getElementById('email-detail').innerHTML=`
@@ -1827,17 +1871,6 @@ async function proposeFreight(orderId){
   document.getElementById(`escroll-${orderId}`)?.scrollTo(0,9999);
 }
 
-async function saveThreadToServer(orderId){
-  const em=S.emails.find(e=>e.orderId===orderId);
-  const token=localStorage.getItem('docaa_token');
-  if(!em||!token) return;
-  fetch('/api/student/threads/'+orderId,{
-    method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-    body:JSON.stringify({messages:em.replies})
-  }).catch(()=>{});
-}
-
 async function sendEmailReply(orderId){
   const em=S.emails.find(e=>e.orderId===orderId);
   const ord=S.orders.find(o=>o.id===orderId);
@@ -1876,6 +1909,7 @@ async function sendEmailReply(orderId){
           recordEvent(ord.id, 'client_freight_agreed', 'system', `Узгоджено фрахт із замовником: €${v}`);
           if(ord.orderState==='new'||ord.orderState==='client_negotiating'){
             setOrderState(ord.id, 'client_confirmed');
+            sendClientRequestAfterConfirm(ord.id);  // trigger client to send заявку/data
           }
           notify(`✓ Фрахт €${v} узгоджено з ${em.from}`,'ok');
         }
@@ -1901,6 +1935,208 @@ async function saveThreadToServer(orderId){
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
     body:JSON.stringify({messages:em.replies})
   }).catch(()=>{});
+}
+
+// ================================================================
+// CLIENT REQUEST DATA — sent by client AFTER confirmation
+// Variants: A (PDF-like attachment), C (text), C_inc (incomplete text)
+// ================================================================
+
+function sendClientRequestAfterConfirm(orderId){
+  const ord = S.orders.find(o=>o.id===orderId);
+  if(!ord || ord.clientRequestSent) return;
+  // Fire shortly after confirm so student notices the new email
+  const delayMs = (40 + Math.random()*50) * 1000; // 40-90 sec
+  setTimeout(()=>{
+    if(ord.clientRequestSent) return;
+    deliverClientRequest(orderId);
+  }, delayMs);
+}
+
+function deliverClientRequest(orderId){
+  const ord = S.orders.find(o=>o.id===orderId);
+  const em = S.emails.find(e=>e.orderId===orderId);
+  if(!ord || !em || ord.clientRequestSent) return;
+  ord.clientRequestSent = true;
+
+  const variant = ord.clientRequestVariant || 'C';
+  const route = (ord.dirs||[]).join(' → ');
+  const fromCity = (ord.dirs||[])[0];
+  const toCity = (ord.dirs||[])[1] || (ord.dirs||[])[0];
+  const contractNo = ord.contractNo || makeContractNo(ord.id);
+
+  // Realistic addresses (city → street → city)
+  const ADDR_DB = {
+    DE: ['Leopoldstraße 12, 80802 München','Hafenstraße 91, 20459 Hamburg','Berliner Str. 44, 10115 Berlin','Industriestraße 5, 60314 Frankfurt'],
+    PL: ['ul. Magazynowa 15, 02-694 Warszawa','ul. Przemysłowa 22, 30-701 Kraków','ul. Logistyczna 8, 80-298 Gdańsk'],
+    UA: ['вул. Промислова 18, 79024 Львів','вул. Бориспільська 9, 02099 Київ','вул. Незалежності 47, 76018 Івано-Франківськ','вул. Портова 5, 65003 Одеса','вул. Моторна 14, 69000 Запоріжжя','вул. Героїв 33, 21000 Вінниця'],
+    FR: ['12 Rue de la Logistique, 69003 Lyon','45 Avenue Industrielle, 75019 Paris','Quai du Port, 13002 Marseille'],
+    IT: ['Via Industriale 22, 20100 Milano','Via Porto 7, 30135 Venezia'],
+    ES: ['Calle Industria 77, 46000 Valencia','Polígono Industrial s/n, 28906 Madrid'],
+    NL: ['Industrieweg 33, 3044 Rotterdam','Havenstraat 12, 1043 Amsterdam'],
+    CH: ['Industrieweg 5, 1003 Lausanne','Hafenstrasse 14, 8005 Zürich'],
+    CZ: ['Průmyslová 8, 110 00 Praha','Skladová 15, 60200 Brno'],
+    SK: ['Priemyselná 12, 821 02 Bratislava'],
+    HU: ['Ipari út 7, 1097 Budapest'],
+    AT: ['Industriestraße 4, 1100 Wien'],
+    BE: ['Havenweg 5, 2000 Antwerpen'],
+    GB: ['Logistics Park, M11 4DL Manchester','Industrial Estate, E14 9TG London'],
+    RO: ['Strada Industriei 5, Bucuresti'],
+    BG: ['ul. Industrialna 22, 1000 Sofia'],
+    MD: ['str. Industriei 3, Chișinău'],
+  };
+  const pick = arr => arr ? arr[Math.floor(Math.random()*arr.length)] : null;
+  const loadAddr = pick(ADDR_DB[fromCity]) || `${fromCity}, точна адреса буде надана`;
+  let unloadAddr = pick(ADDR_DB[toCity]) || `${toCity}, точна адреса буде надана`;
+  if(unloadAddr === loadAddr && ADDR_DB[toCity]?.length>1) unloadAddr = ADDR_DB[toCity][1];
+
+  const persons = {
+    UA: ['Петренко Іван Васильович, +380 67 444 1122','Коваль Олег Степанович, +380 50 332 5566','Шевченко Марія Іванівна, +380 97 223 8899','Лисенко Андрій Олексійович, +380 63 778 1144'],
+    PL: ['Jan Kowalski, +48 601 234 567','Anna Nowak, +48 605 778 990'],
+    DE: ['Klaus Meier, +49 40 7721 9900','Hans Schmidt, +49 89 555 1010'],
+    FR: ['Pierre Martin, +33 4 72 00 11 22'],
+    IT: ['Marco Rossi, +39 02 5550 1234'],
+    OTHER: ['Manager on site, contact via email'],
+  };
+  const loadContact = pick(persons[fromCity]) || persons.OTHER[0];
+  const unloadContact = pick(persons[toCity]) || persons.OTHER[0];
+
+  const cargoLine = ord.email?.cargoType || ord.vehicle || '';
+  const weight = ord.email?.weight || '';
+  const freight = ord.clientFreightAgreed || ord.clientFreight || 0;
+  const incoterms = ord.incoterms || 'DAP';
+
+  let text = '';
+  let attachmentName = null;
+
+  if(variant === 'A'){
+    attachmentName = `заявка_${contractNo.replace('/','-')}.pdf`;
+    text = `Добрий день!
+
+Підтверджую домовленість. Надсилаю заявку у вкладенні.
+
+═══════════════════════════════════
+ЗАЯВКА-ЗАМОВЛЕННЯ № ${contractNo}
+від ${todayShort()}
+═══════════════════════════════════
+ЗАМОВНИК:    ${em.company}
+            Договір № ${contractNo}
+ЕКСПЕДИТОР:  ТОВ "Docaa"
+
+МАРШРУТ:        ${route}
+ВАНТАЖ:         ${cargoLine}
+ВАГА/ОБЄМ:      ${weight}
+КУЗОВ:          ${ord.vehicle}
+УМОВИ ПОСТАВКИ: ${incoterms}
+
+ЗАВАНТАЖЕННЯ: ${ord.loadDate}, 08:00-16:00
+  Адреса:     ${loadAddr}
+  Контакт:    ${loadContact}
+
+РОЗВАНТАЖЕННЯ: до ${ord.delivDate}
+  Адреса:     ${unloadAddr}
+  Контакт:    ${unloadContact}
+
+ФРАХТ: €${freight} all-in
+ОПЛАТА: банк. переказ протягом 14 банк. днів
+        з моменту отримання оригіналів док-в
+
+НОРМАТИВНИЙ ПРОСТІЙ: 48 год
+ШТРАФ ЗА ПРОСТІЙ:    €100/доба
+═══════════════════════════════════
+
+З повагою,
+${em.from}
+${em.company}`;
+  } else if(variant === 'C_inc'){
+    text = `Підтверджую. Завантаження ${ord.loadDate} за адресою ${loadAddr}. Розвантаження за адресою ${unloadAddr}.
+
+Контактна особа на завантаженні: ${loadContact}.
+
+Фрахт €${freight}, оплата по факту.
+
+Решту деталей надішлю пізніше якщо потрібно.
+
+${em.from}`;
+  } else {
+    text = `Дякую, підтверджую домовленість. Дані для оформлення:
+
+Договір № ${contractNo}
+Маршрут: ${route}
+Вантаж: ${cargoLine}${weight?', '+weight:''}
+Тип авто: ${ord.vehicle}
+Умови поставки: ${incoterms}
+
+ЗАВАНТАЖЕННЯ ${ord.loadDate}:
+${loadAddr}
+${loadContact}
+
+РОЗВАНТАЖЕННЯ до ${ord.delivDate}:
+${unloadAddr}
+${unloadContact}
+
+Фрахт €${freight}, оплата протягом 14 банк. днів від отримання оригіналів документів.
+Нормативний простій 48 год, штраф €100/доба.
+
+Прошу надіслати заявку для перевізника на підпис і номер авто з ПІБ водія перед завантаженням.
+
+З повагою,
+${em.from}`;
+  }
+
+  em.replies = em.replies || [];
+  em.replies.push({
+    role:'ai',
+    text,
+    time: nowTime(),
+    attachment: attachmentName,
+    isRequestData: true
+  });
+  em.unread = true;
+  // Save addresses to order for later use in заявка form (autofill)
+  ord.fullLoadAddress = loadAddr;
+  ord.fullUnloadAddress = unloadAddr;
+  ord.loadContact = loadContact;
+  ord.unloadContact = unloadContact;
+  recordEvent(ord.id, 'client_request_sent', 'client',
+    `Замовник надіслав ${variant==='A'?'PDF заявку':variant==='C_inc'?'неповні дані':'дані для заявки'} після підтвердження`);
+  notify(`📬 ${em.from.split(' ')[0]}: надіслав ${variant==='A'?'заявку (PDF)':variant==='C_inc'?'дані (неповні)':'дані для заявки'}`, 'warn');
+  updateBadges();
+  if(S.module==='email') { renderEmailList(); openEmail(orderId); }
+  saveThreadToServer(orderId);
+}
+
+function todayShort(){
+  return addDays(S.startDate, S.timerDay-1);
+}
+
+function escapeHtml(s){
+  if(s==null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function previewClientRequest(orderId){
+  const ord = S.orders.find(o=>o.id===orderId);
+  const em = S.emails.find(e=>e.orderId===orderId);
+  if(!ord || !em) return;
+  const reqMsg = em.replies.find(r=>r.isRequestData);
+  if(!reqMsg) return;
+  const mo = document.createElement('div');
+  mo.className='modal-ov';
+  mo.onclick=e=>{if(e.target===mo)mo.remove();};
+  mo.innerHTML = `<div class="modal-box" style="max-width:680px;max-height:85vh;overflow-y:auto">
+    <div class="modal-title">📄 ${escapeHtml(reqMsg.attachment||'Заявка-замовлення')}</div>
+    <div style="background:#fff;color:#111;padding:24px 28px;border-radius:6px;font-family:'Courier New',monospace;font-size:12px;white-space:pre-wrap;line-height:1.5;border:1px solid #ddd">${escapeHtml(reqMsg.text)}</div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn" onclick="this.closest('.modal-ov').remove()">Закрити</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
 }
 
 function buildClientSys(em, ord){
@@ -1955,8 +2191,19 @@ ${missingText}${exwText}
 ДАТА ЗАВАНТАЖЕННЯ: ${ord.loadDate} - НЕЗМІННА (хіба що сам погодишся посунути ±2 дні).
 ${incoterms?'Умови поставки: '+incoterms:''}
 
-Після домовленості по ціні - надішли повні адреси завантаження і розвантаження (вул., буд., індекс).
-Заявку від тебе студент НЕ просить — це він тобі готує заявку. Ти йому надсилаєш ДАНІ для заявки після підтвердження.
+════════════ КРИТИЧНО ВАЖЛИВО — ПРО ЗАЯВКИ ════════════
+Ти - ЗАМОВНИК (вантажовласник). Експедитор Docaa - ВИКОНАВЕЦЬ твого замовлення.
+
+ХТО ГОТУЄ ЯКУ ЗАЯВКУ:
+• ТИ (замовник) надсилаєш ЗАЯВКУ-ЗАМОВЛЕННЯ експедитору з даними свого вантажу - саме на її основі експедитор далі готує заявку перевізнику. Це НОРМАЛЬНО і ПРАВИЛЬНО.
+• ЕКСПЕДИТОР готує заявку ПЕРЕВІЗНИКУ - не тобі. Тобі він НЕ надсилає заявку перевізнику.
+
+ПРАВИЛА РЕАКЦІЇ:
+1. Якщо студент-експедитор питає "дайте заявку" / "коли надішлете заявку" / "потрібна ваша заявка" — ЦЕ ПРАВИЛЬНЕ ПИТАННЯ. Відповідай: "Так, після підтвердження ціни сьогодні-завтра надішлю заявку з усіма даними" (або "вже надіслав/готую").
+2. НІКОЛИ не кажи студенту "надішліть мені заявку від вас" / "оформіть і надішліть нам заявку" — це грубо неправильно. ТИ замовляєш послугу - не студент тобі.
+3. НЕ плутай: студент готує заявку перевізнику (контракт експедитор-перевізник). Тобі студент пізніше надішле документи: рахунок, акт виконаних робіт, довідку про транспортні витрати.
+
+Після домовленості по ціні - надсилай повні адреси завантаження і розвантаження (вул., буд., індекс), ПІБ і телефони контактних осіб на завантаженні/розвантаженні. Це і є дані для заявки.
 
 Відповідь 2-4 речення. Діловий тон. НЕ виходь з ролі. НЕ кажи що ти AI.`;
 }
@@ -2490,7 +2737,7 @@ function openZaявka(){
         <tr><td class="zf-td-label">Вага і об'єм вантажу</td><td class="zf-td-val"><input class="zf-input" id="zf-weight" placeholder="напр. 14.2 т / 48 куб.м"></td></tr>
         <tr><td class="zf-td-label">CMR/TIR Karnet</td><td class="zf-td-val"><input class="zf-input" id="zf-cmr" placeholder="CMR"></td></tr>
         <tr><td class="zf-td-label">Дата завантаження</td><td class="zf-td-val"><input class="zf-input" id="zf-loaddate" value="${ord?.loadDate||''}"></td></tr>
-        <tr><td class="zf-td-label">Адреса завантаження</td><td class="zf-td-val"><input class="zf-input" id="zf-loadaddr" placeholder="Повна адреса завантаження"></td></tr>
+        <tr><td class="zf-td-label">Адреса завантаження</td><td class="zf-td-val"><input class="zf-input" id="zf-loadaddr" value="${ord?.fullLoadAddress||''}" placeholder="Повна адреса завантаження"></td></tr>
         <tr><td class="zf-td-label">Місце митного оформлення у країні відправлення</td><td class="zf-td-val"><input class="zf-input" id="zf-customs-from" placeholder="На місці завантаження / адреса митниці"></td></tr>
         ${borderNeeded?`<tr><td class="zf-td-label">Митний перехід</td><td class="zf-td-val">
           <select class="zf-input" id="zf-border" style="width:100%;background:var(--bg3)">
@@ -2498,7 +2745,7 @@ function openZaявka(){
             ${getBorderOptions(ord?.dirs||[]).map(b=>`<option>${b}</option>`).join('')}
           </select></td></tr>`:''}
         <tr><td class="zf-td-label">Місце митного оформлення у країні призначення</td><td class="zf-td-val"><input class="zf-input" id="zf-customs-to" placeholder="На місці розвантаження / адреса митниці"></td></tr>
-        <tr><td class="zf-td-label">Адреса розвантаження</td><td class="zf-td-val"><input class="zf-input" id="zf-deladdr" placeholder="Повна адреса розвантаження"></td></tr>
+        <tr><td class="zf-td-label">Адреса розвантаження</td><td class="zf-td-val"><input class="zf-input" id="zf-deladdr" value="${ord?.fullUnloadAddress||''}" placeholder="Повна адреса розвантаження"></td></tr>
         <tr><td class="zf-td-label">Термін доставки</td><td class="zf-td-val"><input class="zf-input" id="zf-delivdate" value="${ord?.delivDate||''}"></td></tr>
         <tr><td class="zf-td-label">Сума фрахту, спосіб та строки оплати</td><td class="zf-td-val"><input class="zf-input" id="zf-freight" value="${freightStr}" placeholder="Сума, валюта, строк оплати"></td></tr>
         <tr><td class="zf-section" colspan="2">Транспортний засіб та водій</td></tr>
@@ -2886,6 +3133,8 @@ ${hasAgreement
       if(ord.orderState==='new'||ord.orderState==='client_negotiating'){
         setOrderState(ord.id, 'client_confirmed');
       }
+      // ── Client sends заявку/data shortly after explicit confirmation ──
+      sendClientRequestAfterConfirm(ord.id);
       saveOrderToServer(orderId);
       notify('✓ Підтвердження від замовника отримано','ok');
       document.querySelector('.modal-ov')?.remove();
