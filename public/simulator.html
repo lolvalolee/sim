@@ -535,8 +535,9 @@ body {
 .chat-ta {
   flex: 1; background: var(--bg3); border: 1px solid var(--b2);
   color: var(--t1); font-family: var(--sans); font-size: 13px;
-  padding: 7px 10px; border-radius: var(--r); outline: none;
-  resize: none; min-height: 34px; max-height: 100px; transition: border-color .1s;
+  padding: 8px 10px; border-radius: var(--r); outline: none;
+  resize: none; min-height: 36px; max-height: 160px; transition: border-color .1s;
+  line-height: 1.5; overflow-y: hidden;
 }
 .chat-ta:focus { border-color: var(--acc); }
 .chat-ta::placeholder { color: var(--t4); }
@@ -1470,16 +1471,17 @@ function checkEvents(){
       if(ev.special==='cancel'){
         ord.status='cancelled';
         const em=S.emails.find(e=>e.orderId===ord.id);
-        if(em){ em.replies.push({role:'ai',text:ord.cancelMsg}); em.unread=true; }
+        if(em){ em.replies.push({role:'ai',text:ord.cancelMsg}); em.unread=true; saveThreadToServer(ord.id); }
         notify(`❌ ${ord.id}: замовник відмовився від перевезення!`,'err');
       } else if(ev.from==='carrier'&&ord.carrierId){
         if(!S.chats[ord.carrierId]) S.chats[ord.carrierId]=[];
         S.chats[ord.carrierId].push({role:'carrier',text:ev.text,time:nowTime(),event:true});
+        saveChatToServer(ord.carrierId);
         if(ev.severity==='critical') ord.status='problem';
         notify(`${ev.severity==='critical'?'🚨':'📨'} Перевізник по ${ord.id}: нове повідомлення`,'warn');
       } else if(ev.from==='client'){
         const em=S.emails.find(e=>e.orderId===ord.id);
-        if(em){ em.replies.push({role:'ai',text:ev.text}); em.unread=true; }
+        if(em){ em.replies.push({role:'ai',text:ev.text}); em.unread=true; saveThreadToServer(ord.id); }
         notify(`📬 ${ord.from.split(' ')[0]} написав по ${ord.id}`,'warn');
       }
       updateBadges();
@@ -2026,8 +2028,9 @@ function renderChatInCol(col,c,cid,pfx){
       <button class="btn sm success" onclick="qi_('${cid}','${pfx}','Домовились! Підтверджуємо. Надішліть номер авто та ПІБ водія.')">✓ Підтвердити</button>
     </div>
     <div class="chat-input-row">
-      <textarea class="chat-ta" id="ci-${pfx}-${cid}" placeholder="Повідомлення... (Ctrl+Enter — надіслати)" rows="1"
-        onkeydown="if(event.key==='Enter'&&event.ctrlKey){event.preventDefault();sendChatMsg('${cid}','${pfx}')}"></textarea>
+      <textarea class="chat-ta" id="ci-${pfx}-${cid}" placeholder="Повідомлення... (Enter — надіслати, Ctrl+Enter — новий рядок)" rows="1"
+        oninput="autosizeChatTa(this)"
+        onkeydown="handleChatKey(event,'${cid}','${pfx}')"></textarea>
       <button class="chat-send" onclick="sendChatMsg('${cid}','${pfx}')">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
@@ -2035,17 +2038,42 @@ function renderChatInCol(col,c,cid,pfx){
   const mc=document.getElementById(`cm-${cid}`); if(mc) mc.scrollTop=mc.scrollHeight;
 }
 
-function qi_(cid,pfx,txt){const el=document.getElementById(`ci-${pfx}-${cid}`);if(el){el.value=txt;el.focus();}}
+function handleChatKey(event, cid, pfx){
+  if(event.key !== 'Enter') return;
+  if(event.ctrlKey || event.metaKey){
+    // Ctrl+Enter / Cmd+Enter — insert newline (let default happen)
+    return;
+  }
+  if(event.shiftKey){
+    // Shift+Enter — also newline (common UX)
+    return;
+  }
+  // Plain Enter — send
+  event.preventDefault();
+  sendChatMsg(cid, pfx);
+}
+
+function autosizeChatTa(ta){
+  ta.style.height = 'auto';
+  const maxH = 160; // max height in px
+  const newH = Math.min(ta.scrollHeight, maxH);
+  ta.style.height = newH + 'px';
+  ta.style.overflowY = ta.scrollHeight > maxH ? 'auto' : 'hidden';
+}
+
+function qi_(cid,pfx,txt){const el=document.getElementById(`ci-${pfx}-${cid}`);if(el){el.value=txt;el.focus();autosizeChatTa(el);}}
 
 async function sendChatMsg(cid,pfx){
   const c=S.carriers.find(x=>x.id===cid);
   const el=document.getElementById(`ci-${pfx}-${cid}`);
   const txt=el?.value?.trim(); if(!txt||!c) return;
   if(hasProfanity(txt)){notify('⛔ Будь ласка, спілкуйтесь професійно.','err');return;}
-  el.value=''; const t=nowTime();
+  el.value=''; el.style.height='auto'; const t=nowTime();
   S.chats[cid].push({role:'student',text:txt,time:t});
   if(S.deals[cid]==='none') S.deals[cid]='talk';
   S.contactedCarriers.add(cid);
+  // Persist student message immediately so reload doesn't lose it
+  saveChatToServer(cid);
   S.chats[cid].push({role:'carrier',text:'',time:t,loading:true});
   if(pfx==='car') renderChatInCol(document.getElementById('car-chat-col'),c,cid,'car');
   else renderChats();
@@ -2684,7 +2712,14 @@ function confirmFromClient(orderId){
   const ord=S.orders.find(o=>o.id===orderId);
   const em=S.emails.find(e=>e.orderId===orderId);
   if(!ord||!em) return;
-  if(!ord.clientFreightAgreed){notify('Спочатку узгодьте ціну з замовником','err');return;}
+  if(!em.replies.some(r=>r.role==='ai')){
+    notify('Спочатку напишіть замовнику і отримайте відповідь','err');return;
+  }
+  // Pre-fill freight: agreed > fixed > min..max midpoint > 0
+  const preFreight = ord.clientFreightAgreed
+    || (ord.freightFixed ? ord.clientFreight : null)
+    || (ord.freightMin && ord.freightMax ? Math.round((ord.freightMin+ord.freightMax)/2) : '')
+    || '';
 
   // Show confirm dialog
   const mo=document.createElement('div');
@@ -2697,7 +2732,7 @@ function confirmFromClient(orderId){
     </p>
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
       <div><label class="form-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Сума фрахту (EUR)</label>
-        <input id="conf-freight" type="number" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:14px;font-weight:600;padding:8px 10px;border-radius:var(--r);outline:none;width:100%" value="${ord.clientFreightAgreed||''}">
+        <input id="conf-freight" type="number" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:14px;font-weight:600;padding:8px 10px;border-radius:var(--r);outline:none;width:100%" value="${preFreight}">
       </div>
       <div><label class="form-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Дата завантаження</label>
         <input id="conf-date" type="text" class="form-input" style="background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;width:100%" value="${ord.loadDate||''}">
@@ -3033,16 +3068,18 @@ function saveCargoBoardToServer(){
 // AI carrier initiates chat from exchange board
 function scheduleCarrierFromExchange(cargoIdx){
   const cargo=S.cargoBoard?.[cargoIdx]; if(!cargo) return;
-  // Pick 1-3 matching carriers
+  // Pick 1-3 matching carriers (excluding those already in chat to avoid disrupting active conversations)
   const matching=S.carriers.filter(c=>{
     const typeMatch=c.types?.some(t=>
       t===cargo.vehicle_type||
       t.toLowerCase().includes(cargo.vehicle_type.toLowerCase().split(' ')[0].toLowerCase())
     );
-    return typeMatch && (c.availability||0.6)>0.4;
+    // Exclude carriers with existing chat history
+    const alreadyTalking = S.chats[c.id]?.some(m=>!m.loading);
+    return typeMatch && (c.availability||0.6)>0.4 && !alreadyTalking;
   });
   if(!matching.length) return;
-  // Shuffle and pick 1-3
+  // Shuffle and pick 1-2
   const shuffled=[...matching].sort(()=>Math.random()-0.5);
   const picks=shuffled.slice(0,1+Math.floor(Math.random()*2)); // 1-2 carriers
   // Schedule responses: 15-40 min real time = 900-2400 seconds
@@ -3057,7 +3094,8 @@ function scheduleCarrierFromExchange(cargoIdx){
 
 async function initCarrierFromExchange(carrier, cargo, cargoIdx){
   if(!S.chats[carrier.id]) S.chats[carrier.id]=[];
-  if(!S.deals[carrier.id]) S.deals[carrier.id]='talk';
+  // Only initialize deal status if there's no existing relationship
+  if(!S.deals[carrier.id] || S.deals[carrier.id]==='none') S.deals[carrier.id]='talk';
   S.contactedCarriers.add(carrier.id);
   // Build opening message from carrier
   const sys=buildCarrierSys(carrier,{
@@ -4036,7 +4074,8 @@ async function loadSessionFromServer(token){
   data.carrier_chats.forEach(chat=>{
     S.chats[chat.carrier_id]=chat.messages;
     S.deals[chat.carrier_id]=chat.deal_status||'none';
-    if(chat.messages.length>0) S.contactedCarriers.add(chat.carrier_id);
+    // Add to contacted if there's any chat record (even empty) — they once initiated contact
+    S.contactedCarriers.add(chat.carrier_id);
   });
 
   // Load carriers from server
