@@ -24,22 +24,31 @@ router.get('/groups', LEC, (req, res) => {
 
 // POST /api/lecturer/groups
 router.post('/groups', LEC, (req, res) => {
-  const { name, notes } = req.body;
+  const { name, notes, start_date } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
+  if (!start_date) return res.status(400).json({ error: 'start_date required' });
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(start_date)) {
+    return res.status(400).json({ error: 'start_date must be DD.MM.YYYY' });
+  }
   const id = uuidv4();
-  db.prepare('INSERT INTO groups (id,name,lecturer_id,notes) VALUES (?,?,?,?)')
-    .run(id, name.trim(), req.user.id, notes||'');
-  res.status(201).json({ id, name });
+  db.prepare('INSERT INTO groups (id,name,lecturer_id,notes,start_date) VALUES (?,?,?,?,?)')
+    .run(id, name.trim(), req.user.id, notes||'', start_date);
+  res.status(201).json({ id, name, start_date });
 });
 
 // PATCH /api/lecturer/groups/:id
 router.patch('/groups/:id', LEC, (req, res) => {
-  const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
+  const g = db.prepare('SELECT id,started_at FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
   if (!g) return res.status(404).json({ error: 'Not found' });
-  const { name, notes, active } = req.body;
+  const { name, notes, active, start_date } = req.body;
   if (name) db.prepare('UPDATE groups SET name=? WHERE id=?').run(name, req.params.id);
   if (notes !== undefined) db.prepare('UPDATE groups SET notes=? WHERE id=?').run(notes, req.params.id);
   if (active !== undefined) db.prepare('UPDATE groups SET active=? WHERE id=?').run(active?1:0, req.params.id);
+  if (start_date !== undefined) {
+    if (g.started_at) return res.status(400).json({ error: 'Cannot change start_date after simulation started. Reset start first.' });
+    if (!/^\d{2}\.\d{2}\.\d{4}$/.test(start_date)) return res.status(400).json({ error: 'start_date must be DD.MM.YYYY' });
+    db.prepare('UPDATE groups SET start_date=? WHERE id=?').run(start_date, req.params.id);
+  }
   res.json({ ok: true });
 });
 
@@ -124,6 +133,38 @@ router.patch('/students/:studentId/assignment', LEC, (req, res) => {
 
   db.prepare('UPDATE assignments SET letter_ids=? WHERE id=?').run(JSON.stringify(ids), a.id);
   res.json({ ok: true, letter_ids: ids });
+});
+
+// ── SIMULATION START CONTROL ──────────────────────────────────
+
+// POST /api/lecturer/groups/:id/start — запуск симуляції для групи
+router.post('/groups/:id/start', LEC, (req, res) => {
+  const g = db.prepare('SELECT id,start_date,started_at FROM groups WHERE id=? AND lecturer_id=?')
+              .get(req.params.id, req.user.id);
+  if (!g) return res.status(404).json({ error: 'Group not found' });
+  if (!g.start_date) return res.status(400).json({ error: 'start_date not set' });
+  if (g.started_at) return res.status(400).json({ error: 'Already started' });
+
+  // Валідація: start_date не має бути в минулому
+  const parts = g.start_date.split('.');
+  const startD = new Date(parseInt(parts[2]), parseInt(parts[1])-1, parseInt(parts[0]));
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  startD.setHours(0,0,0,0);
+  if (startD.getTime() < today.getTime()) {
+    return res.status(400).json({ error: 'start_date_in_past', message: 'Дата старту в минулому. Виправте дату й спробуйте знову.' });
+  }
+
+  db.prepare(`UPDATE groups SET started_at=datetime('now') WHERE id=?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
+// POST /api/lecturer/groups/:id/reset-start — скинути дату старту (для тестування)
+router.post('/groups/:id/reset-start', LEC, (req, res) => {
+  const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
+  if (!g) return res.status(404).json({ error: 'Group not found' });
+  db.prepare(`UPDATE groups SET started_at=NULL WHERE id=?`).run(req.params.id);
+  res.json({ ok: true });
 });
 
 // ── SESSION CONTROL ───────────────────────────────────────────

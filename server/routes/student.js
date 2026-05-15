@@ -9,15 +9,29 @@ const STU = requireAuth(['student']);
 
 // ── GET SESSION (or create new) ───────────────────────────────
 router.get('/session', STU, (req, res) => {
+  // Знаходимо групу студента і перевіряємо чи стартувала симуляція
+  const member = db.prepare('SELECT group_id FROM group_members WHERE student_id=?').get(req.user.id);
+  if (!member) return res.status(404).json({ error: 'No group. Contact your lecturer.' });
+
+  const group = db.prepare('SELECT id,start_date,started_at FROM groups WHERE id=?').get(member.group_id);
+  if (!group) return res.status(404).json({ error: 'Group not found.' });
+
+  // Якщо група ще не стартувала — повертаємо заглушку (200 OK, не помилка)
+  if (!group.started_at) {
+    return res.json({
+      not_started: true,
+      start_date: group.start_date || null,
+    });
+  }
+
   let session = db.prepare('SELECT * FROM sessions WHERE student_id=?').get(req.user.id);
 
   if (!session) {
-    // Create new session
+    // Create new session — start_date береться з групи, а не з системного часу
     const assignment = db.prepare('SELECT * FROM assignments WHERE student_id=?').get(req.user.id);
     if (!assignment) return res.status(404).json({ error: 'No assignment. Contact your lecturer.' });
 
-    const today = new Date();
-    const startDate = `${String(today.getDate()).padStart(2,'0')}.${String(today.getMonth()+1).padStart(2,'0')}.${today.getFullYear()}`;
+    const startDate = group.start_date;
     const id = uuidv4();
 
     db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date) VALUES (?,?,?,?)`)
@@ -28,6 +42,15 @@ router.get('/session', STU, (req, res) => {
 
   if (session.status === 'stopped') {
     return res.status(403).json({ error: 'session_stopped', message: 'Вашу сесію зупинив лектор. Зверніться до лектора.' });
+  }
+
+  // Перевірка завершення симуляції (5 днів пройшло)
+  if ((session.timer_day || 1) > 5) {
+    return res.json({
+      ended: true,
+      profit: session.profit || 0,
+      timer_day: session.timer_day,
+    });
   }
 
   // Load assignment letters

@@ -202,6 +202,11 @@ html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--san
       <input class="form-input" id="new-group-name" placeholder="Логістика 2026 — Група 1">
     </div>
     <div class="form-group">
+      <label class="form-label">Дата старту симуляції</label>
+      <input class="form-input" id="new-group-start" type="date">
+      <div style="font-size:11px;color:var(--t3);margin-top:4px">Симуляція буде працювати 5 днів від цієї дати</div>
+    </div>
+    <div class="form-group">
       <label class="form-label">Примітки (необов'язково)</label>
       <input class="form-input" id="new-group-notes" placeholder="Коментар...">
     </div>
@@ -300,7 +305,11 @@ function renderGroupsList(){
     return;
   }
   el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">
-    ${STATE.groups.map(g=>`
+    ${STATE.groups.map(g=>{
+      const statusBadge = g.started_at
+        ? `<span class="tag t-active">🟢 Триває</span>`
+        : `<span class="tag t-new">🔵 Не розпочата</span>`;
+      return `
       <div class="card" style="cursor:pointer;transition:border-color .15s;border-color:${STATE.selectedGroup?.id===g.id?'var(--acc)':'var(--b1)'}"
         onclick="selectGroup('${g.id}')">
         <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
@@ -308,8 +317,12 @@ function renderGroupsList(){
           <span style="font-size:10px;color:var(--t3)">${g.student_count||0} студ.</span>
         </div>
         ${g.notes?`<div class="card-sub">${g.notes}</div>`:''}
-        <div style="margin-top:10px;font-size:11px;color:var(--t3)">Створено: ${g.created_at.slice(0,10)}</div>
-      </div>`).join('')}
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${statusBadge}
+          ${g.start_date?`<span style="font-size:11px;color:var(--t3)">Старт: ${g.start_date}</span>`:''}
+        </div>
+      </div>`;
+    }).join('')}
   </div>`;
 }
 
@@ -317,12 +330,19 @@ async function selectGroup(groupId){
   STATE.selectedGroup = STATE.groups.find(g=>g.id===groupId);
   renderGroupsList();
   const panel=document.getElementById('students-panel'); if(!panel) return;
-  panel.innerHTML=`<div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
-    <div>
-      <div style="font-size:14px;font-weight:600">${STATE.selectedGroup.name}</div>
-      <div style="font-size:11px;color:var(--t3)">Студенти групи</div>
+  panel.innerHTML=`<div style="padding:14px 16px;border-bottom:1px solid var(--b1);flex-shrink:0">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div>
+        <div style="font-size:14px;font-weight:600">${STATE.selectedGroup.name}</div>
+        <div style="font-size:11px;color:var(--t3)">${STATE.selectedGroup.started_at?'🟢 Симуляція триває':'🔵 Не розпочата'}${STATE.selectedGroup.start_date?' · Старт: '+STATE.selectedGroup.start_date:''}</div>
+      </div>
+      <button class="btn primary sm" onclick="document.getElementById('modal-student').style.display='flex'">+ Студент</button>
     </div>
-    <button class="btn primary sm" onclick="document.getElementById('modal-student').style.display='flex'">+ Студент</button>
+    <div style="display:flex;gap:6px">
+      ${STATE.selectedGroup.started_at
+        ? `<button class="btn sm" onclick="resetGroupStart('${STATE.selectedGroup.id}')" title="Скинути дату старту для тестування">🔄 Скинути старт</button>`
+        : `<button class="btn primary sm" onclick="startGroup('${STATE.selectedGroup.id}')">▶ Почати симуляцію</button>`}
+    </div>
   </div>
   <div style="flex:1;overflow-y:auto" id="students-list">
     <div style="padding:20px;text-align:center;color:var(--t3)">
@@ -376,14 +396,50 @@ function renderStudentsList(){
 async function createGroup(){
   const name=document.getElementById('new-group-name').value.trim();
   const notes=document.getElementById('new-group-notes').value.trim();
+  const startInput=document.getElementById('new-group-start').value; // YYYY-MM-DD
   if(!name){ notify('Введіть назву групи','err'); return; }
+  if(!startInput){ notify('Вкажіть дату старту','err'); return; }
+  // Конвертуємо YYYY-MM-DD → DD.MM.YYYY
+  const [y,m,d]=startInput.split('-');
+  const start_date=`${d}.${m}.${y}`;
   try{
-    await api('POST','/groups',{name,notes});
+    await api('POST','/groups',{name,notes,start_date});
     document.getElementById('modal-group').style.display='none';
     document.getElementById('new-group-name').value='';
     document.getElementById('new-group-notes').value='';
+    document.getElementById('new-group-start').value='';
     notify('Групу створено ✓','ok');
     renderGroups();
+  }catch(e){ notify(e.message,'err'); }
+}
+
+async function startGroup(groupId){
+  if(!confirm('Розпочати симуляцію для групи? Студенти отримають доступ до завдань.')) return;
+  try{
+    await api('POST',`/groups/${groupId}/start`);
+    notify('Симуляцію розпочато ✓','ok');
+    STATE.groups = await api('GET','/groups') || [];
+    STATE.selectedGroup = STATE.groups.find(g=>g.id===groupId);
+    renderGroupsList();
+    selectGroup(groupId);
+  }catch(e){
+    if(e.message==='start_date_in_past'){
+      notify('Дата старту в минулому. Виправте дату й спробуйте знову.','err');
+    }else{
+      notify(e.message,'err');
+    }
+  }
+}
+
+async function resetGroupStart(groupId){
+  if(!confirm('Скинути дату старту? Студенти знову побачать заглушку очікування. Прогрес уже працюючих сесій збережеться.')) return;
+  try{
+    await api('POST',`/groups/${groupId}/reset-start`);
+    notify('Старт скинуто ✓','ok');
+    STATE.groups = await api('GET','/groups') || [];
+    STATE.selectedGroup = STATE.groups.find(g=>g.id===groupId);
+    renderGroupsList();
+    selectGroup(groupId);
   }catch(e){ notify(e.message,'err'); }
 }
 

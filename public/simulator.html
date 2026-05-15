@@ -3963,6 +3963,8 @@ window.addEventListener('load',()=>{
     startAutosave(token);
   }).catch(e=>{
     if(e.message==='session_stopped') return;
+    if(e.message==='not_started') return;
+    if(e.message==='ended') return;
     document.getElementById('content').innerHTML=`
       <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--t3)">
         <div style="font-size:28px">⚠</div>
@@ -4003,6 +4005,19 @@ async function loadSessionFromServer(token){
   }
   if(!res.ok) throw new Error('Server error '+res.status);
   const data=await res.json();
+
+  // Симуляція ще не розпочата лектором
+  if(data.not_started){
+    showNotStarted(data.start_date);
+    startNotStartedPolling(token);
+    throw new Error('not_started');
+  }
+
+  // Симуляція завершена
+  if(data.ended){
+    showEnded(data.profit);
+    throw new Error('ended');
+  }
 
   // Apply session state
   S.timerMs=data.session.timer_ms||0;
@@ -4139,6 +4154,51 @@ function showSessionStopped(){
       <div style="font-size:14px;color:var(--t3)">Ваш лектор тимчасово зупинив симуляцію.<br>Зверніться до нього для продовження.</div>
       <button class="btn secondary" onclick="logout()">Вийти</button>
     </div>`;
+}
+
+function showNotStarted(startDate){
+  document.getElementById('content').innerHTML=`
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;padding:30px">
+      <div style="font-size:40px">⏳</div>
+      <div style="font-size:17px;font-weight:600">Усі завдання готові</div>
+      <div style="font-size:14px;color:var(--t3)">
+        ${startDate ? 'Старт: '+startDate : 'Чекайте на дату старту від лектора'}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn primary" onclick="location.reload()">🔄 Оновити</button>
+        <button class="btn" onclick="logout()">Вийти</button>
+      </div>
+    </div>`;
+}
+
+function showEnded(profit){
+  document.getElementById('content').innerHTML=`
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;padding:30px">
+      <div style="font-size:40px">🏁</div>
+      <div style="font-size:17px;font-weight:600">Симуляція завершена</div>
+      <div style="font-size:14px;color:var(--t3)">5 днів роботи минули.<br>Загальна маржа: €${profit||0}<br>Зверніться до лектора за резюме.</div>
+      <button class="btn" onclick="logout()">Вийти</button>
+    </div>`;
+}
+
+// Якщо симуляція ще не стартувала — опитуємо сервер раз на 30 сек.
+// Як тільки лектор натисне "Почати" — перезавантажуємо сторінку.
+let notStartedPollInterval=null;
+function startNotStartedPolling(token){
+  if(notStartedPollInterval) return;
+  notStartedPollInterval=setInterval(async()=>{
+    try{
+      const res=await fetch('/api/student/session',{
+        headers:{'Authorization':'Bearer '+token}
+      });
+      if(!res.ok) return;
+      const d=await res.json();
+      if(!d.not_started){
+        clearInterval(notStartedPollInterval);
+        location.reload();
+      }
+    }catch(e){}
+  },30000);
 }
 
 function logout(){
