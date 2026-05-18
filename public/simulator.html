@@ -429,6 +429,71 @@ body {
 .email-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--t4); }
 .email-scroll { flex: 1; overflow-y: auto; padding: 20px 22px; min-height: 0; }
 .email-subj { font-size: 16px; font-weight: 600; color: var(--t1); margin-bottom: 12px; line-height: 1.4; }
+.email-subj-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 12px; }
+.email-subj-row .email-subj { margin-bottom: 0; flex: 1; }
+.confirm-trip-btn {
+  padding: 7px 12px; font-size: 12px; font-weight: 500;
+  background: var(--acc); color: #000; border: 1px solid var(--acc);
+  border-radius: var(--r); cursor: pointer; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  transition: all .12s;
+}
+.confirm-trip-btn:hover { background: #ffce8a; }
+.confirm-trip-btn:disabled {
+  background: var(--bg3); color: var(--t4); border-color: var(--b2);
+  cursor: not-allowed;
+}
+.confirm-trip-btn:disabled:hover { background: var(--bg3); }
+
+/* Application attachment card (в потоці чату) */
+.attach-app-card {
+  margin-top: 10px; background: var(--bg2);
+  border: 1px solid var(--b2); border-radius: var(--r);
+  padding: 11px 13px; display: flex; align-items: center; gap: 11px;
+  cursor: pointer; transition: all .12s; max-width: 100%;
+}
+.attach-app-card:hover { border-color: var(--acc); background: var(--bg3); }
+.attach-app-icon {
+  width: 38px; height: 38px; background: var(--bg);
+  border-radius: var(--r); display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+.attach-app-info { flex: 1; min-width: 0; }
+.attach-app-name { font-size: 12px; font-weight: 500; color: var(--t1); margin-bottom: 2px; }
+.attach-app-sub { font-size: 10px; color: var(--t3); }
+.attach-app-arrow { color: var(--t3); font-size: 13px; flex-shrink: 0; }
+
+/* Application modal — Transport Order */
+.app-modal-box {
+  background: var(--bg); border: 1px solid var(--b1); border-radius: var(--r2);
+  width: 760px; max-width: 92vw; max-height: 92vh;
+  overflow-y: auto;
+}
+.app-head { padding: 22px 26px 18px; border-bottom: 2px solid var(--acc); background: linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%); }
+.app-head-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 16px; }
+.app-doctitle { font-size: 11px; text-transform: uppercase; letter-spacing: .16em; color: var(--t3); margin-bottom: 6px; }
+.app-bigtitle { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; color: var(--t1); }
+.app-num { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--t3); line-height: 1.6; }
+.app-num strong { display: block; color: var(--acc); font-size: 14px; letter-spacing: .04em; }
+.app-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 14px; }
+.app-party-label { font-size: 9px; text-transform: uppercase; letter-spacing: .12em; color: var(--t4); margin-bottom: 5px; font-weight: 600; }
+.app-party-name { font-size: 13px; font-weight: 600; color: var(--t1); margin-bottom: 2px; }
+.app-party-detail { font-size: 11px; color: var(--t3); line-height: 1.5; }
+.app-section { padding: 16px 26px; border-bottom: 1px solid var(--b1); }
+.app-section:last-of-type { border-bottom: none; }
+.app-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--acc); margin-bottom: 10px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.app-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 30px; }
+.app-field { display: flex; flex-direction: column; gap: 3px; }
+.app-field-label { font-size: 10px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
+.app-field-val { font-size: 13px; color: var(--t1); font-weight: 500; line-height: 1.4; }
+.app-field-val.empty { color: var(--red); font-style: italic; font-weight: 400; }
+.app-field-val.acc { color: var(--acc); font-weight: 600; font-family: var(--mono); }
+.app-field-val.full { font-family: var(--mono); font-size: 12px; }
+.app-full-row { grid-column: 1 / -1; }
+.app-foot { padding: 14px 26px; background: var(--bg2); border-top: 1px solid var(--b1); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.app-foot-left { font-size: 10px; color: var(--t4); line-height: 1.4; }
+.app-foot-actions { display: flex; gap: 8px; }
+
 .email-meta {
   background: var(--bg3); border: 1px solid var(--b1); border-radius: var(--r);
   padding: 10px 13px; margin-bottom: 14px;
@@ -1829,6 +1894,12 @@ function openEmail(orderId){
 
   const missingHtml='';
 
+  // Стан кнопки "Підтвердити рейс"
+  const applicationSent = ord.applicationSent || ord.confirmBlocked;
+  const confirmBtnHtml = applicationSent
+    ? `<button class="confirm-trip-btn" disabled title="Заявку вже отримано">✓ Заявка отримана</button>`
+    : `<button class="confirm-trip-btn" id="cb-${orderId}" onclick="confirmTripWithClient('${orderId}')">✓ Підтвердити рейс</button>`;
+
   let freightHtml='';
   if(ord.freightFixed){
     freightHtml=`<div class="freight-box"><h4>Фрахт замовника (фіксовано)</h4>
@@ -1848,16 +1919,23 @@ function openEmail(orderId){
   }
 
   const threadHtml=em.replies.length?`
-    <div class="thread">${em.replies.map(r=>`
+    <div class="thread">${em.replies.map((r,idx)=>{
+      const attachHtml = r.attachment ? renderAttachmentCard(orderId, idx, r.attachment) : '';
+      return `
       <div class="tmsg ${r.role==='student'?'out':'in'}">
         <div class="tmsg-label">${r.role==='student'?'↑ Ви (Docaa)':'↩ '+em.from}</div>
         ${r.loading?`<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`:escapeHtml(r.text)}
-      </div>`).join('')}
+        ${attachHtml}
+      </div>`;
+    }).join('')}
     </div>`:'';
 
   document.getElementById('email-detail').innerHTML=`
     <div class="email-scroll" id="escroll-${orderId}">
-      <div class="email-subj">${em.subject}</div>
+      <div class="email-subj-row">
+        <div class="email-subj">${em.subject}</div>
+        ${confirmBtnHtml}
+      </div>
       <div class="email-meta">
         <span class="em-l">Від:</span><span class="em-v">${em.from} &lt;${em.addr}&gt;</span>
         <span class="em-l">Компанія:</span><span class="em-v">${em.company}</span>
@@ -1874,15 +1952,26 @@ function openEmail(orderId){
       <div class="profanity-warn" id="pw-${orderId}">⛔ Будь ласка, спілкуйтесь професійно.</div>
       <div class="reply-actions">
         <button class="btn primary" onclick="sendEmailReply('${orderId}')">Надіслати</button>
-        ${S.confirmations?.[orderId]?.client
-          ? `<span style="color:var(--grn);font-size:12px">✓ Підтверджено €${S.confirmations[orderId].freight}</span>`
-          : em.replies.some(r=>r.role==='ai')
-          ? `<button class="btn success" onclick="confirmFromClient('${orderId}')">✓ Підтвердити замовлення</button>`
-          : ''}
         <button class="btn secondary" onclick="go('carriers');['carriers','chats','orders','docs'].forEach(unlock)">Перевізники →</button>
       </div>
     </div>`;
   document.getElementById(`escroll-${orderId}`)?.scrollTo(0,9999);
+}
+
+// Рендер attachment-картки у потоці чату
+function renderAttachmentCard(orderId, msgIdx, attachment){
+  if (!attachment || !attachment.data) return '';
+  const d = attachment.data;
+  const fileName = `Заявка_${d.order_number || 'TR'}.pdf`;
+  const subText = `Transport Order${d.loading?.date ? ' · ' + d.loading.date : ''}${d.freight?.amount_eur ? ' · €' + d.freight.amount_eur : ''}`;
+  return `<div class="attach-app-card" onclick="openApplicationModal('${orderId}', ${msgIdx})">
+    <div class="attach-app-icon">📎</div>
+    <div class="attach-app-info">
+      <div class="attach-app-name">${fileName}</div>
+      <div class="attach-app-sub">${subText}</div>
+    </div>
+    <div class="attach-app-arrow">→</div>
+  </div>`;
 }
 
 async function proposeFreight(orderId){
@@ -2855,6 +2944,261 @@ function renderAdmin(){
 
 // saveAdminRates() видалено — курси редагуються лектором у /lecturer.html
 
+
+// ── НОВА ЛОГІКА: Підтвердження рейсу через AI + генерація заявки ──
+async function confirmTripWithClient(orderId){
+  const ord = S.orders.find(o=>o.id===orderId);
+  const em = S.emails.find(e=>e.orderId===orderId);
+  if(!ord||!em) return;
+
+  if(ord.applicationSent || ord.confirmBlocked){
+    notify('Заявку вже отримано від замовника','warn');
+    return;
+  }
+
+  // Перевірка чи є хоч одне повідомлення від студента
+  if(!em.replies.some(r=>r.role==='student')){
+    notify('Спочатку напишіть замовнику і обговоріть умови','err');
+    return;
+  }
+
+  // Блокуємо кнопку на час запиту
+  const btn = document.getElementById('cb-'+orderId);
+  if(btn){ btn.disabled = true; btn.innerHTML = '⏳ Перевіряю...'; }
+
+  // Додаємо loading-повідомлення від замовника
+  em.replies.push({ role:'ai', text:'', loading:true });
+  openEmail(orderId);
+
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const res = await fetch('/api/student/orders/'+orderId+'/confirm', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token },
+    });
+
+    // Прибираємо loading
+    em.replies = em.replies.filter(r => !r.loading);
+
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      if(data.error === 'already_confirmed'){
+        ord.applicationSent = true;
+        notify('Заявку вже отримано раніше','warn');
+      } else if(data.error === 'no_conversation'){
+        notify('Спочатку обговоріть умови з замовником','err');
+      } else {
+        notify(data.message || data.error || 'Помилка', 'err');
+      }
+      openEmail(orderId);
+      return;
+    }
+
+    const result = await res.json();
+    // result.message — повне повідомлення від замовника (можливо з attachment)
+    const newReply = {
+      role: 'ai',
+      text: result.message.text,
+      timestamp: result.message.timestamp,
+    };
+    if(result.message.attachment){
+      newReply.attachment = result.message.attachment;
+    }
+    em.replies.push(newReply);
+
+    if(result.application_sent){
+      ord.applicationSent = true;
+      ord.confirmBlocked = true;
+      // Якщо AI знайшов узгоджену ціну — зберігаємо локально
+      const attach = result.message.attachment;
+      if(attach && attach.data && attach.data.freight && attach.data.freight.amount_eur){
+        ord.clientFreightAgreed = attach.data.freight.amount_eur;
+      }
+      notify('Замовник підтвердив рейс і надіслав заявку ✓','ok');
+    } else if(result.decision === 'renegotiation'){
+      notify('Замовник нагадує про попередню домовленість','warn');
+    } else {
+      notify('Спочатку обговоріть умови чіткіше','warn');
+    }
+    openEmail(orderId);
+
+  } catch(e){
+    em.replies = em.replies.filter(r => !r.loading);
+    notify('Помилка з\'єднання: '+e.message, 'err');
+    openEmail(orderId);
+  }
+}
+
+// Модалка з повним рендером заявки (для attachment-варіанту)
+function openApplicationModal(orderId, msgIdx){
+  const em = S.emails.find(e=>e.orderId===orderId);
+  if(!em) return;
+  const msg = em.replies[msgIdx];
+  if(!msg || !msg.attachment) return;
+  const d = msg.attachment.data;
+  const missing = msg.attachment.missing_fields || [];
+  const isMissing = (f) => missing.includes(f);
+
+  const mo = document.createElement('div');
+  mo.className = 'modal-ov';
+  mo.style.display = 'flex';
+  mo.onclick = e => { if(e.target===mo) mo.remove(); };
+
+  // Рендер полів з підсвічуванням якщо пропущено
+  const fld = (label, value, opts={}) => {
+    const cls = (value === '' || value == null) ? 'app-field-val empty' : 'app-field-val' + (opts.acc?' acc':'') + (opts.full?' full':'');
+    const display = (value === '' || value == null) ? '— не вказано —' : value;
+    return `<div class="app-field${opts.fullRow?' app-full-row':''}">
+      <div class="app-field-label">${label}</div>
+      <div class="${cls}">${escapeHtml(String(display))}</div>
+    </div>`;
+  };
+
+  const weight = isMissing('weight') ? null : d.cargo.weight_kg;
+  const volume = isMissing('pallets') ? null : d.cargo.volume_m3;
+  const pallets = isMissing('pallets') ? null : d.cargo.pallets;
+  const loadDate = isMissing('load_date') ? '' : (d.loading.date + (d.loading.time_window?' · '+d.loading.time_window:''));
+
+  const showCustomsOut = d.customs_out !== '';
+  const showCustomsIn = d.customs_in !== '';
+
+  mo.innerHTML = `<div class="app-modal-box">
+    <div class="app-head">
+      <div class="app-head-top">
+        <div>
+          <div class="app-doctitle">Transport Order · Заявка на перевезення</div>
+          <div class="app-bigtitle">${d.order_number}</div>
+        </div>
+        <div class="app-num">
+          <strong>${d.order_date || ''}</strong>
+          Bestellung Nr.<br>${d.order_number}
+        </div>
+      </div>
+      <div class="app-parties">
+        <div>
+          <div class="app-party-label">Замовник</div>
+          <div class="app-party-name">${escapeHtml(d.client?.company||'')}</div>
+          <div class="app-party-detail">${escapeHtml(d.client?.address||'')}<br>${escapeHtml(d.client?.vat_id||'')}<br>Тел: ${escapeHtml(d.client?.phone||'')}</div>
+        </div>
+        <div>
+          <div class="app-party-label">Експедитор</div>
+          <div class="app-party-name">${escapeHtml(d.docaa?.company||'Docaa LLC')}</div>
+          <div class="app-party-detail">${escapeHtml(d.docaa?.address||'')}<br>${escapeHtml(d.docaa?.vat_id||'')}<br>Тел: ${escapeHtml(d.docaa?.phone||'')}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="app-section">
+      <div class="app-section-title">🚚 Транспортний засіб</div>
+      <div class="app-grid">
+        ${fld('Тип ТЗ', d.vehicle)}
+        ${fld('Вимоги', d.vehicle_requirements || '—')}
+      </div>
+    </div>
+
+    <div class="app-section">
+      <div class="app-section-title">📦 Вантаж</div>
+      <div class="app-grid">
+        ${fld('Тип / назва', d.cargo.description, {fullRow:true})}
+        ${fld('Вага', weight ? weight + ' кг' : '')}
+        ${fld('Об\'єм', volume ? volume + ' м³' : '')}
+        ${fld('Палет', pallets ? pallets + ' EPAL' : '', {fullRow:true})}
+      </div>
+    </div>
+
+    <div class="app-section">
+      <div class="app-section-title">📍 Завантаження</div>
+      <div class="app-grid">
+        ${fld('Дата', loadDate, {acc: !!loadDate})}
+        ${fld('Контакт', d.loading.contact_name + (d.loading.contact_phone?' · '+d.loading.contact_phone:''))}
+        ${fld('Адреса', d.loading.address, {fullRow:true, full:true})}
+      </div>
+    </div>
+
+    ${showCustomsOut ? `<div class="app-section">
+      <div class="app-section-title">🛂 Митне оформлення (країна відправлення)</div>
+      <div class="app-grid">
+        ${fld('Місце замитнення', d.customs_out, {fullRow:true})}
+      </div>
+    </div>` : ''}
+
+    ${showCustomsIn ? `<div class="app-section">
+      <div class="app-section-title">🛃 Митне оформлення (країна призначення)</div>
+      <div class="app-grid">
+        ${fld('Місце розмитнення', d.customs_in, {fullRow:true, full:true})}
+      </div>
+    </div>` : ''}
+
+    <div class="app-section">
+      <div class="app-section-title">🏁 Розвантаження</div>
+      <div class="app-grid">
+        ${fld('Дата', d.unloading.date || '+2 дні від завантаження')}
+        ${fld('Контакт', d.unloading.contact_name + (d.unloading.contact_phone?' · '+d.unloading.contact_phone:''))}
+        ${fld('Адреса', d.unloading.address, {fullRow:true, full:true})}
+      </div>
+    </div>
+
+    <div class="app-section" style="background:rgba(255,190,99,.04)">
+      <div class="app-section-title">💶 Фрахт</div>
+      <div class="app-grid">
+        ${fld('Сума', d.freight.amount_eur ? '€'+d.freight.amount_eur : '—', {acc:true})}
+        ${fld('Умови оплати', d.freight.payment_terms || '—')}
+      </div>
+    </div>
+
+    ${d.vehicle_data ? `<div class="app-section">
+      <div class="app-section-title">🚛 Авто / водій</div>
+      <div class="app-grid">
+        ${fld('ТЗ', d.vehicle_data.plate)}
+        ${fld('Водій', d.vehicle_data.driver_name)}
+        ${fld('Тел.', d.vehicle_data.driver_phone)}
+      </div>
+    </div>` : ''}
+
+    <div class="app-foot">
+      <div class="app-foot-left">${d.vehicle_data ? 'Дані ТЗ і водія додано' : 'Прохання надіслати дані ТЗ і водія<br>до моменту завантаження.'}</div>
+      <div class="app-foot-actions">
+        <button class="btn" onclick="copyApplication('${orderId}', ${msgIdx})">📋 Копіювати</button>
+        <button class="btn primary" onclick="this.closest('.modal-ov').remove()">✕ Закрити</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+function copyApplication(orderId, msgIdx){
+  const em = S.emails.find(e=>e.orderId===orderId);
+  const msg = em?.replies[msgIdx];
+  if(!msg || !msg.attachment) return;
+  const d = msg.attachment.data;
+  // Простий plain-text дамп для буфера
+  const txt = [
+    `ЗАЯВКА № ${d.order_number}`,
+    `Дата: ${d.order_date}`,
+    '',
+    `Замовник: ${d.client?.company||''}`,
+    `Адреса: ${d.client?.address||''}`,
+    '',
+    `Транспорт: ${d.vehicle}`,
+    `Вантаж: ${d.cargo.description}, ${d.cargo.weight_kg||'—'} кг, ${d.cargo.pallets||'—'} палет`,
+    '',
+    `Завантаження: ${d.loading.date} · ${d.loading.address}`,
+    `Контакт: ${d.loading.contact_name} ${d.loading.contact_phone}`,
+    '',
+    `Замитнення: ${d.customs_out||'—'}`,
+    `Розмитнення: ${d.customs_in||'—'}`,
+    '',
+    `Розвантаження: ${d.unloading.address}`,
+    `Контакт: ${d.unloading.contact_name} ${d.unloading.contact_phone}`,
+    '',
+    `Фрахт: €${d.freight.amount_eur||'—'}`,
+    `Умови оплати: ${d.freight.payment_terms||'—'}`,
+  ].join('\n');
+  navigator.clipboard.writeText(txt).then(
+    ()=>notify('Скопійовано ✓','ok'),
+    ()=>notify('Не вдалось скопіювати','err')
+  );
+}
 
 function confirmFromClient(orderId){
   const ord=S.orders.find(o=>o.id===orderId);
@@ -4200,6 +4544,11 @@ async function loadSessionFromServer(token){
       carrierId: op.carrier_id||null,
       carrierPlate: op.carrier_plate||null,
       carrierDriverName: op.carrier_driver||null,
+      // Поля заявки (clientRequestVariant)
+      applicationSent: !!op.application_sent,
+      applicationData: op.application_data ? (typeof op.application_data === 'string' ? JSON.parse(op.application_data) : op.application_data) : null,
+      applicationVariant: op.application_variant || null,
+      confirmBlocked: !!op.confirm_blocked,
       willCancel: false,
       incoterms: letter.incoterms||'',
       scenario: letter.scenario||'agree',
