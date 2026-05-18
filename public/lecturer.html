@@ -700,44 +700,76 @@ async function renderLetters(){
 // ── RATES PAGE ────────────────────────────────────────────────
 async function renderRates(){
   document.getElementById('tb-right').innerHTML=`<button class="btn primary" onclick="saveRates()">💾 Зберегти курси</button>`;
+  // Підвантажимо групи якщо ще немає
+  if(!STATE.groups || !STATE.groups.length){
+    try{ STATE.groups = await api('GET','/groups')||[]; }catch(e){}
+  }
+  if(!STATE.groups.length){
+    document.getElementById('content').innerHTML=`
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:var(--t3)">
+        <div style="font-size:32px">💱</div>
+        <div>Спочатку створіть групу — курси задаються для конкретної групи</div>
+      </div>`;
+    return;
+  }
+  // За замовчуванням — перша група або обрана
+  if(!STATE.ratesGroupId) STATE.ratesGroupId = STATE.selectedGroup?.id || STATE.groups[0].id;
+
+  const renderGroupSelect = () => STATE.groups.map(g=>
+    `<option value="${g.id}" ${g.id===STATE.ratesGroupId?'selected':''}>${g.name}</option>`
+  ).join('');
+
   document.getElementById('content').innerHTML=`
-    <div style="flex:1;overflow-y:auto;padding:18px;max-width:500px">
+    <div style="flex:1;overflow-y:auto;padding:18px;max-width:540px">
       <div class="card" style="margin-bottom:14px">
         <div class="card-title" style="margin-bottom:4px">Курс EUR/UAH по днях симуляції</div>
-        <div class="card-sub" style="margin-bottom:16px">Застосовується до всіх груп де ви є лектором</div>
-        ${[1,2,3,4,5].map(d=>`
-          <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--b1)">
-            <div style="width:64px;font-size:13px;font-weight:500">День ${d}</div>
-            <input id="rate-${d}" type="number" step="0.01" class="form-input" style="width:120px"
-              placeholder="41.50">
-            <span style="font-size:13px;color:var(--t3)">грн / EUR</span>
-          </div>`).join('')}
+        <div class="card-sub" style="margin-bottom:14px">Студенти бачать ці курси у календарі. Редагування — тільки лектор.</div>
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label">Група</label>
+          <select class="form-input" id="rates-group-select" onchange="onRatesGroupChange(this.value)">
+            ${renderGroupSelect()}
+          </select>
+        </div>
+        <div id="rates-inputs"></div>
       </div>
       <div class="card">
         <div class="card-title" style="margin-bottom:8px">Де відображається</div>
-        <div class="card-sub">Курс видно студенту у лівій панелі симулятора. Він використовується для розрахунку вартості перевезення в гривнях для українських замовників.</div>
+        <div class="card-sub">У сайдбарі симулятора студента — у міні-календарі. Клік на день показує курс цього дня. Використовується для розрахунку гривневих сум для українських замовників.</div>
       </div>
     </div>`;
+
+  await loadRatesForGroup(STATE.ratesGroupId);
+}
+
+async function loadRatesForGroup(groupId){
+  let rates=[41.5,41.65,41.8,41.7,41.9]; // default
+  try{
+    const r=await api('GET',`/groups/${groupId}/rates`);
+    if(r && Array.isArray(r.rates) && r.rates.length===5) rates=r.rates;
+  }catch(e){}
+  const cont=document.getElementById('rates-inputs');
+  if(!cont) return;
+  cont.innerHTML=[1,2,3,4,5].map((d,i)=>`
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--b1)">
+      <div style="width:64px;font-size:13px;font-weight:500">День ${d}</div>
+      <input id="rate-${d}" type="number" step="0.01" class="form-input" style="width:120px" value="${rates[i].toFixed(2)}">
+      <span style="font-size:13px;color:var(--t3)">грн / EUR</span>
+    </div>`).join('');
+}
+
+function onRatesGroupChange(groupId){
+  STATE.ratesGroupId=groupId;
+  loadRatesForGroup(groupId);
 }
 
 async function saveRates(){
   const rates=[1,2,3,4,5].map(d=>parseFloat(document.getElementById('rate-'+d)?.value||0));
-  if(rates.some(r=>!r||r<10)){ notify('Введіть правильні курси для всіх 5 днів','err'); return; }
-  if(!STATE.selectedGroup){
-    // Apply to first group
-    if(!STATE.groups.length){ notify('Спочатку створіть групу','err'); return; }
-    try{
-      for(const g of STATE.groups){
-        await api('POST',`/groups/${g.id}/rates`,{rates});
-      }
-      notify('Курси збережено для всіх груп ✓','ok');
-    }catch(e){ notify(e.message,'err'); }
-  } else {
-    try{
-      await api('POST',`/groups/${STATE.selectedGroup.id}/rates`,{rates});
-      notify('Курси збережено ✓','ok');
-    }catch(e){ notify(e.message,'err'); }
-  }
+  if(rates.some(r=>!r||r<10)){ notify('Введіть правильні курси для всіх 5 днів (>= 10)','err'); return; }
+  if(!STATE.ratesGroupId){ notify('Спочатку оберіть групу','err'); return; }
+  try{
+    await api('POST',`/groups/${STATE.ratesGroupId}/rates`,{rates});
+    notify('Курси збережено ✓','ok');
+  }catch(e){ notify(e.message,'err'); }
 }
 
 // ── UTILS ─────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ router.get('/session', STU, (req, res) => {
   const member = db.prepare('SELECT group_id FROM group_members WHERE student_id=?').get(req.user.id);
   if (!member) return res.status(404).json({ error: 'No group. Contact your lecturer.' });
 
-  const group = db.prepare('SELECT id,start_date,started_at FROM groups WHERE id=?').get(member.group_id);
+  const group = db.prepare('SELECT id,start_date,started_at,rates FROM groups WHERE id=?').get(member.group_id);
   if (!group) return res.status(404).json({ error: 'Group not found.' });
 
   // Якщо група ще не стартувала — повертаємо заглушку (200 OK, не помилка)
@@ -27,15 +27,16 @@ router.get('/session', STU, (req, res) => {
   let session = db.prepare('SELECT * FROM sessions WHERE student_id=?').get(req.user.id);
 
   if (!session) {
-    // Create new session — start_date береться з групи, а не з системного часу
+    // Create new session — start_date і rates беруться з групи
     const assignment = db.prepare('SELECT * FROM assignments WHERE student_id=?').get(req.user.id);
     if (!assignment) return res.status(404).json({ error: 'No assignment. Contact your lecturer.' });
 
     const startDate = group.start_date;
+    const groupRates = group.rates || '[41.5,41.65,41.8,41.7,41.9]';
     const id = uuidv4();
 
-    db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date) VALUES (?,?,?,?)`)
-      .run(id, req.user.id, assignment.id, startDate);
+    db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date,rates) VALUES (?,?,?,?,?)`)
+      .run(id, req.user.id, assignment.id, startDate, groupRates);
 
     session = db.prepare('SELECT * FROM sessions WHERE id=?').get(id);
   }

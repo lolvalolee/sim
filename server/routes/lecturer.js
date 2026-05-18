@@ -274,12 +274,27 @@ router.get('/letters', LEC, (req, res) => {
 router.post('/groups/:groupId/rates', LEC, (req, res) => {
   const { rates } = req.body; // [41.5, 41.65, ...]
   if (!Array.isArray(rates) || rates.length !== 5) return res.status(400).json({ error: '5 rates required' });
-  // Store rates on all active sessions in this group
+  if (rates.some(r => typeof r !== 'number' || r < 10)) return res.status(400).json({ error: 'Each rate must be a number >= 10' });
+
+  const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.groupId, req.user.id);
+  if (!g) return res.status(404).json({ error: 'Group not found' });
+
+  const ratesJson = JSON.stringify(rates);
+  // Майстер — groups.rates
+  db.prepare('UPDATE groups SET rates=? WHERE id=?').run(ratesJson, req.params.groupId);
+  // Дублюємо в sessions.rates для тих студентів які вже мають сесію
   const members = db.prepare('SELECT student_id FROM group_members WHERE group_id=?').all(req.params.groupId);
   for (const m of members) {
-    db.prepare('UPDATE sessions SET rates=? WHERE student_id=?').run(JSON.stringify(rates), m.student_id);
+    db.prepare('UPDATE sessions SET rates=? WHERE student_id=?').run(ratesJson, m.student_id);
   }
   res.json({ ok: true });
+});
+
+// GET /api/lecturer/groups/:groupId/rates — отримати поточні курси групи
+router.get('/groups/:groupId/rates', LEC, (req, res) => {
+  const g = db.prepare('SELECT rates FROM groups WHERE id=? AND lecturer_id=?').get(req.params.groupId, req.user.id);
+  if (!g) return res.status(404).json({ error: 'Group not found' });
+  res.json({ rates: JSON.parse(g.rates || '[41.5,41.65,41.8,41.7,41.9]') });
 });
 
 // ── HELPER: generate assignment ───────────────────────────────

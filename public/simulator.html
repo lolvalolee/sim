@@ -116,22 +116,87 @@ body {
 #sb-company-name { font-size: 12px; color: var(--t2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Rates block */
-#sb-rates {
-  padding: 8px 10px;
+/* Calendar block (replaces rates panel) */
+#sb-calendar {
+  padding: 10px 12px;
   border-bottom: 1px solid var(--b1);
   flex-shrink: 0;
   background: var(--bg3);
 }
-.sb-rates-head {
+.sb-cal-head {
   display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 5px;
+  margin-bottom: 8px;
 }
-.sb-rates-title { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--t3); font-weight: 600; }
-.sb-rates-edit { font-size: 10px; color: var(--acc); cursor: pointer; text-decoration: underline; }
-.sb-rate-row { display: flex; justify-content: space-between; align-items: center; padding: 1px 0; }
-.sb-rate-day { font-size: 10px; color: var(--t3); }
-.sb-rate-val { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--acc); }
-.sb-rate-val.today { color: var(--grn); }
+.sb-cal-title { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--t3); font-weight: 600; }
+.sb-cal-month { font-size: 11px; color: var(--t1); font-weight: 500; text-transform: capitalize; }
+.sb-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.sb-cal-dow {
+  font-size: 9px; color: var(--t4); text-align: center;
+  padding: 3px 0 2px; text-transform: uppercase; letter-spacing: .02em;
+}
+.sb-cal-day {
+  aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--t2);
+  border-radius: 4px; cursor: default; user-select: none;
+  transition: all .12s;
+  font-variant-numeric: tabular-nums;
+}
+.sb-cal-day.empty { visibility: hidden; }
+.sb-cal-day.weekend { color: var(--t4); }
+.sb-cal-day.in-sim { background: rgba(255,190,99,.08); color: var(--t1); cursor: pointer; }
+.sb-cal-day.in-sim:hover { background: rgba(255,190,99,.18); }
+.sb-cal-day.in-sim.selected {
+  background: rgba(255,190,99,.25); color: var(--acc);
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+.sb-cal-day.today { background: var(--acc); color: #000; font-weight: 600; }
+.sb-cal-day.today:hover { background: #ffce8a; }
+.sb-cal-rate-box {
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--bg2); border-radius: var(--r);
+  font-size: 11px; color: var(--t2); line-height: 1.4;
+  min-height: 42px;
+}
+.sb-cal-rate-box.empty { color: var(--t4); font-style: italic; text-align: center; padding-top: 12px; }
+.sb-cal-rate-date { color: var(--t3); font-size: 10px; margin-bottom: 2px; }
+.sb-cal-rate-val { font-size: 14px; color: var(--acc); font-weight: 600; font-family: var(--mono); }
+.sb-cal-counter {
+  text-align: center; margin-top: 8px; padding-top: 8px;
+  font-size: 10px; color: var(--t3);
+  border-top: 1px solid var(--b1);
+}
+.sb-cal-counter strong { color: var(--acc); font-weight: 600; }
+
+/* Stub screens (not started / ended) */
+.stub-container {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 40px 20px;
+}
+.stub-card {
+  width: 100%; max-width: 520px;
+  background: var(--bg); border-radius: 12px;
+  border: 1px solid var(--b1);
+  background-image: radial-gradient(ellipse at center, rgba(255,190,99,.04) 0%, transparent 60%);
+  padding: 50px 40px;
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center;
+}
+.stub-logo-wrap { margin-bottom: 26px; opacity: .95; }
+.stub-icon {
+  font-size: 64px; margin-bottom: 22px;
+  animation: stub-pulse 2.4s ease-in-out infinite;
+  display: inline-block;
+}
+@keyframes stub-pulse {
+  0%, 100% { opacity: .7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+.stub-title { font-size: 22px; font-weight: 600; margin-bottom: 10px; color: var(--t1); }
+.stub-sub { font-size: 14px; color: var(--t3); margin-bottom: 6px; }
+.stub-date { font-size: 16px; color: var(--acc); font-weight: 500; margin-bottom: 28px; font-family: var(--mono); }
+.stub-divider { width: 60px; height: 1px; background: var(--b2); margin: 0 auto 22px; }
+.stub-hint { font-size: 12px; color: var(--t4); margin-bottom: 22px; line-height: 1.6; max-width: 320px; }
+.stub-btns { display: flex; gap: 10px; justify-content: center; }
 
 /* Profit block */
 #sb-profit {
@@ -833,12 +898,14 @@ body {
       <div id="sb-company-name">Docaa — Симулятор</div>
     </div>
 
-    <div id="sb-rates">
-      <div class="sb-rates-head">
-        <span class="sb-rates-title">Курс EUR/UAH</span>
-        <span class="sb-rates-edit" onclick="openRatesModal()">редагувати</span>
+    <div id="sb-calendar">
+      <div class="sb-cal-head">
+        <span class="sb-cal-title">Календар</span>
+        <span class="sb-cal-month" id="sb-cal-month">—</span>
       </div>
-      <div id="rates-display"></div>
+      <div class="sb-cal-grid" id="sb-cal-grid"></div>
+      <div class="sb-cal-rate-box empty" id="sb-cal-rate">Клікніть на день симуляції</div>
+      <div class="sb-cal-counter" id="sb-cal-counter"></div>
     </div>
 
     <div id="sb-profit">
@@ -911,18 +978,7 @@ body {
   </div>
 </div>
 
-<!-- RATES MODAL -->
-<div id="rates-modal" class="modal-ov" style="display:none" onclick="if(event.target===this)this.style.display='none'">
-  <div class="modal-box">
-    <div class="modal-title">Курс EUR/UAH</div>
-    <p class="modal-desc" style="margin-bottom:14px">Курс для кожного симульованого дня</p>
-    <div id="rates-form" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px"></div>
-    <div class="modal-actions">
-      <button class="btn primary" style="flex:1" onclick="saveRates()">Зберегти</button>
-      <button class="btn" onclick="document.getElementById('rates-modal').style.display='none'">Скасувати</button>
-    </div>
-  </div>
-</div>
+<!-- RATES MODAL removed — only lecturers edit rates now (in /lecturer.html) -->
 
 <script>
 
@@ -1417,7 +1473,10 @@ function tickTimer(){
   if(S.paused) return;
   const now=Date.now(); S.timerMs+=now-S.lastTick; S.lastTick=now;
   const totalMin=S.timerMs/60000;
+  const prevDay=S.timerDay;
   S.timerDay=Math.min(5,Math.floor(totalMin/CFG.dayDuration)+1);
+  // Якщо день симуляції змінився — скидаємо обраний день у календарі (щоб бачити курс актуального дня)
+  if(prevDay !== S.timerDay) CAL_SELECTED_DAY_IDX = null;
   const mins=Math.floor(totalMin%CFG.dayDuration);
   const secs=Math.floor(S.timerMs/1000)%60;
   const simDate=addDays(S.startDate, S.timerDay-1);
@@ -1554,18 +1613,122 @@ function updateProfit(){
   if(pctEl) pctEl.textContent=pct+'%';
 }
 
-function updateRatesDisplay(){
-  const el=document.getElementById('rates-display');
-  if(!el) return;
-  el.innerHTML=S.rates.map((r,i)=>{
-    const d=addDays(S.startDate,i);
-    const isToday=S.timerDay===i+1;
-    return '<div class="sb-rate-row">'+
-      '<span class="sb-rate-day"'+(isToday?' style="color:var(--grn);font-weight:600"':'')+'>'+d+'</span>'+
-      '<span class="sb-rate-val'+(isToday?' today':'')+'">'+r.toFixed(2)+'</span>'+
-    '</div>';
-  }).join('');
+// Стан вибраного дня в календарі (для показу курсу)
+let CAL_SELECTED_DAY_IDX = null; // 0..4 = індекс дня симуляції, null = не обрано
+
+const UA_MONTHS = ['січня','лютого','березня','квітня','травня','червня','липня','серпня','вересня','жовтня','листопада','грудня'];
+const UA_MONTHS_NOM = ['січень','лютий','березень','квітень','травень','червень','липень','серпень','вересень','жовтень','листопад','грудень'];
+
+function parseStartDateUA(str){
+  // 'DD.MM.YYYY' -> Date
+  const [d,m,y]=str.split('.').map(Number);
+  return new Date(y, m-1, d);
 }
+
+function updateCalendar(){
+  const grid=document.getElementById('sb-cal-grid');
+  if(!grid) return;
+  if(!S.startDate){
+    // ще не стартувало — порожньо
+    grid.innerHTML='';
+    const m=document.getElementById('sb-cal-month'); if(m) m.textContent='—';
+    return;
+  }
+
+  const startD=parseStartDateUA(S.startDate);          // день 1 симуляції
+  const currentSimDay=S.timerDay;                       // 1..5
+  const todayD=new Date(startD); todayD.setDate(startD.getDate()+(currentSimDay-1));
+
+  // Місяць який показуємо — той в якому "сьогодні" (поточний день симуляції)
+  const showY=todayD.getFullYear();
+  const showM=todayD.getMonth(); // 0..11
+
+  const monthEl=document.getElementById('sb-cal-month');
+  if(monthEl) monthEl.textContent=`${UA_MONTHS_NOM[showM]} ${showY}`;
+
+  // Перший день місяця і його день тижня (понеділок = 0)
+  const first=new Date(showY,showM,1);
+  const firstDow=(first.getDay()+6)%7; // 0=пн … 6=нд
+  const daysInMonth=new Date(showY,showM+1,0).getDate();
+
+  // Збираю 42 клітинки (6 тижнів максимум; зайві обрізаємо)
+  let html='';
+  // Шапка днів тижня
+  ['пн','вт','ср','чт','пт','сб','нд'].forEach(d=>html+=`<div class="sb-cal-dow">${d}</div>`);
+
+  // Порожні клітинки до першого дня місяця
+  for(let i=0;i<firstDow;i++) html+='<div class="sb-cal-day empty"></div>';
+
+  // Дні місяця
+  for(let day=1;day<=daysInMonth;day++){
+    const d=new Date(showY,showM,day);
+    const dow=(d.getDay()+6)%7;
+    const isWeekend=(dow>=5);
+
+    // Чи цей день в межах 5-денного вікна симуляції?
+    let simDayIdx=null;
+    for(let s=0;s<5;s++){
+      const sd=new Date(startD); sd.setDate(startD.getDate()+s);
+      if(sd.getFullYear()===showY && sd.getMonth()===showM && sd.getDate()===day){
+        simDayIdx=s; break;
+      }
+    }
+    const isToday=(simDayIdx!==null && simDayIdx===currentSimDay-1);
+    const isSelected=(CAL_SELECTED_DAY_IDX!==null && simDayIdx===CAL_SELECTED_DAY_IDX);
+
+    let cls='sb-cal-day';
+    if(isWeekend) cls+=' weekend';
+    if(simDayIdx!==null) cls+=' in-sim';
+    if(isToday) cls+=' today';
+    else if(isSelected) cls+=' selected';
+
+    const onclick=(simDayIdx!==null && !isToday) ? ` onclick="selectCalDay(${simDayIdx})"` : '';
+    html+=`<div class="${cls}"${onclick}>${day}</div>`;
+  }
+  // Доповнити до повних тижнів
+  const total=firstDow+daysInMonth;
+  const rem=(7-(total%7))%7;
+  for(let i=0;i<rem;i++) html+='<div class="sb-cal-day empty"></div>';
+
+  grid.innerHTML=html;
+
+  // Лічильник днів унизу
+  const cnt=document.getElementById('sb-cal-counter');
+  if(cnt) cnt.innerHTML=`<strong>День ${S.timerDay}</strong> з 5`;
+
+  // Курс — за замовчуванням показуємо ПОТОЧНИЙ день симуляції
+  if(CAL_SELECTED_DAY_IDX===null){
+    showCalRate(currentSimDay-1, /*isToday*/true);
+  }else{
+    showCalRate(CAL_SELECTED_DAY_IDX, CAL_SELECTED_DAY_IDX===currentSimDay-1);
+  }
+}
+
+function selectCalDay(simDayIdx){
+  CAL_SELECTED_DAY_IDX = simDayIdx;
+  updateCalendar();
+}
+
+function showCalRate(simDayIdx, isToday){
+  const box=document.getElementById('sb-cal-rate');
+  if(!box) return;
+  if(simDayIdx===null || simDayIdx<0 || simDayIdx>4 || !S.rates){
+    box.className='sb-cal-rate-box empty';
+    box.textContent='Клікніть на день симуляції';
+    return;
+  }
+  const startD=parseStartDateUA(S.startDate);
+  const d=new Date(startD); d.setDate(startD.getDate()+simDayIdx);
+  const dateStr=`${d.getDate()} ${UA_MONTHS[d.getMonth()]}`;
+  const rate=S.rates[simDayIdx];
+  const todayMark=isToday?' · сьогодні':'';
+  box.className='sb-cal-rate-box';
+  box.innerHTML=`<div class="sb-cal-rate-date">${dateStr}${todayMark} · курс EUR/UAH</div>`+
+                `<div class="sb-cal-rate-val">${rate.toFixed(2)} ₴</div>`;
+}
+
+// Сумісність: старі виклики updateRatesDisplay() — перенаправляю на updateCalendar()
+function updateRatesDisplay(){ updateCalendar(); }
 function renderWelcome(){
   document.getElementById('content').innerHTML=`
   <div class="welcome-page">
@@ -2479,26 +2642,10 @@ function genDoc(type){
 }
 
 // ================================================================
-// RATES MODAL
+// RATES — read-only for students (lecturers edit in /lecturer.html)
 // ================================================================
-function openRatesModal(){
-  const form=document.getElementById('rates-form'); if(!form) return;
-  const today=S.timerDay;
-  form.innerHTML=S.rates.map((r,i)=>`
-    <div class="rates-form-row">
-      <span class="rates-form-label">День ${i+1} ${today===i+1?'<span class="rates-curr-day">сьогодні</span>':''}</span>
-      <input class="rates-form-input" id="rate-input-${i}" type="number" step="0.01" value="${r.toFixed(2)}">
-      <span style="font-size:12px;color:var(--t3)">грн</span>
-    </div>`).join('');
-  document.getElementById('rates-modal').style.display='flex';
-}
-function saveRates(){
-  S.rates=Array.from({length:5},(_,i)=>parseFloat(document.getElementById(`rate-input-${i}`)?.value||DEFAULT_RATES[i]));
-  localStorage.setItem('fd_rates',JSON.stringify(S.rates));
-  document.getElementById('rates-modal').style.display='none';
-  updateRatesDisplay();
-  notify('Курси збережено ✓','ok');
-}
+// openRatesModal() / saveRates() видалено — студент не редагує курси.
+// Курси приходять з GET /api/student/session і відображаються в календарі.
 
 // ================================================================
 // API + UTILS
@@ -2634,15 +2781,14 @@ function renderAdmin(){
     <p style="font-size:13px;color:var(--t3);margin-bottom:22px">Налаштування симулятора для навчального курсу</p>
 
     <div style="background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r2);margin-bottom:14px;overflow:hidden">
-      <div style="padding:14px 18px;border-bottom:1px solid var(--b1);display:flex;align-items:center;justify-content:space-between">
+      <div style="padding:14px 18px;border-bottom:1px solid var(--b1)">
         <div><div style="font-size:14px;font-weight:600">Курс EUR/UAH по днях</div>
-        <div style="font-size:12px;color:var(--t3);margin-top:2px">Для розрахунку фрахту в гривнях</div></div>
-        <button class="btn primary sm" onclick="saveAdminRates()">💾 Зберегти</button>
+        <div style="font-size:12px;color:var(--t3);margin-top:2px">Лише перегляд — редагування в кабінеті лектора</div></div>
       </div>
-      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:8px">
         ${S.rates.map((r,i)=>`<div style="display:flex;align-items:center;gap:12px">
             <div style="width:68px;font-size:13px;color:var(--t2);font-weight:500">День ${i+1}</div>
-            <input id="ar-${i}" type="number" step="0.01" value="${r.toFixed(2)}" style="width:110px;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:15px;font-weight:600;padding:7px 10px;border-radius:var(--r);outline:none" onfocus="this.style.borderColor='var(--acc)'" onblur="this.style.borderColor='var(--b2)'">
+            <div style="font-family:var(--mono);font-size:15px;font-weight:600;color:var(--acc)">${r.toFixed(2)}</div>
             <span style="font-size:13px;color:var(--t3)">грн / EUR</span>
             ${i===S.timerDay-1?'<span class="tag t-freight" style="font-size:10px">сьогодні</span>':''}
           </div>`).join('')}
@@ -2698,14 +2844,7 @@ function renderAdmin(){
   </div>`;
 }
 
-function saveAdminRates(){
-  S.rates=Array.from({length:5},function(_,i){
-    return parseFloat(document.getElementById('ar-'+i).value||DEFAULT_RATES[i]);
-  });
-  localStorage.setItem('fd_rates',JSON.stringify(S.rates));
-  updateRatesDisplay();
-  notify('Курси збережено','ok');
-}
+// saveAdminRates() видалено — курси редагуються лектором у /lecturer.html
 
 
 function confirmFromClient(orderId){
@@ -4157,27 +4296,60 @@ function showSessionStopped(){
 }
 
 function showNotStarted(startDate){
+  // Гарна повноекранна заглушка в стилі Docaa
+  const logoSvg = `<svg width="100" height="34" viewBox="0 0 800 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M632.258 155.113C632.258 142.625 634.816 131.566 639.932 121.936C645.198 112.307 652.27 104.859 661.147 99.5927C670.175 94.1761 680.105 91.4678 690.938 91.4678C700.718 91.4678 709.219 93.4238 716.441 97.3358C723.814 101.097 729.682 105.837 734.045 111.554V94.499C734.045 93.9467 734.493 93.499 735.045 93.499H759C759.552 93.499 760 93.9467 760 94.499V216.855C760 217.407 759.552 217.855 759 217.855H735.045C734.493 217.855 734.045 217.408 734.045 216.855V199.348C729.682 205.216 723.739 210.106 716.216 214.018C708.693 217.93 700.116 219.886 690.487 219.886C679.804 219.886 670.024 217.178 661.147 211.762C652.27 206.194 645.198 198.521 639.932 188.741C634.816 178.811 632.258 167.601 632.258 155.113ZM734.045 155.564C734.045 146.988 732.24 139.54 728.629 133.221C725.168 126.901 720.579 122.087 714.862 118.776C709.144 115.466 702.975 113.811 696.355 113.811C689.734 113.811 683.566 115.466 677.848 118.776C672.131 121.936 667.466 126.676 663.855 132.995C660.395 139.164 658.664 146.537 658.664 155.113C658.664 163.689 660.395 171.212 663.855 177.682C667.466 184.152 672.131 189.117 677.848 192.578C683.716 195.888 689.885 197.543 696.355 197.543C702.975 197.543 709.144 195.888 714.862 192.578C720.579 189.268 725.168 184.453 728.629 178.133C732.24 171.664 734.045 164.141 734.045 155.564Z" fill="#FFBE63"/>
+    <path d="M486.822 155.113C486.822 142.625 489.38 131.566 494.496 121.936C499.762 112.307 506.834 104.859 515.711 99.5927C524.739 94.1761 534.669 91.4678 545.502 91.4678C555.282 91.4678 563.783 93.4238 571.005 97.3358C578.378 101.097 584.246 105.837 588.609 111.554V94.499C588.609 93.9467 589.057 93.499 589.609 93.499H613.564C614.116 93.499 614.564 93.9467 614.564 94.499V216.855C614.564 217.407 614.116 217.855 613.564 217.855H589.609C589.057 217.855 588.609 217.408 588.609 216.855V199.348C584.246 205.216 578.303 210.106 570.78 214.018C563.257 217.93 554.68 219.886 545.051 219.886C534.368 219.886 524.588 217.178 515.711 211.762C506.834 206.194 499.762 198.521 494.496 188.741C489.38 178.811 486.822 167.601 486.822 155.113ZM588.609 155.564C588.609 146.988 586.804 139.54 583.193 133.221C579.732 126.901 575.143 122.087 569.426 118.776C563.708 115.466 557.539 113.811 550.919 113.811C544.299 113.811 538.13 115.466 532.412 118.776C526.695 121.936 522.03 126.676 518.419 132.995C514.959 139.164 513.228 146.537 513.228 155.113C513.228 163.689 514.959 171.212 518.419 177.682C522.03 184.152 526.695 189.117 532.412 192.578C538.28 195.888 544.449 197.543 550.919 197.543C557.539 197.543 563.708 195.888 569.426 192.578C575.143 189.268 579.732 184.453 583.193 178.133C586.804 171.664 588.609 164.141 588.609 155.564Z" fill="#FFBE63"/>
+    <path d="M353.376 155.564C353.376 142.775 355.934 131.566 361.05 121.936C366.316 112.156 373.538 104.633 382.716 99.367C391.894 94.1008 402.426 91.4678 414.313 91.4678C429.359 91.4678 441.772 95.0788 451.552 102.301C461.168 109.148 467.75 118.888 471.3 131.519C471.477 132.15 470.999 132.769 470.344 132.769H444.577C444.158 132.769 443.784 132.506 443.632 132.115C441.363 126.259 437.834 121.662 433.045 118.325C428.08 114.864 421.836 113.134 414.313 113.134C403.781 113.134 395.355 116.896 389.035 124.419C382.866 131.791 379.782 142.173 379.782 155.564C379.782 168.955 382.866 179.412 389.035 186.935C395.355 194.458 403.781 198.22 414.313 198.22C428.958 198.22 438.73 191.894 443.631 179.24C443.782 178.85 444.157 178.585 444.576 178.585H470.313C470.977 178.585 471.457 179.221 471.262 179.856C467.567 191.901 460.922 201.558 451.326 208.828C441.396 216.2 429.058 219.886 414.313 219.886C402.426 219.886 391.894 217.253 382.716 211.987C373.538 206.571 366.316 199.048 361.05 189.418C355.934 179.638 353.376 168.353 353.376 155.564Z" fill="white"/>
+    <path d="M273.851 219.886C262.115 219.886 251.508 217.253 242.029 211.987C232.55 206.571 225.102 199.048 219.685 189.418C214.269 179.638 211.56 168.353 211.56 155.564C211.56 142.926 214.344 131.716 219.911 121.936C225.478 112.156 233.076 104.633 242.706 99.367C252.335 94.1008 263.093 91.4678 274.98 91.4678C286.866 91.4678 297.624 94.1008 307.254 99.367C316.883 104.633 324.481 112.156 330.049 121.936C335.616 131.716 338.399 142.926 338.399 155.564C338.399 168.203 335.54 179.412 329.823 189.192C324.105 198.972 316.281 206.571 306.351 211.987C296.571 217.253 285.738 219.886 273.851 219.886ZM273.851 197.543C280.472 197.543 286.64 195.963 292.358 192.803C298.226 189.644 302.966 184.904 306.577 178.585C310.188 172.265 311.993 164.592 311.993 155.564C311.993 146.537 310.263 138.938 306.802 132.769C303.342 126.45 298.753 121.71 293.035 118.551C287.318 115.391 281.149 113.811 274.528 113.811C267.908 113.811 261.739 115.391 256.022 118.551C250.455 121.71 246.016 126.45 242.706 132.769C239.396 138.938 237.741 146.537 237.741 155.564C237.741 168.955 241.126 179.337 247.897 186.71C254.818 193.932 263.469 197.543 273.851 197.543Z" fill="white"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M156.796 70.7048C144.307 64.2349 129.713 61 113.011 61H63.3793C62.8192 61 62.5392 61 62.3253 61.109C62.1371 61.2049 61.9841 61.3578 61.8883 61.546C61.7793 61.7599 61.7793 62.0399 61.7793 62.6V112.814C61.7793 113.374 61.7793 113.654 61.8883 113.868C61.9841 114.056 62.1371 114.209 62.3253 114.305C62.5392 114.414 62.8192 114.414 63.3793 114.414H85.9081C86.4682 114.414 86.7482 114.414 86.9621 114.305C87.1503 114.209 87.3033 114.056 87.3991 113.868C87.5081 113.654 87.5081 113.374 87.5081 112.814V81.9893H113.011C131.368 81.9893 145.436 87.105 155.216 97.3364C164.996 107.568 169.886 121.786 169.886 139.992C169.886 158.048 164.996 172.04 155.216 181.971C145.436 191.901 131.368 196.867 113.011 196.867H87.5081V174.317C87.5081 173.757 87.5081 173.477 87.6171 173.263C87.713 173.075 87.866 172.922 88.0541 172.826C88.2681 172.717 88.5481 172.717 89.1081 172.717H105.756C106.877 172.717 107.438 172.717 107.714 172.49C107.955 172.293 108.09 171.995 108.08 171.685C108.068 171.327 107.698 170.905 106.959 170.062L75.8465 134.593C75.4311 134.119 75.2234 133.882 74.9775 133.795C74.7615 133.719 74.5259 133.719 74.3099 133.795C74.064 133.882 73.8563 134.119 73.4409 134.593L42.3289 170.062C41.5894 170.905 41.2196 171.327 41.2079 171.685C41.1977 171.995 41.3326 172.293 41.5729 172.49C41.8495 172.717 42.4102 172.717 43.5317 172.717H60.1793C60.7393 172.717 61.0193 172.717 61.2333 172.826C61.4214 172.922 61.5744 173.075 61.6703 173.263C61.7793 173.477 61.7793 173.757 61.7793 174.317V198.656C61.7793 205.377 61.7793 208.737 63.0872 211.304C64.2377 213.562 66.0734 215.398 68.3314 216.548C70.8983 217.856 74.2586 217.856 80.9793 217.856H113.011C129.713 217.856 144.307 214.771 156.796 208.603C169.434 202.283 179.139 193.255 185.91 181.519C192.831 169.784 196.292 155.941 196.292 139.992C196.292 124.043 192.831 110.126 185.91 98.2392C179.139 86.2023 169.434 77.0241 156.796 70.7048Z" fill="white"/>
+    <path d="M87.4994 196.866H111.949V217.856H99.4994C92.872 217.856 87.4994 212.483 87.4994 205.856V196.866Z" fill="url(#lg_stub1)"/>
+    <defs><linearGradient id="lg_stub1" x1="87.3676" y1="206.612" x2="111.818" y2="206.612" gradientUnits="userSpaceOnUse"><stop stop-color="#CBCBCB"/><stop offset="1" stop-color="white"/></linearGradient></defs>
+  </svg>`;
+
+  const dateBlock = startDate
+    ? `<div class="stub-sub">Симуляція стартує</div><div class="stub-date">${formatStubDate(startDate)}</div>`
+    : `<div class="stub-sub">Чекайте на дату старту від лектора</div><div class="stub-date">—</div>`;
+
   document.getElementById('content').innerHTML=`
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;padding:30px">
-      <div style="font-size:40px">⏳</div>
-      <div style="font-size:17px;font-weight:600">Усі завдання готові</div>
-      <div style="font-size:14px;color:var(--t3)">
-        ${startDate ? 'Старт: '+startDate : 'Чекайте на дату старту від лектора'}
-      </div>
-      <div style="display:flex;gap:8px;margin-top:6px">
-        <button class="btn primary" onclick="location.reload()">🔄 Оновити</button>
-        <button class="btn" onclick="logout()">Вийти</button>
+    <div class="stub-container">
+      <div class="stub-card">
+        <div class="stub-logo-wrap">${logoSvg}</div>
+        <div class="stub-icon">⏳</div>
+        <div class="stub-title">Усі завдання готові</div>
+        ${dateBlock}
+        <div class="stub-divider"></div>
+        <div class="stub-hint">Лектор розпочне симуляцію у визначений час.<br>Поки можете повернутись пізніше.</div>
+        <div class="stub-btns">
+          <button class="btn primary" onclick="location.reload()">🔄 Оновити</button>
+          <button class="btn" onclick="logout()">Вийти</button>
+        </div>
       </div>
     </div>`;
 }
 
+// 'DD.MM.YYYY' → '14 травня 2026'
+function formatStubDate(s){
+  if(!s) return '';
+  const [d,m,y]=s.split('.').map(Number);
+  const months=['січня','лютого','березня','квітня','травня','червня','липня','серпня','вересня','жовтня','листопада','грудня'];
+  return `${d} ${months[m-1]} ${y}`;
+}
+
 function showEnded(profit){
   document.getElementById('content').innerHTML=`
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;padding:30px">
-      <div style="font-size:40px">🏁</div>
-      <div style="font-size:17px;font-weight:600">Симуляція завершена</div>
-      <div style="font-size:14px;color:var(--t3)">5 днів роботи минули.<br>Загальна маржа: €${profit||0}<br>Зверніться до лектора за резюме.</div>
-      <button class="btn" onclick="logout()">Вийти</button>
+    <div class="stub-container">
+      <div class="stub-card">
+        <div class="stub-icon">🏁</div>
+        <div class="stub-title">Симуляція завершена</div>
+        <div class="stub-sub">5 днів роботи минули</div>
+        <div class="stub-date">€${profit||0}</div>
+        <div class="stub-divider"></div>
+        <div class="stub-hint">Зверніться до лектора за резюме і аналізом вашої роботи.</div>
+        <div class="stub-btns">
+          <button class="btn" onclick="logout()">Вийти</button>
+        </div>
+      </div>
     </div>`;
 }
 
