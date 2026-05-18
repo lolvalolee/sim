@@ -339,13 +339,47 @@ const updateAll = db.transaction(arr => {
 
     // Замовник — країна листа (звідки прийшов)
     const clientCountry = l.country || fromCountry;
-    const clientPool = clientsByCountry[clientCountry];
+    let clientPool = clientsByCountry[clientCountry];
+
     if (!clientPool || !clientPool.length) {
-      // fallback: будь-який замовник
-      const anyClient = allClients[0];
-      console.warn(`  ⚠ Лист ${l.code}: немає клієнтів для ${clientCountry}, беру ${anyClient.country}`);
+      // Фолбек: шукаємо у найближчих сусідів (за регіоном)
+      const neighbors = {
+        // Балкани
+        AL: ['GR','BG','HR','SI','IT'],
+        BA: ['HR','SI','HU','RS'],
+        MK: ['BG','GR','HR','SI'],
+        RS: ['HU','HR','RO','BG'],
+        // Інші можливі прогалини
+        IR: ['TR','RO','BG'],  // Іран — через турецького/балканського перевізника
+        NO: ['SE','DK','FI','DE'],
+        FI: ['SE','EE','LT'],
+        IE: ['GB','FR','NL'],
+        PT: ['ES','FR'],
+        CH: ['DE','AT','FR','IT'],
+        SI: ['AT','HR','IT'],
+        HR: ['SI','HU','AT'],
+        EE: ['LV','LT','FI'],
+        LV: ['LT','EE'],
+        MD: ['RO','UA'],
+        GR: ['BG','IT','TR'],
+      };
+
+      const tryList = neighbors[clientCountry] || ['DE','PL','IT'];
+      for (const alt of tryList) {
+        if (clientsByCountry[alt] && clientsByCountry[alt].length) {
+          clientPool = clientsByCountry[alt];
+          console.warn(`  ⚠ Лист ${l.code} (${clientCountry}): беру замовника з ${alt}`);
+          break;
+        }
+      }
+
+      if (!clientPool || !clientPool.length) {
+        // Найгірший випадок — перший доступний (не UA)
+        const nonUa = allClients.filter(c => c.country !== 'UA');
+        clientPool = nonUa.length ? nonUa : allClients;
+        console.warn(`  ⚠ Лист ${l.code} (${clientCountry}): беру ${clientPool[0].country} (немає сусідів)`);
+      }
       skippedNoClient++;
-      continue;
     }
     const client = pick(clientPool);
 
@@ -387,7 +421,7 @@ const updateAll = db.transaction(arr => {
 updateAll(letters);
 
 console.log(`\n✅ Прив'язано ${linked} лист(ів) до замовників`);
-if (skippedNoClient > 0) console.log(`⚠ Пропущено ${skippedNoClient} (немає клієнтів)`);
+if (skippedNoClient > 0) console.log(`ℹ ${skippedNoClient} лист(ів) використали фолбек-замовника із сусідньої країни`);
 console.log(`\nПриклад одного запису:`);
 const sample = db.prepare('SELECT code, load_address, unload_address, customs_out_address, customs_in_address, cargo_description, cargo_weight_kg FROM letters WHERE load_address IS NOT NULL LIMIT 3').all();
 sample.forEach(s => {
