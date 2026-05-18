@@ -295,7 +295,7 @@ function genCargo(vehicle){
 
 const letters = FORCE
   ? db.prepare('SELECT * FROM letters').all()
-  : db.prepare('SELECT * FROM letters WHERE load_address IS NULL OR load_address=""').all();
+  : db.prepare("SELECT * FROM letters WHERE load_address IS NULL OR load_address=''").all();
 
 if (letters.length === 0) {
   console.log('Всі листи вже мають адреси. Запустіть з --force щоб перезаписати.');
