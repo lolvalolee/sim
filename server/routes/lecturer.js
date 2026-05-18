@@ -2,6 +2,7 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const fetch = require('node-fetch');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db');
 
@@ -362,6 +363,425 @@ function generateAssignment(studentId, groupId, createdBy) {
     .run(id, studentId, groupId, JSON.stringify(selected.map(l => l.id)), createdBy);
 
   return { id, letter_ids: selected.map(l => l.id) };
+}
+
+// ── STUDENT DETAILS (для сторінки управління групою) ─────────
+
+// GET /api/lecturer/students/:studentId/details — повна картина студента
+// Повертає: статус сесії + метрики + список рейсів з прогресом
+router.get('/students/:studentId/details', LEC, (req, res) => {
+  const studentId = req.params.studentId;
+
+  // Перевірка що цей студент у групі цього лектора
+  const access = db.prepare(`
+    SELECT g.id FROM group_members gm
+    JOIN groups g ON g.id = gm.group_id
+    WHERE gm.student_id=? AND g.lecturer_id=?
+  `).get(studentId, req.user.id);
+  if (!access) return res.status(404).json({ error: 'Student not found' });
+
+  const user = db.prepare('SELECT id,name,email FROM users WHERE id=?').get(studentId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const session = db.prepare('SELECT * FROM sessions WHERE student_id=?').get(studentId);
+  if (!session) {
+    return res.json({
+      student: user,
+      session: null,
+      orders: [],
+      metrics: null,
+    });
+  }
+
+  // Загружаємо ордери і вкладаємо листи
+  const assignment = db.prepare('SELECT letter_ids FROM assignments WHERE student_id=?').get(studentId);
+  const letterIds = assignment ? JSON.parse(assignment.letter_ids) : [];
+  const orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=?').all(session.id);
+
+  const orders = letterIds.map(lid => {
+    const letter = db.prepare('SELECT id,code,from_name,company,subject,vehicle,dirs FROM letters WHERE id=?').get(lid);
+    if (!letter) return null;
+    const op = orderProgress.find(o => o.letter_id === lid) || {};
+    let carrier = null;
+    if (op.carrier_id) {
+      carrier = db.prepare('SELECT name,person FROM carriers WHERE id=?').get(op.carrier_id);
+    }
+    return {
+      id: letter.id,
+      code: letter.code,
+      from: letter.from_name,
+      company: letter.company,
+      subject: letter.subject,
+      vehicle: letter.vehicle,
+      dirs: JSON.parse(letter.dirs || '[]'),
+      status: op.status || 'new',
+      client_freight: op.client_freight || null,
+      carrier_freight: op.carrier_freight || null,
+      carrier_name: carrier ? carrier.name : null,
+      margin: (op.client_freight && op.carrier_freight) ? +(op.client_freight - op.carrier_freight).toFixed(2) : null,
+    };
+  }).filter(Boolean);
+
+  // Метрики
+  const emailThreadsCount = db.prepare('SELECT COUNT(*) as c FROM email_threads WHERE session_id=?').get(session.id).c;
+  const carrierChatsCount = db.prepare('SELECT COUNT(*) as c FROM carrier_chats WHERE session_id=?').get(session.id).c;
+  const closedCount = orders.filter(o => o.status === 'confirmed' || o.status === 'done').length;
+  const totalMargin = orders.reduce((s, o) => s + (o.margin || 0), 0);
+  const avgMargin = closedCount ? +(totalMargin / closedCount).toFixed(2) : 0;
+  const totalRevenue = orders.reduce((s, o) => s + (o.client_freight || 0), 0);
+  const marginPct = totalRevenue ? +(totalMargin / totalRevenue * 100).toFixed(1) : 0;
+
+  const metrics = {
+    profit: +totalMargin.toFixed(2),
+    revenue: +totalRevenue.toFixed(2),
+    closed: closedCount,
+    total: 8,
+    avg_margin_eur: avgMargin,
+    avg_margin_pct: marginPct,
+    email_threads: emailThreadsCount,
+    carrier_chats: carrierChatsCount,
+    timer_day: session.timer_day,
+    is_complete: (session.timer_day || 0) > 5 || closedCount === 8,
+  };
+
+  res.json({
+    student: user,
+    session: {
+      id: session.id,
+      status: session.status,
+      timer_day: session.timer_day,
+      profit: session.profit,
+      start_date: session.start_date,
+      is_complete: metrics.is_complete,
+    },
+    orders,
+    metrics,
+  });
+});
+
+// ── SUMMARY (AI-резюме) ───────────────────────────────────────
+
+const AI_RATE_LIMITER_LECT = require('express-rate-limit')({
+  windowMs: 60 * 1000,
+  max: 10, // 10 AI-резюме на лектора/хв
+  keyGenerator: (req) => req.user?.id || req.ip,
+  message: { error: 'Too many AI requests. Please wait a minute.' }
+});
+
+// GET /api/lecturer/students/:studentId/summary
+router.get('/students/:studentId/summary', LEC, (req, res) => {
+  const studentId = req.params.studentId;
+  // Перевірка доступу
+  const access = db.prepare(`
+    SELECT g.id FROM group_members gm
+    JOIN groups g ON g.id = gm.group_id
+    WHERE gm.student_id=? AND g.lecturer_id=?
+  `).get(studentId, req.user.id);
+  if (!access) return res.status(404).json({ error: 'Student not found' });
+
+  const summary = db.prepare('SELECT * FROM student_summaries WHERE student_id=?').get(studentId);
+  if (!summary) return res.json({ exists: false });
+  res.json({
+    exists: true,
+    ai_text: summary.ai_text,
+    lecturer_note: summary.lecturer_note || '',
+    metrics_json: summary.metrics_json ? JSON.parse(summary.metrics_json) : null,
+    generated_at: summary.generated_at,
+    note_updated_at: summary.note_updated_at,
+    sent_to_student: !!summary.sent_to_student,
+    sent_at: summary.sent_at,
+  });
+});
+
+// POST /api/lecturer/students/:studentId/summary/generate
+// Генерує AI-резюме. Доступно тільки якщо симуляція завершена.
+router.post('/students/:studentId/summary/generate', LEC, AI_RATE_LIMITER_LECT, async (req, res) => {
+  const studentId = req.params.studentId;
+
+  // Перевірка доступу + завантаження групи
+  const group = db.prepare(`
+    SELECT g.id,g.name FROM group_members gm
+    JOIN groups g ON g.id = gm.group_id
+    WHERE gm.student_id=? AND g.lecturer_id=?
+  `).get(studentId, req.user.id);
+  if (!group) return res.status(404).json({ error: 'Student not found' });
+
+  const user = db.prepare('SELECT id,name,email FROM users WHERE id=?').get(studentId);
+  const session = db.prepare('SELECT * FROM sessions WHERE student_id=?').get(studentId);
+  if (!session) return res.status(400).json({ error: 'Student has no session' });
+
+  // Перевірка: симуляція завершена?
+  const isComplete = (session.timer_day || 0) > 5;
+  if (!isComplete) {
+    // Опційно — рахуємо чи всі 8 рейсів закриті
+    const orders = db.prepare('SELECT status FROM order_progress WHERE session_id=?').all(session.id);
+    const closed = orders.filter(o => o.status === 'confirmed' || o.status === 'done').length;
+    if (closed < 8) return res.status(400).json({ error: 'simulation_not_complete', message: 'Симуляція ще не завершена. Резюме доступне після 5 днів або закриття всіх 8 рейсів.' });
+  }
+
+  // Перевіряємо чи вже є резюме (якщо так — це reuse, не блокуємо)
+  const existing = db.prepare('SELECT id,lecturer_note FROM student_summaries WHERE student_id=?').get(studentId);
+  const keepNote = existing?.lecturer_note || '';
+
+  // Збираємо контекст для AI
+  const assignment = db.prepare('SELECT letter_ids FROM assignments WHERE student_id=?').get(studentId);
+  const letterIds = assignment ? JSON.parse(assignment.letter_ids) : [];
+
+  const emailThreads = db.prepare('SELECT * FROM email_threads WHERE session_id=?').all(session.id);
+  const carrierChats = db.prepare('SELECT * FROM carrier_chats WHERE session_id=?').all(session.id);
+  const orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=?').all(session.id);
+
+  // Готуємо метрики
+  let totalMargin = 0, totalRevenue = 0, closedCount = 0;
+  const ordersDetail = [];
+  for (const lid of letterIds) {
+    const letter = db.prepare('SELECT * FROM letters WHERE id=?').get(lid);
+    if (!letter) continue;
+    const op = orderProgress.find(o => o.letter_id === lid) || {};
+    const carrier = op.carrier_id ? db.prepare('SELECT name,person FROM carriers WHERE id=?').get(op.carrier_id) : null;
+    const thread = emailThreads.find(t => t.letter_id === lid);
+    const chat = op.carrier_id ? carrierChats.find(c => c.carrier_id === op.carrier_id) : null;
+    const margin = (op.client_freight && op.carrier_freight) ? (op.client_freight - op.carrier_freight) : 0;
+    if (op.status === 'confirmed' || op.status === 'done') closedCount++;
+    if (op.client_freight) totalRevenue += op.client_freight;
+    totalMargin += margin;
+
+    ordersDetail.push({
+      code: letter.code,
+      from: letter.from_name,
+      company: letter.company,
+      subject: letter.subject,
+      country: letter.country,
+      lang: letter.lang || 'uk',
+      vehicle: letter.vehicle,
+      dirs: JSON.parse(letter.dirs || '[]'),
+      body: letter.body || '',
+      status: op.status || 'new',
+      client_freight: op.client_freight,
+      carrier_freight: op.carrier_freight,
+      carrier_name: carrier?.name,
+      margin: +margin.toFixed(2),
+      margin_pct: op.client_freight ? +(margin / op.client_freight * 100).toFixed(1) : 0,
+      email_messages: thread ? JSON.parse(thread.messages || '[]') : [],
+      carrier_messages: chat ? JSON.parse(chat.messages || '[]') : [],
+    });
+  }
+
+  const avgMarginPct = totalRevenue ? +(totalMargin / totalRevenue * 100).toFixed(1) : 0;
+
+  const metrics = {
+    profit: +totalMargin.toFixed(2),
+    revenue: +totalRevenue.toFixed(2),
+    closed: closedCount,
+    total: 8,
+    avg_margin_pct: avgMarginPct,
+    email_threads: emailThreads.length,
+    carrier_chats: carrierChats.length,
+    docs_count: closedCount * 2, // приблизно: довідка+рахунок на закритий рейс
+  };
+
+  // Будуємо промпт
+  const systemPrompt = buildSummarySystemPrompt();
+  const userPrompt = buildSummaryUserPrompt(user, group, session, metrics, ordersDetail);
+
+  // Виклик AI
+  try {
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 2500,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      console.error('AI error:', errText);
+      return res.status(502).json({ error: 'AI service error', details: errText.slice(0, 200) });
+    }
+
+    const data = await aiRes.json();
+    const aiText = (data.content && data.content[0] && data.content[0].text) || '';
+
+    // Зберігаємо
+    const now = new Date().toISOString();
+    if (existing) {
+      db.prepare(`UPDATE student_summaries SET
+        ai_text=?, metrics_json=?, generated_at=?
+        WHERE student_id=?`)
+        .run(aiText, JSON.stringify(metrics), now, studentId);
+    } else {
+      db.prepare(`INSERT INTO student_summaries
+        (id,student_id,group_id,ai_text,lecturer_note,metrics_json,generated_at)
+        VALUES (?,?,?,?,?,?,?)`)
+        .run(uuidv4(), studentId, group.id, aiText, keepNote, JSON.stringify(metrics), now);
+    }
+
+    res.json({
+      ai_text: aiText,
+      lecturer_note: keepNote,
+      metrics_json: metrics,
+      generated_at: now,
+    });
+  } catch (e) {
+    console.error('Summary generation failed:', e);
+    res.status(502).json({ error: 'AI service unavailable', details: String(e).slice(0, 200) });
+  }
+});
+
+// PATCH /api/lecturer/students/:studentId/summary/note — зберігає коментар лектора
+router.patch('/students/:studentId/summary/note', LEC, (req, res) => {
+  const studentId = req.params.studentId;
+  const access = db.prepare(`
+    SELECT g.id FROM group_members gm
+    JOIN groups g ON g.id = gm.group_id
+    WHERE gm.student_id=? AND g.lecturer_id=?
+  `).get(studentId, req.user.id);
+  if (!access) return res.status(404).json({ error: 'Student not found' });
+
+  const { lecturer_note } = req.body;
+  if (typeof lecturer_note !== 'string') return res.status(400).json({ error: 'lecturer_note must be string' });
+
+  const existing = db.prepare('SELECT id FROM student_summaries WHERE student_id=?').get(studentId);
+  const now = new Date().toISOString();
+  if (existing) {
+    db.prepare('UPDATE student_summaries SET lecturer_note=?, note_updated_at=? WHERE student_id=?')
+      .run(lecturer_note, now, studentId);
+  } else {
+    db.prepare(`INSERT INTO student_summaries (id,student_id,group_id,lecturer_note,note_updated_at) VALUES (?,?,?,?,?)`)
+      .run(uuidv4(), studentId, access.id, lecturer_note, now);
+  }
+  res.json({ ok: true });
+});
+
+// ── Helpers для промпта ───────────────────────────────────────
+function buildSummarySystemPrompt(){
+  return `Ти — досвідчений лектор-практик з логістики та експедиційної діяльності, який оцінює роботу студента-початківця.
+
+Студент завершив 5-денну симуляцію роботи експедитора у компанії Docaa. Він обробляв 8 листів від замовників (різні країни ЄС, різні типи вантажу), шукав перевізників, торгувався, оформлював документи.
+
+Твоя задача — написати РЕЗЮМЕ ЙОГО РОБОТИ для лектора. Не для студента — для викладача який потім проведе індивідуальний розбір.
+
+ФОРМАТ РЕЗЮМЕ (строго дотримуйся):
+
+👤 [Ім'я] ([email]) · Група: [назва]
+📅 [дата старту] — [дата завершення]
+
+📊 ПІДСУМОК
+Прибуток: €X · Рейсів закрито: X/8 · Загальна оцінка: X.X/10
+
+✅ СИЛЬНІ СТОРОНИ
+• [3-5 пунктів, кожен з конкретним фактом і номером рейсу]
+
+⚠️ СЛАБКІ СТОРОНИ
+• [3-5 пунктів, конкретно: що зробив не так, чому це проблема, в якому рейсі]
+
+🌟 ТОП-3 РЕЙСИ ЗА ПРИБУТКОМ
+1. #X — [замовник] — €X (маржа X%)
+2. #X — [замовник] — €X (маржа X%)
+3. #X — [замовник] — €X (маржа X%)
+
+📈 6 КРИТЕРІЇВ ОЦІНКИ
+1. Швидкість відповідей: X/10 — [коротке пояснення]
+2. Якість торгу з замовниками: X/10 — [пояснення]
+3. Якість торгу з перевізниками: X/10 — [пояснення]
+4. Правильність документів: X/10 — [пояснення]
+5. Управління інцидентами: X/10 — [пояснення]
+6. Прибутковість: X/10 — [пояснення]
+
+💬 ЦИТАТА ДНЯ (опційно — лише якщо є реально показовий приклад зі студентського повідомлення, що ілюструє його сильну чи слабку сторону. Якщо нічого яскравого нема — ПРОПУСТИ цей блок повністю.)
+"[коротка цитата]" — [контекст і чому це важливо]
+
+🎓 РЕКОМЕНДАЦІЇ
+• [2-4 конкретні поради для наступного разу]
+
+ПРАВИЛА:
+- Пиши українською, професійно але без зайвої формалістики
+- Конкретика > загальні фрази. Замість "погано торгувався" → "на рейсі #03 (SC Roma SRL) погодився на €110 без зустрічної пропозиції — за нашою оцінкою можна було отримати €125"
+- НЕ хвали без причини. Якщо студент справді щось зробив погано — пиши прямо.
+- Бали 1-3 = погано, 4-6 = посередньо, 7-8 = добре, 9-10 = відмінно. Не завищуй.
+- Не пиши воду на кшталт "удачі у подальшій кар'єрі" — це резюме для розбору, не привітання.
+- Загальна оцінка = середнє з 6 критеріїв, округлене до десятих.
+- Якщо студент НЕ закрив усі 8 рейсів — це окремо зазнач у слабких сторонах і знизь "Прибутковість".
+- НЕ вигадуй факти яких немає в даних. Якщо немає інформації по якомусь критерію — постав 5/10 і напиши "недостатньо даних".
+- Цитату давай ТІЛЬКИ якщо знайшов реально вартий уваги приклад. Не вигадуй просто щоб заповнити блок.
+
+Довжина резюме: 300-500 слів. Не більше.`;
+}
+
+function buildSummaryUserPrompt(user, group, session, metrics, ordersDetail){
+  const lines = [];
+  lines.push('ДАНІ СТУДЕНТА:');
+  lines.push(`Ім'я: ${user.name}`);
+  lines.push(`Email: ${user.email}`);
+  lines.push(`Група: ${group.name}`);
+  lines.push(`Дата старту: ${session.start_date || '—'}`);
+  lines.push(`Дата завершення: ${new Date().toLocaleDateString('uk-UA')}`);
+  lines.push('');
+  lines.push('ОБЧИСЛЕНІ МЕТРИКИ:');
+  lines.push(`- Прибуток (маржа): €${metrics.profit}`);
+  lines.push(`- Загальна виручка: €${metrics.revenue}`);
+  lines.push(`- Рейсів закрито: ${metrics.closed}/8`);
+  lines.push(`- Середня маржа %: ${metrics.avg_margin_pct}%`);
+  lines.push(`- Імейл-тредів вели: ${metrics.email_threads}`);
+  lines.push(`- Чатів з перевізниками: ${metrics.carrier_chats}`);
+  lines.push(`- Документів сформовано (приблизно): ${metrics.docs_count}`);
+  lines.push('');
+  lines.push('═══════════════════════════════════════');
+  lines.push('8 РЕЙСІВ ДЕТАЛЬНО');
+  lines.push('═══════════════════════════════════════');
+
+  ordersDetail.forEach((o, idx) => {
+    lines.push('');
+    lines.push(`═══ РЕЙС #${idx+1} (${o.code}): ${o.subject || '(без теми)'} ═══`);
+    lines.push(`Замовник: ${o.company || '—'} (${o.country || '—'}, ${o.from || '—'})`);
+    lines.push(`Напрямок: ${o.dirs.join(' → ')}`);
+    lines.push(`Тип ТЗ: ${o.vehicle || '—'}`);
+    lines.push(`Мова листа: ${o.lang}`);
+    lines.push('');
+    lines.push('ЛИСТ ВІД ЗАМОВНИКА:');
+    lines.push((o.body || '(порожньо)').slice(0, 1500));
+    lines.push('');
+    lines.push('ПЕРЕПИСКА З ЗАМОВНИКОМ:');
+    if (o.email_messages.length === 0) {
+      lines.push('(студент не відписав замовнику)');
+    } else {
+      o.email_messages.forEach(m => {
+        const who = m.role === 'user' ? '👤 СТУДЕНТ' : '✉️ ЗАМОВНИК';
+        lines.push(`${who}: ${(m.content || '').slice(0, 600)}`);
+      });
+    }
+    lines.push('');
+    lines.push(`ПЕРЕВІЗНИК: ${o.carrier_name || '(не знайдено)'}`);
+    lines.push(`Ціна продажу замовнику: ${o.client_freight ? '€'+o.client_freight : '—'}`);
+    lines.push(`Ціна купівлі в перевізника: ${o.carrier_freight ? '€'+o.carrier_freight : '—'}`);
+    lines.push(`Маржа: ${o.margin ? '€'+o.margin+' ('+o.margin_pct+'%)' : '—'}`);
+    lines.push('');
+    lines.push('ПЕРЕПИСКА З ПЕРЕВІЗНИКОМ:');
+    if (o.carrier_messages.length === 0) {
+      lines.push('(чат не відкрито)');
+    } else {
+      o.carrier_messages.forEach(m => {
+        const who = m.role === 'user' ? '👤 СТУДЕНТ' : '🚚 ПЕРЕВІЗНИК';
+        lines.push(`${who}: ${(m.content || '').slice(0, 600)}`);
+      });
+    }
+    lines.push('');
+    lines.push(`СТАТУС: ${o.status}`);
+  });
+
+  lines.push('');
+  lines.push('═══════════════════════════════════════');
+  lines.push('Тепер напиши резюме за форматом, який вказано в системній інструкції.');
+
+  return lines.join('\n');
 }
 
 module.exports = router;
