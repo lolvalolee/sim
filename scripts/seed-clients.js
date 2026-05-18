@@ -52,6 +52,7 @@ const vat = {
   TR: () => 'TR ' + randInt(1000000000, 9999999999),
   GR: () => 'EL' + randInt(100000000, 999999999),
   MD: () => 'MD ' + randInt(1000000, 9999999),
+  UA: () => randInt(30000000, 49999999).toString(),  // ЄДРПОУ — 8 цифр
 };
 
 const phone = {
@@ -84,6 +85,19 @@ const phone = {
   TR: () => '+90 ' + randInt(5000000000, 5999999999),
   GR: () => '+30 ' + randInt(6900000000, 6999999999),
   MD: () => '+373 ' + randInt(60000000, 79999999),
+  UA: () => {
+    // Мобільні (3 цифри код) і міські (2-3 цифри код), всього 9 цифр після +380
+    const mob = Math.random() < 0.7;
+    if (mob) {
+      const code = pick(['44','67','97','50','63','98','99','73','93','95','66','68']);
+      return '+380 ' + code + ' ' + randInt(1000000, 9999999);
+    }
+    const code = pick(['32','342','372','322','362','3522','382']);
+    const rest = 9 - code.length;
+    const max = Math.pow(10, rest) - 1;
+    const min = Math.pow(10, rest - 1);
+    return '+380 ' + code + ' ' + randInt(min, max);
+  },
 };
 
 function genPostcode(country){
@@ -96,6 +110,7 @@ function genPostcode(country){
     case 'PT': return randInt(1000,9999)+'-'+randInt(100,999);
     case 'SE': case 'NO': return randInt(100,999)+' '+randInt(10,99);
     case 'TR': return randInt(10000,99999).toString();
+    case 'UA': return randInt(10000,99999).toString();
     default: return randInt(10000,99999).toString();
   }
 }
@@ -131,6 +146,7 @@ const cities = {
   TR: ['Istanbul','Ankara','Izmir','Bursa','Antalya','Adana','Konya','Gaziantep'],
   GR: ['Athens','Thessaloniki','Patras','Larissa'],
   MD: ['Chișinău','Bălți','Tiraspol'],
+  UA: ['Львів','Київ','Одеса','Харків','Дніпро','Запоріжжя','Івано-Франківськ','Чернівці','Луцьк','Тернопіль','Рівне','Хмельницький','Вінниця','Ужгород','Полтава','Кременчук','Біла Церква','Житомир','Чернігів'],
 };
 
 const streetPatterns = {
@@ -163,6 +179,7 @@ const streetPatterns = {
   TR: ['{X} Cd. {N}', '{X} Sk. {N}', '{X} Bulvarı {N}'],
   GR: ['{X} {N}', 'Leoforos {X} {N}'],
   MD: ['Str. {X} {N}', 'bd. {X} {N}'],
+  UA: ['вул. {X} {N}', 'проспект {X} {N}', 'бульвар {X} {N}'],
 };
 
 const streetSamples = {
@@ -195,9 +212,8 @@ const streetSamples = {
   TR: ['Atatürk','İstiklal','Cumhuriyet','Bağdat','Barbaros','İnönü','Gazi','Sanayi','Bağlar','Çiçek','Lale'],
   GR: ['Ermou','Stadiou','Panepistimiou','Akadimias','Patission','Vasilissis Sofias','Athinas'],
   MD: ['Ștefan cel Mare','Mihai Eminescu','Industrială','Pușkin','București'],
+  UA: ['Шевченка','Грушевського','Бандери','Незалежності','Промислова','Логістична','Складська','Зелена','Городоцька','Стрийська','Замарстинівська','Хмельницького','Виговського','Сахарова','Чорновола','Героїв Майдану','Соборна','Київська','Львівська'],
 };
-
-const numericStreetNames = ['Industriestraße','Hauptstraße','Industrial Park','Industriezone','Park Industrial'];
 
 function street(country){
   const patterns = streetPatterns[country] || streetPatterns.DE;
@@ -268,6 +284,8 @@ const names = {
         last:['Papadopoulos','Nikolaou','Georgiou','Dimitriou','Papageorgiou']},
   MD: { first:['Ion','Mihail','Vasile','Dumitru'],
         last:['Popescu','Rusu','Cebotari','Lupu']},
+  UA: { first:['Сергій','Микола','Олександр','Петро','Іван','Володимир','Олег','Дмитро','Андрій','Богдан','Максим','Юрій','Тарас','Роман','Василь','Михайло','Анатолій','Ярослав','Ігор','Денис','Олена','Тетяна','Ірина','Оксана','Наталія','Катерина'],
+        last:['Гнатюк','Бойко','Коваленко','Шевченко','Мельник','Кравчук','Іваненко','Петренко','Стефанюк','Гриценко','Ткаченко','Бондаренко','Кравець','Олійник','Дяченко','Захарчук','Романюк','Литвин','Гончар','Сидоренко','Левченко','Тимченко','Юрченко','Демчук','Сердюк']},
 };
 
 // Бізнес-суфікси і шаблони назв
@@ -301,11 +319,48 @@ const suffixes = {
   TR: ['A.Ş.','Ltd. Şti.','LLC'],
   GR: ['A.E.','E.P.E.','O.E.'],
   MD: ['SRL','SA'],
+  UA: ['ТОВ','ПП','ФОП','ПрАТ','ТзОВ'],
 };
 
 const businessNouns = ['Logistik','Cargo','Trans','Spedition','Transport','Fracht','Forwarding','Shipping','Logistics','Group','Trading','Industries','Manufacturing','Distribution','Solutions','Services','Express','International'];
 
-function genCompanyName(country, lastName){
+// UA — реалістичні назви бізнесів за галузями
+const uaCompanyNames = [
+  // Агро
+  'Карпатський Агро','Зерноекспорт','Українська Олія','Соняшник-Експорт','Поділля-Агро','АгроТрейд Україна','Зерно-Імпекс','Полтавський АПК','АгроПродукт','Степова Нива',
+  // Меблі
+  'Карпатські Меблі','Лісовий Дім','Дубовий Двір','Меблі Захід','Світлий Дім','Затишок Меблі','Львівська Меблева Фабрика','Прикарпатські Меблі','Європейський Стиль',
+  // Текстиль / одяг
+  'Львівський Текстиль','Українська Шкіра','Чернівецький Швейний','Текстиль-Україна','Карпатська Сорочка','Одяг-Експорт','UkraineFashion','LWG Textile',
+  // Електроніка / IT-гаджети
+  'Електро-Захід','UkrTech Manufacturing','Інженерні Рішення','TechProduct UA','ЛьвівЕлектро','Полтава Електроніка',
+  // Металовироби / машинобуд
+  'Метал-Україна','Захід-Інструмент','Карпатський Метал','Точпром','Київський Машзавод','Дніпрометал','Сталь-Експорт',
+  // Харчова
+  'Молочна Долина','Карпатський Сир','Кондитер-Експорт','Українська Кава','Львівські Цукерки','Свіжак','Натурпродукт','Карпатський Мед',
+  // Будматеріали
+  'УкрБуд','Львівбудматеріал','Карпатський Камінь','Цегла Захід','БудМатеріал-Експорт','Деревообробка Захід',
+  // Хімія / Pharma
+  'УкрХім','Львівхім','Фарма-Експорт','Захід-Фарм','Косметика України',
+  // Логістика / транспортні / трейд
+  'Захід-Трейд','Karpathia Group','UA-Export','Транс-Імпекс','Карпатський Логістик','UkrLogistics','Western Trade UA','EuroUkraine',
+  // IT
+  'SoftServ UA','IT-Захід','Digital Ukraine',
+  // Інше
+  'Європейські Двері','Українські Стандарти','Захід-Імпорт','Зернотрейд','Спецтехніка-Захід','Адамант UA','Олімп-Експорт','Бескид Трейд'
+];
+
+function genCompanyName(country, lastName, firstName){
+  // ── UA — особлива форма «ТОВ Назва» / «ФОП Прізвище І.П.» ──
+  if (country === 'UA') {
+    const suf = pick(suffixes.UA);
+    if (suf === 'ФОП') {
+      const initial = firstName ? `${firstName[0]}.${lastName[0]}.` : pick(['С.І.','М.П.','А.В.','Д.О.','В.І.','П.С.','О.В.','Р.М.']);
+      return `ФОП ${lastName} ${initial}`;
+    }
+    return `${suf} «${pick(uaCompanyNames)}»`;
+  }
+
   const useSurname = Math.random() < 0.35;
   const suf = pick(suffixes[country] || ['Ltd']);
   if (useSurname) {
@@ -317,9 +372,14 @@ function genCompanyName(country, lastName){
 }
 
 function emailFromCompany(company, country){
-  const tld = {DE:'de',PL:'pl',CZ:'cz',SK:'sk',HU:'hu',AT:'at',NL:'nl',BE:'be',FR:'fr',IT:'it',ES:'es',PT:'pt',GB:'co.uk',IE:'ie',SE:'se',NO:'no',FI:'fi',DK:'dk',RO:'ro',BG:'bg',HR:'hr',SI:'si',LT:'lt',LV:'lv',EE:'ee',CH:'ch',TR:'com.tr',GR:'gr',MD:'md'}[country]||'eu';
+  const tld = {DE:'de',PL:'pl',CZ:'cz',SK:'sk',HU:'hu',AT:'at',NL:'nl',BE:'be',FR:'fr',IT:'it',ES:'es',PT:'pt',GB:'co.uk',IE:'ie',SE:'se',NO:'no',FI:'fi',DK:'dk',RO:'ro',BG:'bg',HR:'hr',SI:'si',LT:'lt',LV:'lv',EE:'ee',CH:'ch',TR:'com.tr',GR:'gr',MD:'md',UA:'com.ua'}[country]||'eu';
+
   // Транслітерація національних літер
   const translit = {
+    // Кирилиця (для UA)
+    'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye','ж':'zh','з':'z','и':'y','і':'i','ї':'yi','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ь':'','ю':'yu','я':'ya',
+    'А':'a','Б':'b','В':'v','Г':'h','Ґ':'g','Д':'d','Е':'e','Є':'ye','Ж':'zh','З':'z','И':'y','І':'i','Ї':'yi','Й':'y','К':'k','Л':'l','М':'m','Н':'n','О':'o','П':'p','Р':'r','С':'s','Т':'t','У':'u','Ф':'f','Х':'kh','Ц':'ts','Ч':'ch','Ш':'sh','Щ':'shch','Ь':'','Ю':'yu','Я':'ya',
+    // EU літери
     'ä':'ae','ö':'oe','ü':'ue','ß':'ss',
     'á':'a','à':'a','â':'a','ã':'a',
     'é':'e','è':'e','ê':'e','ë':'e',
@@ -327,21 +387,30 @@ function emailFromCompany(company, country){
     'ó':'o','ò':'o','ô':'o','õ':'o',
     'ú':'u','ù':'u','û':'u',
     'ç':'c','ñ':'n',
-    'ą':'a','ć':'c','ę':'e','ł':'l','ń':'n','ś':'s','ź':'z','ż':'z','ó':'o',
+    'ą':'a','ć':'c','ę':'e','ł':'l','ń':'n','ś':'s','ź':'z','ż':'z',
     'č':'c','ď':'d','ě':'e','ň':'n','ř':'r','š':'s','ť':'t','ů':'u','ý':'y','ž':'z',
-    'ş':'s','ı':'i','ğ':'g','ç':'c','ö':'o','ü':'u',
+    'ş':'s','ı':'i','ğ':'g',
     'ő':'o','ű':'u',
     'å':'a','ø':'o','æ':'ae',
-    'ǎ':'a','ǐ':'i','ǒ':'o',
-    'ț':'t','ș':'s','ă':'a','î':'i','â':'a',
+    'ț':'t','ș':'s','ă':'a',
     'ī':'i','ē':'e','ā':'a','ū':'u','ļ':'l','ņ':'n','ķ':'k','ģ':'g',
-    'ą':'a','ę':'e','į':'i','ų':'u','ė':'e',
+    'į':'i','ų':'u','ė':'e',
   };
-  const base = company.toLowerCase()
-    .replace(/[äöüßáàâãéèêëíìîïóòôõúùûçñąćęłńśźżčďěňřšťůýžşığőűåøæțșăī ē ā ū ļ ņ ķ ģ įųė]/gu, m => translit[m] || m)
-    .replace(/[^a-z0-9]+/g,'-')
-    .replace(/^-+|-+$/g,'')
-    .replace(/-+/g,'-')
+
+  let base = company.toLowerCase();
+  // Для UA-компаній прибираємо префікс юрформи перед транслітом
+  if (country === 'UA') {
+    base = base.replace(/^(тов|тзов|прат|пп|фоп|пат|пп)\s*[«"]?/, '').replace(/[«»"]/g, '').trim();
+  }
+  // Покрокова транслітерація (працює і для кирилиці, і для діакритики)
+  let out = '';
+  for (const ch of base) {
+    out += (translit[ch] !== undefined) ? translit[ch] : ch;
+  }
+  base = out
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
     .split('-').filter(s => s.length >= 2).slice(0,2).join('-');
   return `office@${base || 'company'}.${tld}`;
 }
@@ -351,10 +420,14 @@ function genClient(country){
   const last = pick(nm.last);
   const first = pick(nm.first);
   const person = `${first} ${last}`;
-  const company = genCompanyName(country, last);
+  const company = genCompanyName(country, last, first);
   const city = pick(cities[country] || ['Berlin']);
   const postcode = genPostcode(country);
-  const addr = `${street(country)}, ${postcode} ${city}`;
+  // UA — формат адреси: "м. Львів, вул. Шевченка 12, 79000"
+  // EU — формат: "Bahnhofstraße 12, 60329 Frankfurt"
+  const addr = (country === 'UA')
+    ? `м. ${city}, ${street(country)}, ${postcode}`
+    : `${street(country)}, ${postcode} ${city}`;
   const vatGen = vat[country] || vat.DE;
   const phoneGen = phone[country] || phone.DE;
   const businessType = pick(['shipper','manufacturer','forwarder','trader']);
@@ -374,39 +447,29 @@ function genClient(country){
   };
 }
 
-// План: 80 замовників розподілені за країнами листів
-// Більше для популярних напрямків
+// План: ~110 замовників, 70% українські (експорт з України) + 30% EU (імпорт)
 const distribution = [
-  ['DE', 12],
-  ['PL', 8],
-  ['NL', 5],
-  ['BE', 4],
-  ['FR', 5],
-  ['IT', 6],
-  ['ES', 4],
-  ['CZ', 4],
-  ['SK', 4],
-  ['HU', 4],
-  ['AT', 4],
-  ['RO', 4],
-  ['BG', 2],
-  ['LT', 2],
-  ['LV', 2],
-  ['EE', 1],
-  ['SE', 2],
-  ['NO', 1],
-  ['FI', 1],
-  ['DK', 1],
-  ['GB', 3],
-  ['IE', 1],
-  ['PT', 1],
-  ['HR', 1],
-  ['SI', 1],
-  ['CH', 1],
-  ['TR', 3],
-  ['GR', 1],
-  ['MD', 1],
-  ['PT', 1],
+  // ── UA: 77 замовників (агро, мебель, текстиль, металовироби, харчова, IT) ──
+  ['UA', 77],
+
+  // ── EU + інші: 33 замовники ──
+  ['DE', 6],
+  ['PL', 4],
+  ['NL', 2],
+  ['IT', 3],
+  ['FR', 2],
+  ['CZ', 2],
+  ['SK', 2],
+  ['HU', 2],
+  ['RO', 2],
+  ['AT', 1],
+  ['BE', 1],
+  ['ES', 1],
+  ['LT', 1],
+  ['GB', 1],
+  ['TR', 1],
+  ['BG', 1],
+  ['SE', 1],
 ];
 
 const all = [];
