@@ -252,7 +252,7 @@ module.exports = router;
 // GET /api/student/carriers — all active carriers
 router.get('/carriers', STU, (req, res) => {
   const carriers = db.prepare(
-    'SELECT id,name,person,phone,dirs,vehicle_types,reliability,availability,personality,nationality FROM carriers WHERE active=1 ORDER BY nationality,name'
+    'SELECT id,name,person,phone,dirs,vehicle_types,reliability,availability,personality,nationality FROM carriers WHERE active=1 AND COALESCE(for_exchange,0)=0 ORDER BY nationality,name'
   ).all();
   res.json(carriers);
 });
