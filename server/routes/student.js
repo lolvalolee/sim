@@ -269,63 +269,112 @@ router.get('/carriers', STU, (req, res) => {
   ).all();
   res.json(carriers);
 });
+// ─── CONFIRMATION (Підтвердження угоди) ─────────────────────────────
+// Дві окремі точки входу:
+//   POST /orders/:letterId/confirm-client   — з модалки у чаті з замовником
+//   POST /chats/:carrierId/confirm-carrier  — з модалки у чаті з перевізником
+//
+// Логіка для обох:
+//   1. Студент вписав у формі: рейс (для перевізника), ціну, дату
+//   2. AI читає переписку і перевіряє чи дані відповідають обговореному
+//   3. Якщо approve → стан рейсу оновлюється, AI пише підтвердження
+//   4. Якщо reject → AI пише уточнюючу репліку, угода НЕ закривається
+//      (модалка залишається відкритою на клієнті щоб студент виправив)
 
-// ─── CLIENT REQUEST CONFIRMATION (Підтвердити рейс) ───────────────
-// Логіка:
-//   1. Студент натискає "Підтвердити рейс" у чаті з замовником
-//   2. Сервер запитує AI: чи переписка містить домовленості?
-//   3. Якщо так → генерується заявка (40/40/10/10 рандом) і додається у тред як повідомлення з attachment
-//   4. Якщо ні → AI пише уточнюючу відповідь без attachment
-//   5. Поле order_progress.application_sent блокує повторне натискання
 const appBuilder = require('../utils/application-builder');
-const confirmPrompt = require('../utils/confirm-prompt');
+const agreementChecker = require('../utils/agreement-checker');
 
-router.post('/orders/:letterId/confirm', STU, async (req, res) => {
+// Helper: запис в order_events (журнал)
+function logOrderEvent(sessionId, letterId, type, payload){
+  try {
+    db.prepare('INSERT INTO order_events (id,session_id,letter_id,type,payload) VALUES (?,?,?,?,?)')
+      .run(uuidv4(), sessionId, letterId, type, JSON.stringify(payload || {}));
+  } catch(e) {
+    console.error('logOrderEvent failed:', e.message);
+  }
+}
+
+// Helper: обчислення нового стану рейсу
+// Залежить від client_agreed_at і carrier_agreed_at
+function computeOrderState(op){
+  if (!op) return 'new';
+  const hasClient = !!op.client_agreed_at;
+  const hasCarrier = !!op.carrier_agreed_at;
+
+  if (hasClient && hasCarrier) {
+    // Перевіряємо чи був перетрейд → closed_changed
+    if ((op.renegotiated_count || 0) > 0) return 'closed_changed';
+    return 'closed';
+  }
+  if (hasClient) return 'client_agreed';
+  if (hasCarrier) return 'carrier_agreed';
+
+  // Якщо є переписка але домовленостей нема
+  if (op.client_freight || op.carrier_id) return 'in_progress';
+
+  return 'new';
+}
+
+// ─── ПІДТВЕРДЖЕННЯ З ЗАМОВНИКОМ ───
+// Body: { price: number, date: "DD.MM.YYYY" }
+router.post('/orders/:letterId/confirm-client', STU, async (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
   if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
 
   const letterId = req.params.letterId;
+  const { price, date } = req.body || {};
+
+  if (!price || isNaN(parseFloat(price))) return res.status(400).json({ error: 'invalid_price' });
+  if (!date || !/^\d{2}\.\d{2}\.\d{4}$/.test(date)) return res.status(400).json({ error: 'invalid_date' });
 
   // Завантажуємо лист
   const letter = db.prepare('SELECT * FROM letters WHERE id=?').get(letterId);
-  if (!letter) return res.status(404).json({ error: 'Letter not found' });
+  if (!letter) return res.status(404).json({ error: 'letter_not_found' });
 
-  // Перевірка: чи заявка вже надіслана? (блокування повторного натискання)
-  const op = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
-  if (op && op.application_sent) {
-    return res.status(409).json({ error: 'already_confirmed', message: 'Заявку вже отримано від замовника.' });
-  }
-
-  // Замовник з БД
+  // Замовник
   const client = letter.client_id ? db.prepare('SELECT * FROM clients WHERE id=?').get(letter.client_id) : null;
 
-  // Завантажуємо тред email
+  // Тред email
   const thread = db.prepare('SELECT * FROM email_threads WHERE session_id=? AND letter_id=?').get(session.id, letterId);
   const messages = thread ? JSON.parse(thread.messages || '[]') : [];
 
-  // Якщо немає взагалі жодного повідомлення від студента — відмовляємо
+  // Має бути хоч одне повідомлення від студента
   const studentMsgs = messages.filter(m => m.role === 'student' || m.role === 'user');
   if (studentMsgs.length === 0) {
     return res.status(400).json({ error: 'no_conversation', message: 'Спочатку напишіть замовнику і обговоріть умови.' });
   }
 
-  // ─── Виклик AI для перевірки контексту ───
-  const lang = letter.lang || 'uk';
-  const systemPrompt = confirmPrompt.buildConfirmCheckSystemPrompt(letter, client, lang);
+  // Будуємо рядок переписки для AI
+  const chatHistory = messages.filter(m => !m.loading).map(m => {
+    const role = (m.role === 'student' || m.role === 'user') ? 'Експедитор' : 'Замовник';
+    return `${role}: ${m.text || m.content || ''}`;
+  }).join('\n');
 
-  // Будуємо історію для AI з тих повідомлень що вже є в треді
-  const aiMessages = messages.filter(m => !m.loading).map(m => ({
-    role: (m.role === 'student' || m.role === 'user') ? 'user' : 'assistant',
-    content: m.text || m.content || '',
-  }));
-  // Додаємо системне повідомлення про натискання Confirm
-  aiMessages.push({
-    role: 'user',
-    content: '[Студент натиснув кнопку "Підтвердити рейс". Проаналізуй переписку і дай рішення у форматі JSON.]'
+  const route = (() => {
+    try {
+      const dirs = JSON.parse(letter.dirs || '[]');
+      return dirs.join(' → ');
+    } catch(e) { return ''; }
+  })();
+
+  const originalLetter = {
+    route,
+    proposedPrice: letter.freight_fixed ? letter.freight_amount : (letter.freight_min || letter.freight_amount || ''),
+    loadDate: '', // дата вираховується відносно симуляції — для AI не критично
+  };
+
+  const prompt = agreementChecker.buildClientCheckPrompt({
+    chatHistory,
+    route: route || '?',
+    price: parseFloat(price),
+    date,
+    clientName: client?.person || letter.from_name || 'Замовник',
+    originalLetter,
   });
 
-  let aiDecision;
+  // Виклик AI
+  let aiVerdict;
   try {
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -336,69 +385,54 @@ router.post('/orders/:letterId/confirm', STU, async (req, res) => {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 800,
-        system: systemPrompt,
-        messages: aiMessages,
+        max_tokens: 600,
+        system: prompt,
+        messages: [{ role: 'user', content: '[Перевір переписку і дай відповідь у JSON]' }],
       }),
     });
     if (!aiRes.ok) {
       const txt = await aiRes.text();
-      console.error('AI confirm error:', txt);
-      return res.status(502).json({ error: 'ai_error', details: txt.slice(0,200) });
+      return res.status(502).json({ error: 'ai_error', details: txt.slice(0, 200) });
     }
     const data = await aiRes.json();
     const aiText = (data.content && data.content[0] && data.content[0].text) || '';
-
-    // Витягуємо JSON з відповіді (на випадок якщо AI обернув його у markdown)
-    const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.error('No JSON in AI response:', aiText);
-      return res.status(502).json({ error: 'ai_no_json' });
-    }
-    aiDecision = JSON.parse(jsonMatch[0]);
+    aiVerdict = agreementChecker.parseAiVerdict(aiText);
   } catch (e) {
-    console.error('Confirm AI failed:', e);
-    return res.status(502).json({ error: 'ai_unavailable', details: String(e).slice(0,200) });
+    return res.status(502).json({ error: 'ai_unavailable', details: String(e).slice(0, 200) });
   }
 
-  const decision = aiDecision.decision || 'reject';
-  const replyText = aiDecision.reply_message || 'Дякую, давайте обговоримо детальніше.';
-  const agreedPrice = aiDecision.agreed_price_eur || null;
+  const { verdict, mismatches, reply_message } = aiVerdict;
+  const isApprove = verdict === 'approve';
 
-  // Додаємо нове повідомлення від замовника у тред
+  // Додаємо повідомлення замовника у тред
   const now = new Date().toISOString();
   const newMsg = {
-    role: 'client',
-    text: replyText,
+    role: 'ai',
+    text: reply_message || (isApprove ? 'Підтверджую. Готую заявку.' : 'Уточніть будь ласка.'),
     timestamp: now,
   };
 
-  // ─── Якщо APPROVE — генеруємо заявку ───
-  if (decision === 'approve') {
+  // Якщо APPROVE — генеруємо заявку (вкладення або текст)
+  if (isApprove) {
     const variant = appBuilder.pickVariant();
-    const vehicleScenario = appBuilder.pickVehicleScenario();
-
-    // Будуємо повні дані заявки
     let applicationData = appBuilder.buildApplicationData({
       letter,
       client,
       messages,
       simulationDate: session.start_date,
-      vehicleScenario,
+      vehicleScenario: 'asked_before',
     });
-    // Якщо AI знайшов ціну а в attempt не була визначена — підставляємо
-    if (agreedPrice && !applicationData.freight.amount_eur) {
-      applicationData.freight.amount_eur = agreedPrice;
-    }
 
-    // Якщо incomplete — застосовуємо пропуски
+    // Підставляємо узгоджену з форми ціну
+    applicationData.freight.amount_eur = parseFloat(price);
+    applicationData.loading.date = date;
+
     let missingFields = [];
     if (variant === 'incomplete_attachment' || variant === 'incomplete_text') {
       missingFields = appBuilder.pickMissingFields();
       applicationData = appBuilder.applyMissingFields(applicationData, missingFields);
     }
 
-    // Додаємо attachment до повідомлення
     newMsg.attachment = {
       type: 'application',
       variant,
@@ -406,15 +440,13 @@ router.post('/orders/:letterId/confirm', STU, async (req, res) => {
       missing_fields: missingFields,
     };
 
-    // Якщо variant text/incomplete_text — текст заявки в content повідомлення
     if (variant === 'text' || variant === 'incomplete_text') {
-      newMsg.text = replyText + '\n\n' + renderApplicationAsText(applicationData, missingFields);
+      newMsg.text = (reply_message ? reply_message + '\n\n' : '') + renderApplicationAsText(applicationData, missingFields);
     }
   }
 
   // Зберігаємо в email_threads
   messages.push(newMsg);
-
   if (thread) {
     db.prepare("UPDATE email_threads SET messages=?, updated_at=datetime('now') WHERE id=?")
       .run(JSON.stringify(messages), thread.id);
@@ -423,45 +455,259 @@ router.post('/orders/:letterId/confirm', STU, async (req, res) => {
       .run(uuidv4(), session.id, letterId, JSON.stringify(messages));
   }
 
-  // ─── Якщо APPROVE — зберігаємо стан в order_progress ───
-  if (decision === 'approve') {
+  // Якщо APPROVE — оновлюємо order_progress і журнал
+  if (isApprove) {
+    const opExists = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
     const attachment = newMsg.attachment;
-    const opExists = db.prepare('SELECT id FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
 
     if (opExists) {
       db.prepare(`UPDATE order_progress SET
-        application_sent=1, application_data=?, application_variant=?,
-        application_missing=?, application_sent_at=?,
-        vehicle_asked_by_client=?, confirm_blocked=1,
-        client_freight=COALESCE(client_freight, ?),
-        status=CASE WHEN status='new' THEN 'work' ELSE status END
+        application_sent=1,
+        application_data=?,
+        application_variant=?,
+        application_missing=?,
+        application_sent_at=?,
+        confirm_blocked=1,
+        client_agreed_price=?,
+        client_agreed_date=?,
+        client_agreed_at=datetime('now'),
+        client_freight=?
         WHERE id=?`)
         .run(
           JSON.stringify(attachment.data),
           attachment.variant,
           JSON.stringify(attachment.missing_fields || []),
-          new Date().toISOString(),
-          (appBuilder.pickVehicleScenario === undefined || attachment.data.vehicle_data) ? 1 : 0,
-          agreedPrice,
+          now,
+          parseFloat(price),
+          date,
+          parseFloat(price),
           opExists.id
         );
+      // Обчислюємо новий state
+      const fresh = db.prepare('SELECT * FROM order_progress WHERE id=?').get(opExists.id);
+      const newState = computeOrderState(fresh);
+      db.prepare('UPDATE order_progress SET state=? WHERE id=?').run(newState, opExists.id);
     } else {
+      const newId = uuidv4();
+      const newState = 'client_agreed'; // лише клієнт, перевізника ще нема
       db.prepare(`INSERT INTO order_progress
-        (id,session_id,letter_id,status,client_freight,application_sent,application_data,application_variant,application_missing,application_sent_at,confirm_blocked)
-        VALUES (?,?,?,?,?,1,?,?,?,?,1)`)
-        .run(uuidv4(), session.id, letterId, 'work',
-             agreedPrice,
+        (id,session_id,letter_id,status,state,client_freight,
+         application_sent,application_data,application_variant,application_missing,
+         application_sent_at,confirm_blocked,
+         client_agreed_price,client_agreed_date,client_agreed_at)
+        VALUES (?,?,?,?,?,?,1,?,?,?,?,1,?,?,datetime('now'))`)
+        .run(newId, session.id, letterId, 'work', newState, parseFloat(price),
              JSON.stringify(attachment.data),
              attachment.variant,
              JSON.stringify(attachment.missing_fields || []),
-             new Date().toISOString());
+             now,
+             parseFloat(price),
+             date);
     }
+
+    logOrderEvent(session.id, letterId, 'client_agreed', {
+      price: parseFloat(price),
+      date,
+      route,
+    });
+  } else {
+    // reject — у журнал теж пишемо для дебагу
+    logOrderEvent(session.id, letterId, 'client_confirm_rejected', {
+      verdict,
+      mismatches,
+      attempted_price: parseFloat(price),
+      attempted_date: date,
+    });
   }
 
   res.json({
-    decision,
+    verdict,
+    mismatches: mismatches || [],
     message: newMsg,
-    application_sent: decision === 'approve',
+    approved: isApprove,
+  });
+});
+
+// ─── ПІДТВЕРДЖЕННЯ З ПЕРЕВІЗНИКОМ ───
+// Body: { letterId: string, price: number, date: "DD.MM.YYYY" }
+router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
+
+  const carrierId = req.params.carrierId;
+  const { letterId, price, date } = req.body || {};
+
+  if (!letterId) return res.status(400).json({ error: 'letter_required' });
+  if (!price || isNaN(parseFloat(price))) return res.status(400).json({ error: 'invalid_price' });
+  if (!date || !/^\d{2}\.\d{2}\.\d{4}$/.test(date)) return res.status(400).json({ error: 'invalid_date' });
+
+  // Завантажуємо перевізника
+  const carrier = db.prepare('SELECT * FROM carriers WHERE id=?').get(carrierId);
+  if (!carrier) return res.status(404).json({ error: 'carrier_not_found' });
+
+  // Завантажуємо лист (рейс на який підтверджуємо)
+  const letter = db.prepare('SELECT * FROM letters WHERE id=?').get(letterId);
+  if (!letter) return res.status(404).json({ error: 'letter_not_found' });
+
+  // Тред чату з перевізником
+  const chat = db.prepare('SELECT * FROM carrier_chats WHERE session_id=? AND carrier_id=?').get(session.id, carrierId);
+  const messages = chat ? JSON.parse(chat.messages || '[]') : [];
+
+  // Має бути хоч одне повідомлення від студента
+  const studentMsgs = messages.filter(m => m.role === 'student' || m.role === 'user');
+  if (studentMsgs.length === 0) {
+    return res.status(400).json({ error: 'no_conversation', message: 'Спочатку напишіть перевізнику.' });
+  }
+
+  // Будуємо переписку
+  const chatHistory = messages.filter(m => !m.loading).map(m => {
+    const role = (m.role === 'student' || m.role === 'user') ? 'Експедитор' : 'Перевізник';
+    return `${role}: ${m.text || m.content || ''}`;
+  }).join('\n');
+
+  const route = (() => {
+    try {
+      const dirs = JSON.parse(letter.dirs || '[]');
+      return dirs.join(' → ');
+    } catch(e) { return ''; }
+  })();
+
+  const prompt = agreementChecker.buildCarrierCheckPrompt({
+    chatHistory,
+    route: route || '?',
+    price: parseFloat(price),
+    date,
+    carrierName: carrier.person || carrier.name || 'Перевізник',
+  });
+
+  // Виклик AI
+  let aiVerdict;
+  try {
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 600,
+        system: prompt,
+        messages: [{ role: 'user', content: '[Перевір переписку і дай відповідь у JSON]' }],
+      }),
+    });
+    if (!aiRes.ok) {
+      const txt = await aiRes.text();
+      return res.status(502).json({ error: 'ai_error', details: txt.slice(0, 200) });
+    }
+    const data = await aiRes.json();
+    const aiText = (data.content && data.content[0] && data.content[0].text) || '';
+    aiVerdict = agreementChecker.parseAiVerdict(aiText);
+  } catch (e) {
+    return res.status(502).json({ error: 'ai_unavailable', details: String(e).slice(0, 200) });
+  }
+
+  const { verdict, mismatches, reply_message } = aiVerdict;
+  const isApprove = verdict === 'approve';
+
+  // Додаємо повідомлення перевізника у чат
+  const now = new Date().toISOString();
+  const newMsg = {
+    role: 'ai',
+    text: reply_message || (isApprove ? 'Підтверджую угоду.' : 'Уточніть будь ласка.'),
+    timestamp: now,
+  };
+  messages.push(newMsg);
+
+  // Зберігаємо чат
+  if (chat) {
+    db.prepare("UPDATE carrier_chats SET messages=?, deal_status=?, updated_at=datetime('now') WHERE id=?")
+      .run(JSON.stringify(messages), isApprove ? 'confirmed' : (chat.deal_status || 'talk'), chat.id);
+  } else {
+    db.prepare("INSERT INTO carrier_chats (id,session_id,carrier_id,messages,deal_status) VALUES (?,?,?,?,?)")
+      .run(uuidv4(), session.id, carrierId, JSON.stringify(messages), isApprove ? 'confirmed' : 'talk');
+  }
+
+  // Якщо APPROVE — оновлюємо order_progress
+  if (isApprove) {
+    const opExists = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
+
+    if (opExists) {
+      // Перевіряємо чи цей рейс уже мав перевізника → перетрейд
+      const isRenegotiation = !!opExists.carrier_id && opExists.carrier_id !== carrierId;
+      const prevCarrierId = isRenegotiation ? opExists.carrier_id : null;
+
+      db.prepare(`UPDATE order_progress SET
+        carrier_id=?,
+        carrier_freight=?,
+        carrier_agreed_price=?,
+        carrier_agreed_date=?,
+        carrier_agreed_at=datetime('now'),
+        renegotiated_count=COALESCE(renegotiated_count,0)+?,
+        prev_carrier_id=COALESCE(?,prev_carrier_id)
+        WHERE id=?`)
+        .run(
+          carrierId,
+          parseFloat(price),
+          parseFloat(price),
+          date,
+          isRenegotiation ? 1 : 0,
+          prevCarrierId,
+          opExists.id
+        );
+
+      const fresh = db.prepare('SELECT * FROM order_progress WHERE id=?').get(opExists.id);
+      const newState = computeOrderState(fresh);
+      db.prepare('UPDATE order_progress SET state=? WHERE id=?').run(newState, opExists.id);
+
+      if (isRenegotiation) {
+        logOrderEvent(session.id, letterId, 'carrier_renegotiated', {
+          new_carrier_id: carrierId,
+          new_price: parseFloat(price),
+          new_date: date,
+          prev_carrier_id: prevCarrierId,
+        });
+      } else {
+        logOrderEvent(session.id, letterId, 'carrier_agreed', {
+          carrier_id: carrierId,
+          price: parseFloat(price),
+          date,
+        });
+      }
+    } else {
+      // Новий запис — лише перевізник (замовник ще не закритий)
+      const newId = uuidv4();
+      db.prepare(`INSERT INTO order_progress
+        (id,session_id,letter_id,status,state,
+         carrier_id,carrier_freight,carrier_agreed_price,carrier_agreed_date,carrier_agreed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`)
+        .run(newId, session.id, letterId, 'work', 'carrier_agreed',
+             carrierId, parseFloat(price), parseFloat(price), date);
+
+      logOrderEvent(session.id, letterId, 'carrier_agreed', {
+        carrier_id: carrierId,
+        price: parseFloat(price),
+        date,
+      });
+    }
+  } else {
+    logOrderEvent(session.id, letterId, 'carrier_confirm_rejected', {
+      verdict,
+      mismatches,
+      carrier_id: carrierId,
+      attempted_price: parseFloat(price),
+      attempted_date: date,
+    });
+  }
+
+  res.json({
+    verdict,
+    mismatches: mismatches || [],
+    message: newMsg,
+    approved: isApprove,
+    letterId,
   });
 });
 

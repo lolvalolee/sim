@@ -100,6 +100,12 @@ function buildApplicationData({ letter, client, messages, simulationDate, vehicl
     } catch(e){ loadDateStr = ''; }
   }
 
+  // Тип авто — додаємо температуру для Реф
+  const vehicleType = pickVehicleTypeWithTemp(letter.vehicle || 'Тент', letter.cargo_description || '');
+
+  // Пункт перетину — обирається з контексту маршруту
+  const crossingPoint = pickCrossingPoint(letter.dirs);
+
   const data = {
     order_number: genOrderNumber(simulationDate),
     order_date: simulationDate || '',
@@ -115,8 +121,8 @@ function buildApplicationData({ letter, client, messages, simulationDate, vehicl
     docaa: { ...DOCAA_DETAILS },
 
     // Транспорт
-    vehicle: letter.vehicle || 'Тент',
-    vehicle_requirements: '',  // AI може додати
+    vehicle: vehicleType,
+    vehicle_requirements: '',
 
     // Вантаж
     cargo: {
@@ -139,9 +145,12 @@ function buildApplicationData({ letter, client, messages, simulationDate, vehicl
     customs_out: letter.customs_out_address || '',
     customs_in: letter.customs_in_address || '',
 
+    // Пункт перетину кордону
+    crossing_point: crossingPoint,
+
     // Розвантаження
     unloading: {
-      date: '',  // зазвичай вказують "+2 дні від завантаження"
+      date: '',
       address: letter.unload_address || '',
       contact_name: letter.unload_contact_name || '',
       contact_phone: letter.unload_contact_phone || '',
@@ -153,15 +162,77 @@ function buildApplicationData({ letter, client, messages, simulationDate, vehicl
       payment_terms: pickPaymentTerms(),
     },
 
-    // Авто/водій — заповнюється тільки якщо сценарій 'asked_before'
-    vehicle_data: vehicleScenario === 'asked_before' ? {
-      plate: '— уточнюється —',
-      driver_name: '— уточнюється —',
-      driver_phone: '— уточнюється —',
-    } : null,
+    // Авто/водій — за PDF діалогами замовник ЗАВЖДИ залишає ці поля порожніми
+    // студент вписує сам після того як домовиться з перевізником
+    vehicle_data: {
+      plate: '',
+      driver_name: '',
+      driver_phone: '',
+    },
   };
 
   return data;
+}
+
+// Тип авто з температурою для рефів
+function pickVehicleTypeWithTemp(vehicle, cargoDescription){
+  if (!/реф|ізотерм/i.test(vehicle)) return vehicle;
+
+  // Для рефів обираємо температуру за типом вантажу
+  const cargo = (cargoDescription || '').toLowerCase();
+
+  // М'ясо, риба, морепродукти, заморожене — глибока заморозка
+  if (/м['я]ясо|риб|морепродукт|заморож|ягоди|випіч|пельмен/i.test(cargo)) {
+    return vehicle + ' -18';
+  }
+  // Молочка, сир, шоколад, кондитерка — холод
+  if (/молоч|сир|шоколад|кондитер|йогурт|вершки/i.test(cargo)) {
+    return vehicle + ' -10';
+  }
+  // Свіже м'ясо охолоджене
+  if (/м['я]ясо охолоджен/i.test(cargo)) {
+    return vehicle + ' -15';
+  }
+  // За замовчуванням -10 для рефа
+  return vehicle + ' -10';
+}
+
+// Пункт перетину кордону
+function pickCrossingPoint(dirsJson){
+  let dirs = [];
+  try { dirs = typeof dirsJson === 'string' ? JSON.parse(dirsJson) : (dirsJson || []); } catch(e){}
+
+  const from = dirs[0];
+  const to = dirs[dirs.length-1];
+
+  // Для UA <-> EU: пункти перетину з/в Україну
+  const isUaInvolved = from === 'UA' || to === 'UA';
+  if (!isUaInvolved) return '';
+
+  // Інший бік (не UA)
+  const other = from === 'UA' ? to : from;
+
+  // Пункти за регіонами
+  const polishBorder = ['Шегині', 'Краківець', 'Рава-Руська', 'Грушів'];     // UA-PL
+  const slovakBorder = ['Ужгород', 'Малі Селменці'];                          // UA-SK
+  const hungarBorder = ['Чоп', 'Лужанка'];                                    // UA-HU
+  const romanianBorder = ['Порубне', 'Дякове'];                              // UA-RO
+  const moldovaBorder = ['Могилів-Подільський', 'Кучурган'];                  // UA-MD
+
+  // Маршрутизація: для країни визначаємо ймовірний пункт
+  const byCountry = {
+    PL: polishBorder,
+    DE: polishBorder, NL: polishBorder, BE: polishBorder, FR: polishBorder,
+    GB: polishBorder, IE: polishBorder, ES: polishBorder, PT: polishBorder,
+    DK: polishBorder, SE: polishBorder, NO: polishBorder, FI: polishBorder,
+    EE: polishBorder, LT: polishBorder, LV: polishBorder,
+    SK: slovakBorder, CZ: slovakBorder, AT: slovakBorder, CH: slovakBorder,
+    HU: hungarBorder, SI: hungarBorder, HR: hungarBorder, IT: hungarBorder,
+    RO: romanianBorder, BG: romanianBorder, GR: romanianBorder, TR: romanianBorder,
+    MD: moldovaBorder,
+  };
+  const pool = byCountry[other] || polishBorder;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 function pickTimeWindow(){

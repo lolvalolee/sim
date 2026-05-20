@@ -833,6 +833,94 @@ body {
 .modal-err { font-size: 11px; color: var(--red); display: none; margin-bottom: 10px; }
 .modal-actions { display: flex; gap: 8px; }
 
+/* ─── Sidepanel модалка (Підтвердження угоди) ─── */
+.side-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 9000;
+}
+.side-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 460px; max-width: 92vw;
+  background: var(--bg); border-left: 1px solid var(--b1);
+  z-index: 9100; display: flex; flex-direction: column;
+  box-shadow: -8px 0 30px rgba(0,0,0,.5);
+  animation: spSlideIn .25s ease-out;
+}
+@keyframes spSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.sp-head { padding: 20px 22px 16px; border-bottom: 1px solid var(--b1); display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.sp-head h3 { font-size: 15px; font-weight: 600; }
+.sp-head-sub { font-size: 11px; color: var(--t3); margin-top: 4px; }
+.sp-close { background: transparent; border: none; color: var(--t3); cursor: pointer; font-size: 22px; line-height: 1; padding: 0 4px; }
+.sp-close:hover { color: var(--t1); }
+.sp-body { flex: 1; overflow-y: auto; padding: 18px 22px; }
+.sp-foot { padding: 14px 22px; border-top: 1px solid var(--b1); background: var(--bg2); display: flex; gap: 10px; }
+
+.sp-field-label { font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px; font-weight: 600; display: block; }
+.sp-field-group { margin-bottom: 18px; }
+.sp-input {
+  width: 100%; background: var(--bg3); border: 1px solid var(--b2); color: var(--t1);
+  padding: 10px 13px; border-radius: var(--r); font-family: inherit; font-size: 13px; outline: none;
+}
+.sp-input:focus { border-color: var(--acc); }
+.sp-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* Кастомний dropdown */
+.sp-dropdown { position: relative; }
+.sp-dropdown-trigger {
+  width: 100%; background: var(--bg3); border: 1px solid var(--b2); color: var(--t1);
+  padding: 10px 36px 10px 13px; border-radius: var(--r); font-family: inherit; font-size: 13px;
+  cursor: pointer; text-align: left; display: flex; align-items: center; gap: 8px; min-height: 42px;
+}
+.sp-dropdown-trigger:hover { border-color: var(--t3); }
+.sp-dropdown-trigger.open { border-color: var(--acc); }
+.sp-dropdown-trigger::after {
+  content: '▾'; position: absolute; right: 13px; top: 50%; transform: translateY(-50%);
+  color: var(--t3); font-size: 11px; pointer-events: none;
+}
+.sp-dropdown-trigger .sp-placeholder { color: var(--t4); }
+.sp-dropdown-trigger .sp-name { color: var(--t1); }
+.sp-dropdown-trigger .sp-pill { font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: auto; margin-right: 18px; text-transform: uppercase; letter-spacing: .04em; }
+
+.sp-dropdown-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--bg2); border: 1px solid var(--b2); border-radius: var(--r);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 10;
+  max-height: 320px; overflow-y: auto; padding: 5px;
+}
+.sp-dropdown-menu.hidden { display: none; }
+.sp-dropdown-item {
+  padding: 10px 11px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 9px; transition: background .1s;
+}
+.sp-dropdown-item:hover { background: var(--bg3); }
+.sp-dropdown-item.selected { background: rgba(255,190,99,.08); }
+.sp-dropdown-item.disabled { opacity: .55; }
+.sp-dropdown-item .sp-info { flex: 1; min-width: 0; }
+.sp-dropdown-item .sp-name { font-size: 12px; font-weight: 500; color: var(--t1); }
+.sp-dropdown-item .sp-meta { font-size: 10px; color: var(--t3); margin-top: 2px; }
+
+.sp-pill.new { background: rgba(96,160,255,.15); color: #6da4ff; }
+.sp-pill.progress { background: rgba(255,190,99,.15); color: var(--acc); }
+.sp-pill.closed { background: rgba(74,222,128,.15); color: var(--grn); }
+.sp-pill.changed { background: rgba(240,80,96,.15); color: var(--red); }
+
+.sp-hint {
+  background: rgba(255,190,99,.05); border: 1px solid rgba(255,190,99,.2);
+  border-radius: var(--r); padding: 10px 13px; font-size: 11px; line-height: 1.55; color: var(--t2); margin-top: 6px;
+}
+.sp-hint strong { color: var(--acc); }
+
+.sp-error {
+  background: rgba(240,80,96,.08); border: 1px solid rgba(240,80,96,.3);
+  border-radius: var(--r); padding: 10px 13px; font-size: 12px; color: var(--red); margin-bottom: 14px; display: none;
+}
+.sp-error.shown { display: block; }
+.sp-error-title { font-weight: 600; margin-bottom: 4px; }
+
+/* На мобільному — на весь екран */
+@media (max-width: 540px) {
+  .side-panel { width: 100vw; max-width: 100vw; }
+}
+
 /* ============================================================
    MOBILE RESPONSIVE — 768px and below
    ============================================================ */
@@ -1897,8 +1985,8 @@ function openEmail(orderId){
   // Стан кнопки "Підтвердити рейс"
   const applicationSent = ord.applicationSent || ord.confirmBlocked;
   const confirmBtnHtml = applicationSent
-    ? `<button class="confirm-trip-btn" disabled title="Заявку вже отримано">✓ Заявка отримана</button>`
-    : `<button class="confirm-trip-btn" id="cb-${orderId}" onclick="confirmTripWithClient('${orderId}')">✓ Підтвердити рейс</button>`;
+    ? `<button class="confirm-trip-btn" disabled title="Угоду закрито">✓ Угода закрита</button>`
+    : `<button class="confirm-trip-btn" id="cb-${orderId}" onclick="openClientConfirmPanel('${orderId}')">✓ Підтвердити угоду</button>`;
 
   let freightHtml='';
   if(ord.freightFixed){
@@ -2278,15 +2366,14 @@ function renderChatInCol(col,c,cid,pfx){
     <div class="chat-deal-bar">
       <span style="color:var(--t3)">Фрахт:</span>
       <span style="font-family:var(--mono);font-weight:600;color:var(--t1)" id="agreed-rate-${cid}">—</span>
-      ${(deal==='talk'||deal==='ok')
-        ? `<button class="btn success sm" style="margin-left:auto" onclick="confirmFromCarrier('${cid}')">✓ Підтвердити перевізника</button>`
-        : ''}
+      ${deal === 'confirmed'
+        ? '<button class="btn sm" style="margin-left:auto;opacity:.6;cursor:default" disabled>✓ Угода закрита</button>'
+        : `<button class="btn primary sm" style="margin-left:auto" onclick="openCarrierConfirmPanel('${cid}')">✓ Підтвердити угоду</button>`}
     </div>
     <div class="chat-quick">
       <button class="btn sm" onclick="qi_('${cid}','${pfx}','Добрий день! Компанія Docaa. Є вантаж на рейс. Маєте вільне авто?')">Вільне авто?</button>
       <button class="btn sm" onclick="qi_('${cid}','${pfx}','Яка ваша ставка на цей напрямок?')">Ставка</button>
       <button class="btn sm" onclick="qi_('${cid}','${pfx}','Можемо трохи знизити фрахт?')">Торг</button>
-      <button class="btn sm success" onclick="qi_('${cid}','${pfx}','Домовились! Підтверджуємо. Надішліть номер авто та ПІБ водія.')">✓ Підтвердити</button>
     </div>
     <div class="chat-input-row">
       <textarea class="chat-ta" id="ci-${pfx}-${cid}" placeholder="Повідомлення... (Enter — надіслати, Ctrl+Enter — новий рядок)" rows="1"
@@ -2946,6 +3033,433 @@ function renderAdmin(){
 
 
 // ── НОВА ЛОГІКА: Підтвердження рейсу через AI + генерація заявки ──
+// ─── SIDEPANEL: Підтвердження угоди ──────────────────────────
+// Дві точки входу:
+//   openClientConfirmPanel(orderId) — з чату з замовником (letterId уже відомий)
+//   openCarrierConfirmPanel(carrierId) — з чату з перевізником (треба обрати рейс)
+
+// Стан панелі
+let _spState = null;
+
+function closeConfirmPanel(){
+  document.getElementById('sp-overlay')?.remove();
+  document.getElementById('side-panel')?.remove();
+  _spState = null;
+}
+
+// Допоміжне — статус рейсу для пілюлі
+function getOrderStateInfo(ord){
+  const state = ord.state || (ord.applicationSent && ord.carrierId ? 'closed' :
+                              ord.applicationSent ? 'client_agreed' :
+                              ord.carrierId && ord.carrierFreightAgreed ? 'carrier_agreed' :
+                              (ord.clientFreight || ord.carrierId) ? 'in_progress' : 'new');
+  const map = {
+    'new':            { label: 'Новий',     cls: 'new',      icon: '🆕', disabled: false },
+    'in_progress':    { label: 'В роботі',  cls: 'progress', icon: '💬', disabled: false },
+    'client_agreed':  { label: 'Замовник ✓', cls: 'progress', icon: '💬', disabled: false },
+    'carrier_agreed': { label: 'Перевізник ✓', cls: 'progress', icon: '💬', disabled: false },
+    'closed':         { label: 'Закрито',    cls: 'closed',  icon: '✅', disabled: true },
+    'closed_changed': { label: 'Перетрейд',  cls: 'changed', icon: '⚠',  disabled: true },
+  };
+  return map[state] || map['new'];
+}
+
+// ── Sidepanel: підтвердження з замовником ──
+function openClientConfirmPanel(orderId){
+  closeConfirmPanel();
+  const ord = S.orders.find(o => o.id === orderId);
+  const em  = S.emails.find(e => e.orderId === orderId);
+  if (!ord || !em) return;
+
+  if (ord.applicationSent || ord.confirmBlocked) {
+    notify('Угоду вже закрито з замовником', 'warn');
+    return;
+  }
+  if (!em.replies.some(r => r.role === 'student')) {
+    notify('Спочатку напишіть замовнику і обговоріть умови', 'err');
+    return;
+  }
+
+  // Початкове значення ціни — з orderState або orderFreightAgreed або клієнтського фрахту
+  const initialPrice = ord.clientFreightAgreed || ord.clientFreight || ord.freightAmount || '';
+  const initialDate = ord.loadDate || '';
+
+  _spState = {
+    type: 'client',
+    orderId,
+    price: initialPrice,
+    date: initialDate,
+  };
+
+  const route = `${ord.dirs?.[0] || ''} → ${ord.dirs?.[ord.dirs.length-1] || ''}`;
+
+  const sp = document.createElement('div');
+  sp.id = 'sp-overlay';
+  sp.className = 'side-overlay';
+  sp.onclick = e => { if (e.target === sp) closeConfirmPanel(); };
+
+  const panel = document.createElement('div');
+  panel.id = 'side-panel';
+  panel.className = 'side-panel';
+  panel.innerHTML = `
+    <div class="sp-head">
+      <div>
+        <h3>Підтвердження угоди</h3>
+        <div class="sp-head-sub">З замовником ${escapeHtml(em.from || '')} · ${escapeHtml(route)}</div>
+      </div>
+      <button class="sp-close" onclick="closeConfirmPanel()">✕</button>
+    </div>
+    <div class="sp-body">
+      <div class="sp-error" id="sp-error">
+        <div class="sp-error-title">⚠ Перевірка не пройшла</div>
+        <div id="sp-error-text"></div>
+      </div>
+
+      <div class="sp-field-group">
+        <label class="sp-field-label">Рейс</label>
+        <div class="sp-dropdown">
+          <div class="sp-dropdown-trigger" style="cursor:default;opacity:.85">
+            <span>${getOrderStateInfo(ord).icon}</span>
+            <span class="sp-name">№${getOrderNumberInList(ord)} ${escapeHtml(route)}</span>
+            <span class="sp-pill ${getOrderStateInfo(ord).cls}">${getOrderStateInfo(ord).label}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-row">
+        <div class="sp-field-group">
+          <label class="sp-field-label">Ціна (€)</label>
+          <input type="number" class="sp-input" id="sp-price" value="${initialPrice}" placeholder="2300" />
+        </div>
+        <div class="sp-field-group">
+          <label class="sp-field-label">Дата завантаження</label>
+          <input type="text" class="sp-input" id="sp-date" value="${initialDate}" placeholder="ДД.ММ.РРРР" />
+        </div>
+      </div>
+
+      <div class="sp-hint">
+        <strong>ℹ Як це працює:</strong>
+        AI перевірить чи у переписці з замовником ціна і дата відповідають вашим даним.
+        Якщо все ок — замовник підтвердить і надішле заявку.
+      </div>
+    </div>
+    <div class="sp-foot">
+      <button class="btn" onclick="closeConfirmPanel()">Скасувати</button>
+      <button class="btn primary" id="sp-submit" style="flex:1" onclick="submitClientConfirm()">✓ Підтвердити угоду</button>
+    </div>
+  `;
+
+  document.body.appendChild(sp);
+  document.body.appendChild(panel);
+}
+
+// Знайти номер рейсу у списку (1-based) — для назви "№3"
+function getOrderNumberInList(ord){
+  const idx = S.orders.findIndex(o => o.id === ord.id);
+  return idx >= 0 ? (idx + 1) : '?';
+}
+
+async function submitClientConfirm(){
+  if (!_spState || _spState.type !== 'client') return;
+  const orderId = _spState.orderId;
+  const price = parseFloat(document.getElementById('sp-price').value);
+  const date  = document.getElementById('sp-date').value.trim();
+  const errEl = document.getElementById('sp-error');
+  const errText = document.getElementById('sp-error-text');
+  const btn = document.getElementById('sp-submit');
+
+  errEl.classList.remove('shown');
+
+  if (!price || isNaN(price)) { errText.textContent = 'Вкажіть ціну'; errEl.classList.add('shown'); return; }
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(date)) { errText.textContent = 'Дата має бути у форматі ДД.ММ.РРРР'; errEl.classList.add('shown'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Перевіряю переписку...';
+
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const res = await fetch(`/api/student/orders/${orderId}/confirm-client`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ price, date }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      errText.textContent = data.message || data.error || 'Помилка';
+      errEl.classList.add('shown');
+      btn.disabled = false;
+      btn.innerHTML = '✓ Підтвердити угоду';
+      return;
+    }
+
+    // Додаю повідомлення в локальний стан і відкриваю чат
+    const em = S.emails.find(e => e.orderId === orderId);
+    const ord = S.orders.find(o => o.id === orderId);
+    if (data.message) {
+      em.replies.push({
+        role: 'ai',
+        text: data.message.text,
+        timestamp: data.message.timestamp,
+        attachment: data.message.attachment || null,
+      });
+    }
+
+    if (data.approved) {
+      ord.applicationSent = true;
+      ord.confirmBlocked = true;
+      ord.clientFreightAgreed = price;
+      ord.state = 'client_agreed'; // або 'closed' якщо перевізник теж є
+      if (ord.carrierId) ord.state = 'closed';
+
+      notify('Замовник підтвердив угоду ✓', 'ok');
+      closeConfirmPanel();
+      openEmail(orderId); // оновити чат
+    } else {
+      // Mismatch — показуємо в модалці причину і ДУБЛЮЄМО повідомлення у чаті
+      const reasons = {
+        'reject_price': 'Ціна не відповідає переписці',
+        'reject_route': 'Маршрут не відповідає',
+        'reject_date': 'Дата не відповідає',
+        'reject_no_agreement': 'Домовленостей у переписці не знайдено',
+      };
+      errText.textContent = (reasons[data.verdict] || 'Перевірка не пройшла') +
+        (data.message?.text ? ' — ' + data.message.text : '');
+      errEl.classList.add('shown');
+      btn.disabled = false;
+      btn.innerHTML = '✓ Спробувати ще раз';
+      // Оновлюю чат в фоні (повідомлення там теж є)
+      openEmail(orderId);
+    }
+  } catch (e) {
+    errText.textContent = 'Помилка з\'єднання';
+    errEl.classList.add('shown');
+    btn.disabled = false;
+    btn.innerHTML = '✓ Підтвердити угоду';
+  }
+}
+
+// ── Sidepanel: підтвердження з перевізником ──
+function openCarrierConfirmPanel(carrierId){
+  closeConfirmPanel();
+  const carrier = (S.carriers || []).find(c => c.id === carrierId);
+  if (!carrier) { notify('Перевізник не знайдений', 'err'); return; }
+
+  // Список рейсів — всі 8, відсортовані за статусом (open зверху, closed знизу)
+  const ordersByPriority = (S.orders || []).slice().sort((a, b) => {
+    const sA = getOrderStateInfo(a).disabled ? 1 : 0;
+    const sB = getOrderStateInfo(b).disabled ? 1 : 0;
+    return sA - sB;
+  });
+
+  if (!ordersByPriority.length) { notify('Немає рейсів у роботі', 'err'); return; }
+
+  _spState = {
+    type: 'carrier',
+    carrierId,
+    letterId: null, // обере у dropdown
+    price: '',
+    date: '',
+  };
+
+  const sp = document.createElement('div');
+  sp.id = 'sp-overlay';
+  sp.className = 'side-overlay';
+  sp.onclick = e => { if (e.target === sp) closeConfirmPanel(); };
+
+  const panel = document.createElement('div');
+  panel.id = 'side-panel';
+  panel.className = 'side-panel';
+
+  // Будую dropdown items
+  const dropdownItems = ordersByPriority.map(ord => {
+    const info = getOrderStateInfo(ord);
+    const route = `${ord.dirs?.[0] || ''} → ${ord.dirs?.[ord.dirs.length-1] || ''}`;
+    const num = (S.orders.findIndex(o => o.id === ord.id) + 1);
+    const cls = info.disabled ? 'disabled' : '';
+    return `
+      <div class="sp-dropdown-item ${cls}" data-letter-id="${ord.id}" onclick="${info.disabled ? '' : `selectCarrierLetter('${ord.id}')`}">
+        <span>${info.icon}</span>
+        <div class="sp-info">
+          <div class="sp-name">№${num} ${escapeHtml(route)}</div>
+          <div class="sp-meta">${escapeHtml(ord.vehicle || '')} · фрахт €${ord.clientFreight || ord.freightAmount || '?'}</div>
+        </div>
+        <span class="sp-pill ${info.cls}">${info.label}</span>
+      </div>
+    `;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="sp-head">
+      <div>
+        <h3>Підтвердження угоди</h3>
+        <div class="sp-head-sub">З перевізником ${escapeHtml(carrier.name || '')}</div>
+      </div>
+      <button class="sp-close" onclick="closeConfirmPanel()">✕</button>
+    </div>
+    <div class="sp-body">
+      <div class="sp-error" id="sp-error">
+        <div class="sp-error-title">⚠ Перевірка не пройшла</div>
+        <div id="sp-error-text"></div>
+      </div>
+
+      <div class="sp-field-group">
+        <label class="sp-field-label">Рейс</label>
+        <div class="sp-dropdown">
+          <div class="sp-dropdown-trigger" id="sp-dd-trigger" onclick="toggleCarrierDropdown()">
+            <span id="sp-dd-display">
+              <span class="sp-placeholder">Оберіть рейс зі списку...</span>
+            </span>
+          </div>
+          <div class="sp-dropdown-menu hidden" id="sp-dd-menu">
+            ${dropdownItems}
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-row">
+        <div class="sp-field-group">
+          <label class="sp-field-label">Ціна (€)</label>
+          <input type="number" class="sp-input" id="sp-price" placeholder="2300" />
+        </div>
+        <div class="sp-field-group">
+          <label class="sp-field-label">Дата завантаження</label>
+          <input type="text" class="sp-input" id="sp-date" placeholder="ДД.ММ.РРРР" />
+        </div>
+      </div>
+
+      <div class="sp-hint">
+        <strong>ℹ Як це працює:</strong>
+        AI перевірить чи у переписці з перевізником обговорювалися саме цей маршрут, ціна і дата.
+        Якщо щось не співпадає — перевізник попросить уточнити.
+      </div>
+    </div>
+    <div class="sp-foot">
+      <button class="btn" onclick="closeConfirmPanel()">Скасувати</button>
+      <button class="btn primary" id="sp-submit" style="flex:1" onclick="submitCarrierConfirm()">✓ Підтвердити угоду</button>
+    </div>
+  `;
+
+  document.body.appendChild(sp);
+  document.body.appendChild(panel);
+}
+
+function toggleCarrierDropdown(){
+  const menu = document.getElementById('sp-dd-menu');
+  const trigger = document.getElementById('sp-dd-trigger');
+  if (menu) {
+    menu.classList.toggle('hidden');
+    trigger.classList.toggle('open', !menu.classList.contains('hidden'));
+  }
+}
+
+function selectCarrierLetter(letterId){
+  if (!_spState) return;
+  _spState.letterId = letterId;
+  const ord = S.orders.find(o => o.id === letterId);
+  if (!ord) return;
+  const info = getOrderStateInfo(ord);
+  const route = `${ord.dirs?.[0] || ''} → ${ord.dirs?.[ord.dirs.length-1] || ''}`;
+  const num = (S.orders.findIndex(o => o.id === ord.id) + 1);
+  document.getElementById('sp-dd-display').innerHTML = `
+    <span>${info.icon}</span>
+    <span class="sp-name">№${num} ${escapeHtml(route)}</span>
+    <span class="sp-pill ${info.cls}">${info.label}</span>
+  `;
+  document.getElementById('sp-dd-menu').classList.add('hidden');
+  document.getElementById('sp-dd-trigger').classList.remove('open');
+
+  // Передзаповнюємо дату якщо порожня
+  const dateInput = document.getElementById('sp-date');
+  if (!dateInput.value && ord.loadDate) dateInput.value = ord.loadDate;
+}
+
+async function submitCarrierConfirm(){
+  if (!_spState || _spState.type !== 'carrier') return;
+  const carrierId = _spState.carrierId;
+  const letterId = _spState.letterId;
+  const price = parseFloat(document.getElementById('sp-price').value);
+  const date  = document.getElementById('sp-date').value.trim();
+  const errEl = document.getElementById('sp-error');
+  const errText = document.getElementById('sp-error-text');
+  const btn = document.getElementById('sp-submit');
+
+  errEl.classList.remove('shown');
+
+  if (!letterId) { errText.textContent = 'Оберіть рейс зі списку'; errEl.classList.add('shown'); return; }
+  if (!price || isNaN(price)) { errText.textContent = 'Вкажіть ціну'; errEl.classList.add('shown'); return; }
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(date)) { errText.textContent = 'Дата має бути у форматі ДД.ММ.РРРР'; errEl.classList.add('shown'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Перевіряю переписку...';
+
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const res = await fetch(`/api/student/chats/${carrierId}/confirm-carrier`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ letterId, price, date }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      errText.textContent = data.message || data.error || 'Помилка';
+      errEl.classList.add('shown');
+      btn.disabled = false;
+      btn.innerHTML = '✓ Підтвердити угоду';
+      return;
+    }
+
+    // Додаю повідомлення в локальний стан
+    const chat = S.chats?.[carrierId];
+    if (chat && data.message) {
+      chat.push({
+        role: 'ai',
+        text: data.message.text,
+        timestamp: data.message.timestamp,
+      });
+    }
+
+    if (data.approved) {
+      // Оновлюємо локальний стан рейсу
+      const ord = S.orders.find(o => o.id === letterId);
+      if (ord) {
+        ord.carrierId = carrierId;
+        ord.carrierFreightAgreed = price;
+        ord.state = ord.applicationSent ? 'closed' : 'carrier_agreed';
+      }
+      // Маркуємо deal як confirmed
+      if (S.deals) S.deals[carrierId] = 'confirmed';
+
+      notify('Перевізник підтвердив угоду ✓', 'ok');
+      closeConfirmPanel();
+      // Оновити чат щоб побачити нове повідомлення
+      if (typeof openChatById === 'function') openChatById(carrierId);
+      else if (typeof renderChat === 'function') renderChat(carrierId);
+    } else {
+      const reasons = {
+        'reject_price': 'Ціна не відповідає переписці',
+        'reject_route': 'Маршрут не відповідає',
+        'reject_date': 'Дата не відповідає',
+        'reject_no_agreement': 'Домовленостей у переписці не знайдено',
+      };
+      errText.textContent = (reasons[data.verdict] || 'Перевірка не пройшла') +
+        (data.message?.text ? ' — ' + data.message.text : '');
+      errEl.classList.add('shown');
+      btn.disabled = false;
+      btn.innerHTML = '✓ Спробувати ще раз';
+      // Оновлюю чат в фоні
+      if (typeof renderChat === 'function') renderChat(carrierId);
+    }
+  } catch (e) {
+    errText.textContent = 'Помилка з\'єднання';
+    errEl.classList.add('shown');
+    btn.disabled = false;
+    btn.innerHTML = '✓ Підтвердити угоду';
+  }
+}
+
+// ── Стара функція (зберігаю для зворотньої сумісності, не викликається) ──
 async function confirmTripWithClient(orderId){
   const ord = S.orders.find(o=>o.id===orderId);
   const em = S.emails.find(e=>e.orderId===orderId);
@@ -4550,6 +5064,12 @@ async function loadSessionFromServer(token){
       applicationData: op.application_data ? (typeof op.application_data === 'string' ? JSON.parse(op.application_data) : op.application_data) : null,
       applicationVariant: op.application_variant || null,
       confirmBlocked: !!op.confirm_blocked,
+      // Stan рейсу (deplo 8)
+      state: op.state || 'new',
+      clientAgreedPrice: op.client_agreed_price || null,
+      clientAgreedDate: op.client_agreed_date || null,
+      carrierAgreedPrice: op.carrier_agreed_price || null,
+      carrierAgreedDate: op.carrier_agreed_date || null,
       willCancel: false,
       incoterms: letter.incoterms||'',
       scenario: letter.scenario||'agree',
