@@ -121,7 +121,7 @@ router.post('/threads/:letterId', STU, (req, res) => {
   const existing = db.prepare('SELECT id FROM email_threads WHERE session_id=? AND letter_id=?')
                      .get(session.id, req.params.letterId);
   if (existing) {
-    db.prepare('UPDATE email_threads SET messages=?, updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE email_threads SET messages=?, updated_at=datetime('now') WHERE id=?")
       .run(JSON.stringify(messages), existing.id);
   } else {
     db.prepare('INSERT INTO email_threads (id,session_id,letter_id,messages) VALUES (?,?,?,?)')
@@ -150,7 +150,7 @@ router.post('/chats/:carrierId', STU, (req, res) => {
   const existing = db.prepare('SELECT id FROM carrier_chats WHERE session_id=? AND carrier_id=?')
                      .get(session.id, req.params.carrierId);
   if (existing) {
-    db.prepare('UPDATE carrier_chats SET messages=?, deal_status=?, updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE carrier_chats SET messages=?, deal_status=?, updated_at=datetime('now') WHERE id=?")
       .run(JSON.stringify(messages), deal_status || 'none', existing.id);
   } else {
     db.prepare('INSERT INTO carrier_chats (id,session_id,carrier_id,messages,deal_status) VALUES (?,?,?,?,?)')
@@ -402,7 +402,7 @@ router.post('/orders/:letterId/confirm', STU, async (req, res) => {
   messages.push(newMsg);
 
   if (thread) {
-    db.prepare('UPDATE email_threads SET messages=?, updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE email_threads SET messages=?, updated_at=datetime('now') WHERE id=?")
       .run(JSON.stringify(messages), thread.id);
   } else {
     db.prepare('INSERT INTO email_threads (id,session_id,letter_id,messages) VALUES (?,?,?,?)')
