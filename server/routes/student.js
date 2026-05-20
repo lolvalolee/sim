@@ -34,9 +34,10 @@ router.get('/session', STU, (req, res) => {
     const startDate = group.start_date;
     const groupRates = group.rates || '[41.5,41.65,41.8,41.7,41.9]';
     const id = uuidv4();
+    const version = new Date().toISOString();
 
-    db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date,rates) VALUES (?,?,?,?,?)`)
-      .run(id, req.user.id, assignment.id, startDate, groupRates);
+    db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date,rates,version) VALUES (?,?,?,?,?,?)`)
+      .run(id, req.user.id, assignment.id, startDate, groupRates, version);
 
     session = db.prepare('SELECT * FROM sessions WHERE id=?').get(id);
   }
@@ -80,11 +81,24 @@ router.get('/session', STU, (req, res) => {
       start_date: session.start_date,
       profit: session.profit,
       rates: JSON.parse(session.rates),
+      version: session.version || '',
     },
     letters,
     email_threads: emailThreads.map(t => ({ ...t, messages: JSON.parse(t.messages) })),
     carrier_chats: carrierChats.map(c => ({ ...c, messages: JSON.parse(c.messages), deal_status: c.deal_status })),
     order_progress: orderProgress,
+  });
+});
+
+// GET /api/student/session/version — легкий polling для перевірки версії
+// Не повертає всі дані — тільки версію і статус
+router.get('/session/version', STU, (req, res) => {
+  const session = db.prepare('SELECT version, status FROM sessions WHERE student_id=?').get(req.user.id);
+  if (!session) return res.json({ exists: false });
+  res.json({
+    exists: true,
+    version: session.version || '',
+    status: session.status,
   });
 });
 

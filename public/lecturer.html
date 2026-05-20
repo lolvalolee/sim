@@ -1203,8 +1203,10 @@ function notify(msg, type=''){
 }
 
 function logout(){
-  localStorage.removeItem('docaa_token');
-  localStorage.removeItem('docaa_user');
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch(e) {}
   location.href='/login.html';
 }
 

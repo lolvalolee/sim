@@ -8,6 +8,23 @@ const db = require('../db');
 
 const LEC = requireAuth(['lecturer','superadmin']);
 
+// Хелпери для версіонування сесій
+// bumpSessionVersion(studentId) — оновлює version у sessions одного студента
+// bumpGroupSessionsVersion(groupId) — оновлює version у всіх сесій групи
+function bumpSessionVersion(studentId){
+  const v = new Date().toISOString();
+  db.prepare('UPDATE sessions SET version=? WHERE student_id=?').run(v, studentId);
+  return v;
+}
+function bumpGroupSessionsVersion(groupId){
+  const v = new Date().toISOString();
+  const members = db.prepare('SELECT student_id FROM group_members WHERE group_id=?').all(groupId);
+  for (const m of members) {
+    db.prepare('UPDATE sessions SET version=? WHERE student_id=?').run(v, m.student_id);
+  }
+  return v;
+}
+
 // ── GROUPS ────────────────────────────────────────────────────
 
 // GET /api/lecturer/groups
@@ -42,14 +59,17 @@ router.patch('/groups/:id', LEC, (req, res) => {
   const g = db.prepare('SELECT id,started_at FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
   if (!g) return res.status(404).json({ error: 'Not found' });
   const { name, notes, active, start_date } = req.body;
+  let needBump = false;
   if (name) db.prepare('UPDATE groups SET name=? WHERE id=?').run(name, req.params.id);
   if (notes !== undefined) db.prepare('UPDATE groups SET notes=? WHERE id=?').run(notes, req.params.id);
-  if (active !== undefined) db.prepare('UPDATE groups SET active=? WHERE id=?').run(active?1:0, req.params.id);
+  if (active !== undefined) { db.prepare('UPDATE groups SET active=? WHERE id=?').run(active?1:0, req.params.id); needBump = true; }
   if (start_date !== undefined) {
     if (g.started_at) return res.status(400).json({ error: 'Cannot change start_date after simulation started. Reset start first.' });
     if (!/^\d{2}\.\d{2}\.\d{4}$/.test(start_date)) return res.status(400).json({ error: 'start_date must be DD.MM.YYYY' });
     db.prepare('UPDATE groups SET start_date=? WHERE id=?').run(start_date, req.params.id);
+    needBump = true;
   }
+  if (needBump) bumpGroupSessionsVersion(req.params.id);
   res.json({ ok: true });
 });
 
@@ -157,15 +177,18 @@ router.post('/groups/:id/start', LEC, (req, res) => {
   }
 
   db.prepare(`UPDATE groups SET started_at=datetime('now') WHERE id=?`).run(req.params.id);
+  bumpGroupSessionsVersion(req.params.id);
   res.json({ ok: true });
 });
 
 // POST /api/lecturer/groups/:id/reset-start — скинути дату старту
-// Обнуляє і start_date (щоб лектор міг ввести нову) і started_at
+// Обнуляє і start_date (щоб лектор міг ввести нову) і started_at.
+// Лише для груп що ще НЕ почали — переписки/прогрес не торкаємо
 router.post('/groups/:id/reset-start', LEC, (req, res) => {
   const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
   if (!g) return res.status(404).json({ error: 'Group not found' });
   db.prepare("UPDATE groups SET started_at=NULL, start_date=NULL WHERE id=?").run(req.params.id);
+  bumpGroupSessionsVersion(req.params.id);
   res.json({ ok: true });
 });
 
@@ -177,6 +200,7 @@ router.post('/sessions/:studentId/stop', LEC, (req, res) => {
   if (!s) return res.status(404).json({ error: 'No active session' });
   db.prepare(`UPDATE sessions SET status='stopped', stopped_by=? WHERE student_id=?`)
     .run(req.user.id, req.params.studentId);
+  bumpSessionVersion(req.params.studentId);
   res.json({ ok: true });
 });
 
@@ -184,6 +208,7 @@ router.post('/sessions/:studentId/stop', LEC, (req, res) => {
 router.post('/sessions/:studentId/resume', LEC, (req, res) => {
   db.prepare(`UPDATE sessions SET status='active', stopped_by=NULL WHERE student_id=?`)
     .run(req.params.studentId);
+  bumpSessionVersion(req.params.studentId);
   res.json({ ok: true });
 });
 
@@ -216,6 +241,9 @@ router.post('/sessions/:studentId/reset', LEC, (req, res) => {
 
   // Generate fresh assignment
   const newAssignment = generateAssignment(studentId, member.group_id, req.user.id);
+
+  // Сесія видалена. Нова створиться при наступному GET /session з новою версією.
+  // Цього достатньо щоб клієнт побачив зміну (поточна версія в його пам'яті не співпадатиме)
 
   res.json({ ok: true, new_assignment_id: newAssignment.id, letter_count: newAssignment.letter_ids.length });
 });
@@ -297,7 +325,8 @@ router.post('/groups/:groupId/rates', LEC, (req, res) => {
   const ratesJson = JSON.stringify(rates);
   // Майстер — groups.rates
   db.prepare('UPDATE groups SET rates=? WHERE id=?').run(ratesJson, req.params.groupId);
-  // Дублюємо в sessions.rates для тих студентів які вже мають сесію
+  // Дублюємо в sessions.rates для тих студентів які вже мають сесію + bump
+  bumpGroupSessionsVersion(req.params.groupId);
   const members = db.prepare('SELECT student_id FROM group_members WHERE group_id=?').all(req.params.groupId);
   for (const m of members) {
     db.prepare('UPDATE sessions SET rates=? WHERE student_id=?').run(ratesJson, m.student_id);

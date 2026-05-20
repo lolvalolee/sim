@@ -4517,6 +4517,7 @@ async function loadSessionFromServer(token){
   S.profit=data.session.profit||0;
   S.rates=data.session.rates||DEFAULT_RATES.slice();
   S.sessionId=data.session.id;
+  S.sessionVersion=data.session.version||'';
   S.startDate=new Date();
 
   // Parse start_date string DD.MM.YYYY
@@ -4734,30 +4735,102 @@ function startNotStartedPolling(token){
 }
 
 function logout(){
-  localStorage.removeItem('docaa_token');
-  localStorage.removeItem('docaa_user');
+  // Повне очищення локального стану
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch(e) {}
   window.location.href='/login.html';
 }
 
-// Autosave every 30 seconds
+// Autosave + перевірка версії (polling) кожні 30 секунд
+// Тільки коли вкладка активна
+let updateModalShown = false;
 function startAutosave(token){
   setInterval(async()=>{
     if(!S.sessionId) return;
+    if(document.hidden) return; // не пуляти у фоні
+
     // Save timer and profit
     fetch('/api/student/session/save',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
       body:JSON.stringify({timer_ms:S.timerMs,timer_day:S.timerDay,profit:S.profit})
     }).catch(()=>{});
-    // Check if stopped
-    const res=await fetch('/api/student/session',{
-      headers:{'Authorization':'Bearer '+token}
-    }).catch(()=>null);
-    if(res&&res.status===403){
-      const d=await res.json().catch(()=>({}));
-      if(d.error==='session_stopped') showSessionStopped();
-    }
-  },30000);
+
+    // Легка перевірка версії
+    try {
+      const res = await fetch('/api/student/session/version', {
+        headers: {'Authorization':'Bearer '+token}
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.exists) return;
+
+      // Якщо версія змінилась — лектор щось оновив
+      if (S.sessionVersion && data.version && data.version !== S.sessionVersion) {
+        if (!updateModalShown) {
+          updateModalShown = true;
+          showSessionUpdatedModal(data.status);
+        }
+      }
+
+      // Якщо сесія зупинена — окремий екран
+      if (data.status === 'stopped') {
+        showSessionStopped();
+      }
+    } catch(e){}
+  }, 30000);
+}
+
+// Модалка "Лектор оновив сесію"
+function showSessionUpdatedModal(status){
+  // Прибираю попередню модалку якщо вже є
+  document.getElementById('session-updated-modal')?.remove();
+
+  const isStopped = (status === 'stopped');
+  const mo = document.createElement('div');
+  mo.id = 'session-updated-modal';
+  mo.className = 'modal-ov';
+  mo.style.display = 'flex';
+  // Запобігаємо випадковому закриттю кліком на фон
+  mo.onclick = e => { e.stopPropagation(); };
+
+  mo.innerHTML = `<div class="modal-box" style="max-width:440px">
+    <div style="font-size:32px;text-align:center;margin-bottom:10px">🔄</div>
+    <div class="modal-title" style="text-align:center">Лектор оновив сесію</div>
+    <p class="modal-desc" style="margin-bottom:18px;text-align:center;line-height:1.55">
+      ${isStopped
+        ? 'Сесію зупинено лектором.'
+        : 'Стан вашої сесії змінився.<br>Натисніть «Оновити» щоб побачити актуальні дані.<br><br><span style="font-size:11px;color:var(--t4)">Ваші переписки і прогрес збережено.</span>'}
+    </p>
+    <div class="modal-actions">
+      <button class="btn primary" style="flex:1" onclick="reloadSession()">🔄 Оновити</button>
+      ${isStopped ? '' : '<button class="btn" onclick="dismissUpdateModal()">Пізніше</button>'}
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+function dismissUpdateModal(){
+  document.getElementById('session-updated-modal')?.remove();
+  // Залишаємо updateModalShown=true щоб не показувати ту саму модалку повторно
+  // Якщо лектор зробить ЩЕ одну зміну — версія знов поміняється і покажеться
+  // Скидаємо прапорець через 60с щоб дати шанс
+  setTimeout(()=>{ updateModalShown = false; }, 60000);
+}
+
+async function reloadSession(){
+  // Зберігаємо стан таймера перед перезавантаженням
+  const token = localStorage.getItem('docaa_token');
+  if (token && S.sessionId) {
+    await fetch('/api/student/session/save',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify({timer_ms:S.timerMs,timer_day:S.timerDay,profit:S.profit})
+    }).catch(()=>{});
+  }
+  location.reload();
 }
 
 </script>

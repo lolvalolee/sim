@@ -51,10 +51,21 @@ body{font-family:'Inter',sans-serif;background:#151515;color:#f0f0f0;min-height:
 </div>
 
 <script>
-// Check if already logged in
-const token = localStorage.getItem('docaa_token');
-const user  = JSON.parse(localStorage.getItem('docaa_user') || 'null');
-if (token && user) redirectByRole(user.role);
+// При заході на login завжди очищаємо попередню авторизацію.
+// Це запобігає циклу login ↔ dashboard коли токен невалідний.
+// Студент який заходить на login явно хоче залогінитись заново.
+localStorage.removeItem('docaa_token');
+localStorage.removeItem('docaa_user');
+localStorage.removeItem('fd_rates');
+// Прибираю усі інші ключі що могли залишитись з попередніх сесій
+try {
+  const keysToKeep = []; // нічого не зберігаємо при заході на login
+  const allKeys = Object.keys(localStorage);
+  for (const k of allKeys) {
+    if (!keysToKeep.includes(k)) localStorage.removeItem(k);
+  }
+  sessionStorage.clear();
+} catch(e){}
 
 async function login() {
   const email    = document.getElementById('email').value.trim();
