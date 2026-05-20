@@ -160,11 +160,12 @@ router.post('/groups/:id/start', LEC, (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/lecturer/groups/:id/reset-start — скинути дату старту (для тестування)
+// POST /api/lecturer/groups/:id/reset-start — скинути дату старту
+// Обнуляє і start_date (щоб лектор міг ввести нову) і started_at
 router.post('/groups/:id/reset-start', LEC, (req, res) => {
   const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
   if (!g) return res.status(404).json({ error: 'Group not found' });
-  db.prepare(`UPDATE groups SET started_at=NULL WHERE id=?`).run(req.params.id);
+  db.prepare("UPDATE groups SET started_at=NULL, start_date=NULL WHERE id=?").run(req.params.id);
   res.json({ ok: true });
 });
 
@@ -220,6 +221,9 @@ router.post('/sessions/:studentId/reset', LEC, (req, res) => {
 });
 
 // POST /api/lecturer/groups/:groupId/reset — рестарт всієї групи
+// Скидає прогрес студентів, генерує нові набори листів,
+// І ВСТАНОВЛЮЄ start_date = сьогодні, started_at = сьогодні (варіант A)
+// Тобто симуляція одразу йде з новою датою.
 router.post('/groups/:groupId/reset', LEC, (req, res) => {
   const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.groupId, req.user.id);
   if (!g) return res.status(404).json({ error: 'Group not found' });
@@ -243,7 +247,17 @@ router.post('/groups/:groupId/reset', LEC, (req, res) => {
     results.push({ student_id: studentId, letters: newAssignment.letter_ids.length });
   }
 
-  res.json({ ok: true, students_reset: results.length, results });
+  // Оновлюємо start_date на СЬОГОДНІ + started_at = сьогодні
+  // Симуляція стартує одразу з новою датою
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, '0');
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const yyyy = today.getFullYear();
+  const todayStr = `${dd}.${mm}.${yyyy}`;
+  db.prepare("UPDATE groups SET start_date=?, started_at=datetime('now') WHERE id=?")
+    .run(todayStr, req.params.groupId);
+
+  res.json({ ok: true, students_reset: results.length, results, new_start_date: todayStr });
 });
 
 // GET /api/lecturer/sessions/:studentId — view student progress

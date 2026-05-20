@@ -767,10 +767,13 @@ function copySummary(studentId){
 }
 
 async function resetWholeGroup(groupId){
-  if(!confirm('Скинути прогрес ВСІХ студентів цієї групи? Будуть згенеровані нові набори листів. Дія незворотна.')) return;
+  if(!confirm('Рестарт групи:\n\n• Прогрес ВСІХ студентів буде скинуто\n• Згенеруються нові набори листів\n• Дата старту встановиться на СЬОГОДНІ\n• Симуляція стартує одразу\n\nПродовжити? Дія незворотна.')) return;
   try{
     const r = await api('POST',`/groups/${groupId}/reset`);
-    notify(`Скинуто ${r.students_reset} студент(ів) ✓`,'ok');
+    notify(`Скинуто ${r.students_reset} студент(ів). Старт: ${r.new_start_date} ✓`,'ok');
+    // Оновити список груп (start_date і started_at змінились)
+    STATE.groups = await api('GET','/groups') || STATE.groups;
+    STATE.selectedGroup = STATE.groups.find(g=>g.id===groupId);
     openGroupPage(groupId);
   }catch(e){ notify(e.message,'err'); }
 }
