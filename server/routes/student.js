@@ -61,11 +61,26 @@ router.get('/session', STU, (req, res) => {
   const letters = letterIds
     .map(lid => db.prepare('SELECT * FROM letters WHERE id=?').get(lid))
     .filter(Boolean)
-    .map(l => ({
-      ...l,
-      missing: JSON.parse(l.missing),
-      dirs: JSON.parse(l.dirs),
-    }));
+    .map(l => {
+      // Знаходимо параметри клієнта (місто) для зручності UI
+      const client = l.client_id ? db.prepare('SELECT city FROM clients WHERE id=?').get(l.client_id) : null;
+      let parsedDirs = [];
+      try { parsedDirs = JSON.parse(l.dirs); } catch(e){}
+      // Витягуємо to_city з адреси розвантаження або з тіла
+      let fromCity = client?.city || '';
+      let toCity = '';
+      const route = (l.subject || '').match(/—\s*([^(]+)/);
+      if (route) toCity = route[1].trim();
+      return {
+        ...l,
+        missing: l.missing ? JSON.parse(l.missing) : [],
+        dirs: parsedDirs,
+        vehicle_alternatives: l.vehicle_alternatives ? JSON.parse(l.vehicle_alternatives) : [],
+        hidden_data: l.hidden_data ? JSON.parse(l.hidden_data) : {},
+        from_city: fromCity,
+        to_city: toCity,
+      };
+    });
 
   // Load threads and chats
   const emailThreads = db.prepare('SELECT * FROM email_threads WHERE session_id=?').all(session.id);
@@ -874,17 +889,25 @@ router.post('/applications', STU, (req, res) => {
   }
 
   // Якщо letter_id не передано — пробуємо знайти letter за client_id
-  // (це допомагає коли студент створює заявку через таблицю не з контексту листа)
+  // у поточному assignment студента
   if (!letter && body.client_id) {
-    letter = db.prepare(`
-      SELECT l.* FROM letters l
-      INNER JOIN assignments a ON a.id = l.assignment_id OR JSON_EXTRACT(a.letter_ids, '$') LIKE '%' || l.id || '%'
-      WHERE a.student_id = ? AND l.client_id = ?
-      LIMIT 1
-    `).get(req.user.id, body.client_id);
-    if (letter) {
-      orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
-        .get(session.id, letter.id);
+    const assignment = session.assignment_id
+      ? db.prepare('SELECT letter_ids FROM assignments WHERE id=?').get(session.assignment_id)
+      : null;
+    if (assignment?.letter_ids) {
+      let letterIds = [];
+      try { letterIds = JSON.parse(assignment.letter_ids); } catch(e){}
+      if (letterIds.length > 0) {
+        // Створюємо placeholder list для IN
+        const placeholders = letterIds.map(() => '?').join(',');
+        letter = db.prepare(
+          `SELECT * FROM letters WHERE id IN (${placeholders}) AND client_id = ? LIMIT 1`
+        ).get(...letterIds, body.client_id);
+        if (letter) {
+          orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+            .get(session.id, letter.id);
+        }
+      }
     }
   }
 
@@ -998,17 +1021,24 @@ router.patch('/applications/:id', STU, (req, res) => {
   if (body.client_id) client = db.prepare('SELECT * FROM clients WHERE id=?').get(body.client_id);
   if (body.carrier_id) carrier = db.prepare('SELECT * FROM carriers WHERE id=?').get(body.carrier_id);
 
-  // Якщо немає letter — пробуємо знайти за client_id
+  // Якщо немає letter — пробуємо знайти за client_id у поточному assignment
   if (!letter && body.client_id) {
-    letter = db.prepare(`
-      SELECT l.* FROM letters l
-      INNER JOIN assignments a ON a.id = l.assignment_id OR JSON_EXTRACT(a.letter_ids, '$') LIKE '%' || l.id || '%'
-      WHERE a.student_id = ? AND l.client_id = ?
-      LIMIT 1
-    `).get(req.user.id, body.client_id);
-    if (letter) {
-      orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
-        .get(session.id, letter.id);
+    const assignment = session.assignment_id
+      ? db.prepare('SELECT letter_ids FROM assignments WHERE id=?').get(session.assignment_id)
+      : null;
+    if (assignment?.letter_ids) {
+      let letterIds = [];
+      try { letterIds = JSON.parse(assignment.letter_ids); } catch(e){}
+      if (letterIds.length > 0) {
+        const placeholders = letterIds.map(() => '?').join(',');
+        letter = db.prepare(
+          `SELECT * FROM letters WHERE id IN (${placeholders}) AND client_id = ? LIMIT 1`
+        ).get(...letterIds, body.client_id);
+        if (letter) {
+          orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+            .get(session.id, letter.id);
+        }
+      }
     }
   }
 
@@ -1059,15 +1089,25 @@ router.get('/clients', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
 
-  // Беремо всіх замовників які є у листах цього студента
+  // Беремо замовників ТІЛЬКИ з листів поточного assignment студента
+  // (а не всіх assignments — інакше після рестарту бачив би старих)
+  if (!session.assignment_id) return res.json([]);
+  const assignment = db.prepare('SELECT letter_ids FROM assignments WHERE id=?')
+    .get(session.assignment_id);
+  if (!assignment?.letter_ids) return res.json([]);
+
+  let letterIds = [];
+  try { letterIds = JSON.parse(assignment.letter_ids); } catch(e){}
+  if (letterIds.length === 0) return res.json([]);
+
+  const placeholders = letterIds.map(() => '?').join(',');
   const rows = db.prepare(`
     SELECT DISTINCT c.id, c.company, c.person, c.country
     FROM clients c
     INNER JOIN letters l ON l.client_id = c.id
-    INNER JOIN assignments a ON a.student_id = ?
-    WHERE (l.id IN (SELECT value FROM json_each(a.letter_ids)))
+    WHERE l.id IN (${placeholders})
     ORDER BY c.company
-  `).all(req.user.id);
+  `).all(...letterIds);
   res.json(rows);
 });
 
