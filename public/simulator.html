@@ -445,6 +445,17 @@ body {
 }
 .confirm-trip-btn:disabled:hover { background: var(--bg3); }
 
+/* Постійно видима панель з кнопкою "Підтвердити угоду" над reply-box */
+.email-confirm-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; background: var(--bg3); border-bottom: 1px solid var(--b1);
+  border-radius: var(--r2) var(--r2) 0 0;
+}
+.email-confirm-bar-label {
+  font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .07em; font-weight: 600;
+}
+.email-confirm-bar .confirm-trip-btn { margin-left: auto; }
+
 /* Application attachment card (в потоці чату) */
 .attach-app-card {
   margin-top: 10px; background: var(--bg2);
@@ -683,6 +694,172 @@ body {
    ORDERS
    ============================================================ */
 .orders-page { flex: 1; overflow-y: auto; padding: 18px; min-height: 0; }
+
+/* ─── Applications (Заявки) — deplo 9 ─── */
+.apps-head { margin-bottom: 20px; }
+.apps-title { font-size: 19px; font-weight: 600; color: var(--t1); }
+
+.apps-kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+.apps-kpi .kpi-val.mono { font-family: var(--mono); }
+.apps-kpi .kpi-val.acc { color: var(--acc); }
+.kpi-progress { height: 4px; background: var(--bg3); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.kpi-progress-fill { height: 100%; background: var(--acc); border-radius: 2px; }
+.kpi-sub { font-size: 11px; color: var(--t3); margin-top: 4px; }
+
+.apps-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 14px; flex-wrap: wrap; }
+.apps-actions-l { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.apps-actions-r { font-size: 11px; color: var(--t3); }
+.btn-create {
+  background: var(--acc); color: #000; border: none; padding: 9px 16px;
+  border-radius: var(--r); font-weight: 600; font-size: 13px; cursor: pointer;
+  font-family: inherit;
+}
+.btn-create:hover { background: #ffce8a; }
+.apps-chips { display: flex; gap: 5px; }
+.apps-chip {
+  padding: 5px 11px; background: var(--bg3); border: 1px solid var(--b2);
+  border-radius: 12px; font-size: 11px; color: var(--t2); cursor: pointer;
+}
+.apps-chip:hover { color: var(--t1); }
+.apps-chip.active { background: rgba(255,190,99,.15); border-color: var(--acc); color: var(--acc); }
+
+.apps-tbl-wrap {
+  background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r2); overflow-x: auto;
+}
+.apps-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.apps-tbl th {
+  background: var(--bg3); padding: 10px 12px; text-align: left;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--t3); font-weight: 600; border-bottom: 1px solid var(--b1); white-space: nowrap;
+}
+.apps-tbl td {
+  padding: 11px 12px; border-bottom: 1px solid var(--b1); color: var(--t1); vertical-align: middle;
+}
+.apps-tbl tr:last-child td { border-bottom: none; }
+.apps-tbl tr:not(.apps-summary-row):hover { background: var(--bg3); }
+.apps-tbl tr.apps-summary-row { background: var(--bg3); font-weight: 600; }
+.apps-tbl tr.apps-summary-row td { border-top: 2px solid var(--b2); border-bottom: none; padding: 13px 12px; }
+.apps-tbl .mono { font-family: var(--mono); }
+.apps-tbl .num { text-align: right; white-space: nowrap; }
+.apps-tbl .route { font-weight: 500; white-space: nowrap; }
+.apps-tbl .profit-pos { color: var(--grn); font-weight: 600; }
+.apps-tbl .profit-neg { color: var(--red); font-weight: 600; }
+
+.apps-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 10px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+  white-space: nowrap;
+}
+.apps-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.apps-status.new { background: rgba(109,164,255,.12); color: #6da4ff; }
+.apps-status.new::before { background: #6da4ff; }
+.apps-status.transit { background: rgba(255,190,99,.12); color: var(--acc); }
+.apps-status.transit::before { background: var(--acc); animation: pulse 1.5s infinite; }
+.apps-status.done { background: rgba(74,222,128,.12); color: var(--grn); }
+.apps-status.done::before { background: var(--grn); }
+.apps-status.cancel { background: rgba(128,128,128,.12); color: var(--t3); }
+.apps-status.cancel::before { background: var(--t3); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+.apps-act-row { display: flex; gap: 4px; justify-content: flex-end; }
+.apps-act-btn {
+  width: 28px; height: 28px; background: var(--bg3); border: 1px solid var(--b2);
+  border-radius: 5px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--t2); transition: all .15s; font-family: inherit;
+}
+.apps-act-btn:not(:disabled):hover { background: var(--bg4); border-color: var(--acc); color: var(--acc); }
+.apps-act-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+.apps-empty {
+  background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r2);
+  padding: 48px; text-align: center; color: var(--t4);
+}
+
+/* ─── Форма створення заявки ─── */
+.zf-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+  z-index: 10000; display: flex; align-items: flex-start; justify-content: center;
+  padding: 30px 16px; overflow-y: auto;
+}
+.zf-modal {
+  background: var(--bg2); border: 1px solid var(--b1); border-radius: 14px;
+  width: 100%; max-width: 920px; box-shadow: 0 30px 80px rgba(0,0,0,.7);
+}
+.zf-head {
+  padding: 20px 26px; border-bottom: 1px solid var(--b1);
+  display: flex; justify-content: space-between; align-items: center;
+  position: sticky; top: 0; background: var(--bg2); z-index: 5; border-radius: 14px 14px 0 0;
+}
+.zf-head h2 { font-size: 17px; font-weight: 600; }
+.zf-num {
+  font-family: var(--mono); font-size: 12px; color: var(--acc); background: rgba(255,190,99,.15);
+  padding: 4px 10px; border-radius: 6px;
+}
+.zf-close {
+  background: transparent; border: none; color: var(--t3); cursor: pointer;
+  font-size: 22px; padding: 0 6px;
+}
+.zf-close:hover { color: var(--t1); }
+.zf-body { padding: 22px 26px; }
+.zf-section { margin-bottom: 24px; }
+.zf-section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--acc); font-weight: 700; margin-bottom: 12px;
+  padding-bottom: 7px; border-bottom: 1px solid var(--b1);
+}
+.zf-grid { display: grid; gap: 12px; }
+.zf-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.zf-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.zf-full { grid-column: 1 / -1; }
+.zf-field {}
+.zf-label {
+  display: block; font-size: 11px; color: var(--t3);
+  text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-bottom: 5px;
+}
+.zf-label .req { color: var(--acc); margin-left: 2px; }
+.zf-input, .zf-select, .zf-textarea {
+  width: 100%; background: var(--bg3); border: 1px solid var(--b2); color: var(--t1);
+  padding: 9px 12px; border-radius: var(--r); font-family: inherit; font-size: 13px; outline: none;
+}
+.zf-input:focus, .zf-select:focus, .zf-textarea:focus { border-color: var(--acc); }
+.zf-input::placeholder, .zf-textarea::placeholder { color: var(--t4); }
+.zf-input.mono { font-family: var(--mono); }
+.zf-textarea { resize: vertical; min-height: 55px; }
+.zf-input.with-suffix { padding-right: 50px; }
+.zf-input-wrap { position: relative; }
+.zf-suffix {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--t3); font-size: 12px; font-family: var(--mono); pointer-events: none;
+}
+.zf-hint { font-size: 11px; color: var(--t3); margin-top: 3px; }
+.zf-warn-text {
+  font-size: 11px; color: var(--red); margin-top: 4px; line-height: 1.4;
+  background: rgba(240,80,96,.08); border: 1px solid rgba(240,80,96,.25);
+  padding: 7px 10px; border-radius: var(--r);
+}
+.zf-reward {
+  background: linear-gradient(180deg, rgba(255,190,99,.08), rgba(255,190,99,.02));
+  border: 1px solid rgba(255,190,99,.25); border-radius: var(--r2);
+  padding: 13px 18px; display: flex; justify-content: space-between; align-items: center;
+}
+.zf-reward-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--acc); font-weight: 700;
+}
+.zf-reward-formula { font-size: 11px; color: var(--t3); margin-top: 4px; font-family: var(--mono); }
+.zf-reward-val { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--acc); }
+.zf-foot {
+  padding: 15px 26px; border-top: 1px solid var(--b1); background: var(--bg);
+  display: flex; gap: 10px; justify-content: space-between; border-radius: 0 0 14px 14px;
+  position: sticky; bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .apps-kpi { grid-template-columns: repeat(2, 1fr); }
+  .apps-actions { flex-direction: column; align-items: stretch; }
+  .zf-grid.cols-2, .zf-grid.cols-3 { grid-template-columns: 1fr; }
+}
 .kpi-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 16px; }
 .kpi-card { background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r2); padding: 14px; }
 .kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--t3); font-weight: 600; margin-bottom: 5px; }
@@ -2022,7 +2199,6 @@ function openEmail(orderId){
     <div class="email-scroll" id="escroll-${orderId}">
       <div class="email-subj-row">
         <div class="email-subj">${em.subject}</div>
-        ${confirmBtnHtml}
       </div>
       <div class="email-meta">
         <span class="em-l">Від:</span><span class="em-v">${em.from} &lt;${em.addr}&gt;</span>
@@ -2035,6 +2211,10 @@ function openEmail(orderId){
       ${missingHtml}${freightHtml}${threadHtml}
     </div>
     <div class="reply-box">
+      <div class="email-confirm-bar">
+        <span class="email-confirm-bar-label">Угода з замовником:</span>
+        ${confirmBtnHtml}
+      </div>
       <div class="reply-to">Кому: ${em.from} &lt;${em.addr}&gt;</div>
       <textarea class="reply-ta" id="rt-${orderId}" placeholder="Напишіть відповідь замовнику...&#10;Якщо потрібно уточнити дані — запитайте тут."></textarea>
       <div class="profanity-warn" id="pw-${orderId}">⛔ Будь ласка, спілкуйтесь професійно.</div>
@@ -2614,50 +2794,593 @@ function openChatView(cid){
 // ================================================================
 // ORDERS MODULE
 // ================================================================
-function renderOrders(){
+// ─── НОВА вкладка "Замовлення" — таблиця заявок (deplo 9) ─────
+let _applicationsCache = [];
+let _applicationsFilter = 'all'; // all/new/in_transit/completed/cancelled
+
+async function renderOrders(){
   unlock('orders');
-  document.getElementById('tb-right').innerHTML=`<button class="btn secondary" onclick="go('docs')">До документів →</button>`;
-  const total=S.orders.length;
-  const confirmed=S.orders.filter(o=>['confirmed','transit','done'].includes(o.status)).length;
-  const done=S.orders.filter(o=>o.status==='done').length;
-  const problems=S.orders.filter(o=>o.status==='problem').length;
-  document.getElementById('content').innerHTML=`
+  document.getElementById('tb-right').innerHTML = '';
+
+  // Завантажуємо заявки з сервера
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const res = await fetch('/api/student/applications', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (res.ok) _applicationsCache = await res.json();
+  } catch(e) { _applicationsCache = []; }
+
+  redrawApplicationsTable();
+}
+
+function redrawApplicationsTable(){
+  const all = _applicationsCache;
+  const filt = _applicationsFilter === 'all' ? all : all.filter(a => a.status === _applicationsFilter);
+
+  // Підрахунки KPI (по всіх, не по фільтрованих)
+  const totalCreated = all.length;
+  const totalOrders = S.orders?.length || 8;
+  const sumClient = all.reduce((s,a) => s + (parseFloat(a.client_freight) || 0), 0);
+  const sumCarrier = all.reduce((s,a) => s + (parseFloat(a.carrier_freight) || 0), 0);
+  const sumReward = all.reduce((s,a) => s + (parseFloat(a.reward) || 0), 0);
+  const progressPercent = Math.round((totalCreated / totalOrders) * 100);
+
+  const formatMoney = n => '€ ' + Math.round(n).toLocaleString('uk-UA').replace(/,/g, ' ');
+
+  const closedDeals = (S.orders || []).filter(o => o.state === 'closed' || o.state === 'closed_changed').length;
+
+  document.getElementById('content').innerHTML = `
   <div class="orders-page">
-    <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-label">Всього</div><div class="kpi-val">${total}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Підтверджено</div><div class="kpi-val orange">${confirmed}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Виконано</div><div class="kpi-val green">${done}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Проблеми</div><div class="kpi-val${problems?' red':''}">${problems}</div></div>
+    <div class="apps-head">
+      <h2 class="apps-title">Замовлення</h2>
     </div>
-    <div class="orders-grid" id="orders-grid-inner">
-      ${(()=>{
-        const active=S.orders.filter(o=>o.carrierId||(o.status!=='new'&&o.status!=='negotiating'));
-        if(!active.length) return '<div style="grid-column:1/-1;padding:48px;text-align:center;color:var(--t4)"><div style=\"font-size:32px;opacity:.1;margin-bottom:10px\">📋</div><div style=\"font-size:15px;font-weight:600;margin-bottom:5px\">Замовлень ще немає</div><div style=\"font-size:13px\">Знайдіть перевізника та підтвердіть замовлення через переговори</div></div>';
-        return active.map(o=>{
-        const car=o.carrierId?S.carriers.find(c=>c.id===o.carrierId):null;
-        const margin=o.clientFreightAgreed&&o.carrierFreightAgreed?o.clientFreightAgreed-o.carrierFreightAgreed:null;
-        const stmap={new:'s-new',confirmed:'s-conf',transit:'s-transit',problem:'s-prob',done:'s-done',cancelled:'s-cancel',negotiating:'s-conf'};
-        const stlbl={new:'Новий',confirmed:'Підтверджено',transit:'В дорозі',problem:'⚠ Проблема',done:'Виконано',cancelled:'Скасовано',negotiating:'Переговори'};
-        return `<div class="oc${o.status==='problem'?' problem':o.status==='confirmed'?' confirmed':''}" onclick="openOrderDetail('${o.id}')">
-          <div class="oc-id"><span>${o.id}</span><span style="color:var(--t3)">${o.email.from.split(' ')[0]}</span></div>
-          <div class="oc-route">${o.dirs.join(' → ')}</div>
-          <div class="oc-cargo">${o.vehicle} · ${o.loadDate}</div>
-          <div class="oc-footer">
-            <div class="oc-dot ${stmap[o.status]||'s-new'}"></div>
-            <span class="oc-status">${stlbl[o.status]||o.status}</span>
-            ${car?`<span style="font-size:10px;color:var(--t3)">${car.name.split(' ')[0]}</span>`:''}
-            <span class="oc-margin ${margin===null?'pend':margin>0?'pos':'neg'}">${margin===null?'€—':'€'+margin}</span>
-          </div>
-        </div>`;
-      }).join('');})()}
+
+    <div class="apps-kpi">
+      <div class="kpi-card">
+        <div class="kpi-label">Створено заявок</div>
+        <div class="kpi-val">${totalCreated} / ${totalOrders}</div>
+        <div class="kpi-progress"><div class="kpi-progress-fill" style="width:${progressPercent}%"></div></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Фрахт замовників</div>
+        <div class="kpi-val mono">${formatMoney(sumClient)}</div>
+        <div class="kpi-sub">за ${totalCreated} заявками</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Фрахт перевізникам</div>
+        <div class="kpi-val mono">${formatMoney(sumCarrier)}</div>
+        <div class="kpi-sub">за ${totalCreated} заявками</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Винагорода</div>
+        <div class="kpi-val acc mono">${formatMoney(sumReward)}</div>
+        <div class="kpi-sub">${Math.round((sumReward/1000)*100)}% з цілі €1 000${sumReward >= 1000 ? ' ✓' : ''}</div>
+      </div>
     </div>
+
+    <div class="apps-actions">
+      <div class="apps-actions-l">
+        <button class="btn-create" onclick="openApplicationForm()">+ Створити заявку</button>
+        <div class="apps-chips">
+          <span class="apps-chip ${_applicationsFilter==='all'?'active':''}" onclick="setApplicationsFilter('all')">Всі</span>
+          <span class="apps-chip ${_applicationsFilter==='new'?'active':''}" onclick="setApplicationsFilter('new')">Нові</span>
+          <span class="apps-chip ${_applicationsFilter==='in_transit'?'active':''}" onclick="setApplicationsFilter('in_transit')">В дорозі</span>
+          <span class="apps-chip ${_applicationsFilter==='completed'?'active':''}" onclick="setApplicationsFilter('completed')">Виконані</span>
+          <span class="apps-chip ${_applicationsFilter==='cancelled'?'active':''}" onclick="setApplicationsFilter('cancelled')">Скасовані</span>
+        </div>
+      </div>
+      <div class="apps-actions-r">
+        ${closedDeals} з ${totalOrders} рейсів закрито угодою
+      </div>
+    </div>
+
+    ${filt.length === 0 ? `
+      <div class="apps-empty">
+        <div style="font-size:36px;opacity:.15;margin-bottom:10px">📋</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:5px">${_applicationsFilter === 'all' ? 'Заявок ще немає' : 'Немає заявок з цим статусом'}</div>
+        <div style="font-size:12px;color:var(--t3)">${_applicationsFilter === 'all' ? 'Натисніть «+ Створити заявку» щоб почати' : ''}</div>
+      </div>
+    ` : `
+    <div class="apps-tbl-wrap">
+      <table class="apps-tbl">
+        <thead>
+          <tr>
+            <th style="width:90px">№</th>
+            <th>Маршрут</th>
+            <th>Замовник</th>
+            <th>Перевізник</th>
+            <th>Дата завант.</th>
+            <th class="num">Фрахт З.</th>
+            <th class="num">Фрахт П.</th>
+            <th class="num">Винагорода</th>
+            <th>Статус</th>
+            <th style="text-align:right">Дії</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filt.map(a => renderApplicationRow(a)).join('')}
+          <tr class="apps-summary-row">
+            <td colspan="5" style="text-align:right;color:var(--t3);text-transform:uppercase;font-size:11px;letter-spacing:.08em">Підсумок (${filt.length} ${filt.length===1?'заявка':'заявок'})</td>
+            <td class="num mono">${formatMoney(filt.reduce((s,a)=>s+(parseFloat(a.client_freight)||0),0))}</td>
+            <td class="num mono">${formatMoney(filt.reduce((s,a)=>s+(parseFloat(a.carrier_freight)||0),0))}</td>
+            <td class="num mono" style="color:var(--acc);font-size:14px">${formatMoney(filt.reduce((s,a)=>s+(parseFloat(a.reward)||0),0))}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    `}
   </div>`;
 }
 
+function renderApplicationRow(a){
+  const numDisplay = `${String(a.number_seq).padStart(4,'0')}/${String(a.number_year).slice(-2)}`;
+
+  // Знаходимо замовника і перевізника
+  const client = S.allClients?.find(c => c.id === a.client_id);
+  const clientName = client?.company || '—';
+
+  // Перевізник
+  let carrierName = '—';
+  if (a.carrier_id) {
+    const c = (S.carriers || []).find(c => c.id === a.carrier_id) || (S.allCarriers || []).find(c => c.id === a.carrier_id);
+    if (c) carrierName = c.name;
+  }
+
+  // Маршрут — спрощено з адрес
+  const route = extractRouteFromAddresses(a.load_address, a.unload_address);
+
+  // Фінанси
+  const fmt = n => n ? '€ ' + Math.round(n).toLocaleString('uk-UA').replace(/,/g, ' ') : '—';
+  const rewardClass = (parseFloat(a.reward) > 0) ? 'profit-pos' : (parseFloat(a.reward) < 0 ? 'profit-neg' : '');
+
+  // Статус
+  const statusMap = {
+    'new': { cls: 'new', label: 'Нова' },
+    'in_transit': { cls: 'transit', label: 'В дорозі' },
+    'completed': { cls: 'done', label: 'Виконана' },
+    'cancelled': { cls: 'cancel', label: 'Скасована' },
+  };
+  const status = statusMap[a.status] || statusMap['new'];
+
+  // Дії
+  // У деплої 9 робоча тільки кнопка ✏ Редагувати
+  // Решта — задеактивовано (буде у деплої 10)
+  const actions = `
+    <div class="apps-act-row">
+      <button class="apps-act-btn" title="Заявка для перевізника (деплой 10)" disabled>📋</button>
+      <button class="apps-act-btn" title="Довідка (деплой 10)" disabled>📄</button>
+      <button class="apps-act-btn" title="Рахунок (деплой 10)" disabled>💰</button>
+      <button class="apps-act-btn" title="Акт (деплой 10)" disabled>✓</button>
+      <button class="apps-act-btn" title="Редагувати" onclick="openApplicationForm('${a.id}')">✏</button>
+      ${a.status === 'in_transit' ? `<button class="apps-act-btn" title="Підтвердити доставку (деплой 10)" disabled>🚛</button>` : ''}
+    </div>
+  `;
+
+  return `<tr>
+    <td class="mono">${escapeHtml(numDisplay)}</td>
+    <td class="route">${escapeHtml(route)}</td>
+    <td>${escapeHtml(clientName)}</td>
+    <td>${escapeHtml(carrierName)}</td>
+    <td class="mono">${escapeHtml(a.load_date || '—')}</td>
+    <td class="num mono">${fmt(a.client_freight)}</td>
+    <td class="num mono">${fmt(a.carrier_freight)}</td>
+    <td class="num ${rewardClass}">${fmt(a.reward)}</td>
+    <td><span class="apps-status ${status.cls}">${status.label}</span></td>
+    <td>${actions}</td>
+  </tr>`;
+}
+
+// Витягуємо короткий маршрут з адрес "місто → місто"
+function extractRouteFromAddresses(loadAddr, unloadAddr){
+  if (!loadAddr && !unloadAddr) return '—';
+  const extract = (addr) => {
+    if (!addr) return '?';
+    // Пробуємо знайти головне місто у адресі
+    const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+    // Зазвичай місто — другий або третій елемент
+    // Беремо те що схоже на місто (не починається з цифри, не вул., тощо)
+    for (const p of parts) {
+      if (!/^\d/.test(p) && !/вул\.?|street|str\.?|просп\.?/i.test(p) && p.length > 2 && p.length < 30) {
+        return p;
+      }
+    }
+    return parts[0] || '?';
+  };
+  return `${extract(loadAddr)} → ${extract(unloadAddr)}`;
+}
+
+function setApplicationsFilter(f){
+  _applicationsFilter = f;
+  redrawApplicationsTable();
+}
+
+// ─── ФОРМА створення/редагування заявки ──────────────────────
+let _applicationFormState = null;
+
+async function openApplicationForm(applicationId){
+  // Завантажуємо списки замовників і перевізників
+  const token = localStorage.getItem('docaa_token');
+  if (!S.allClients) {
+    try {
+      const r = await fetch('/api/student/clients', { headers: { 'Authorization': 'Bearer ' + token }});
+      S.allClients = r.ok ? await r.json() : [];
+    } catch(e) { S.allClients = []; }
+  }
+  if (!S.allCarriers) {
+    try {
+      const r = await fetch('/api/student/all-carriers', { headers: { 'Authorization': 'Bearer ' + token }});
+      S.allCarriers = r.ok ? await r.json() : [];
+    } catch(e) { S.allCarriers = []; }
+  }
+
+  let existing = null;
+  if (applicationId) {
+    try {
+      const r = await fetch(`/api/student/applications/${applicationId}`, { headers: { 'Authorization': 'Bearer ' + token }});
+      if (r.ok) existing = await r.json();
+    } catch(e){}
+  }
+
+  _applicationFormState = {
+    id: existing?.id || null,
+    isEdit: !!existing,
+    data: existing || {},
+  };
+
+  showApplicationForm();
+}
+
+function closeApplicationForm(){
+  document.getElementById('zf-overlay')?.remove();
+  _applicationFormState = null;
+}
+
+function showApplicationForm(){
+  const st = _applicationFormState;
+  if (!st) return;
+  const d = st.data;
+
+  // Генеруємо номер для нової
+  let numberDisplay = '';
+  if (st.isEdit) {
+    numberDisplay = `№ ${String(d.number_seq).padStart(4,'0')}/${d.number_year}`;
+  } else {
+    // Прогноз номера — береться на сервері, але показуємо передбачення
+    const maxSeq = Math.max(0, ..._applicationsCache.map(a => a.number_seq || 0));
+    numberDisplay = `№ ${String(maxSeq + 1).padStart(4,'0')}/${new Date().getFullYear()}`;
+  }
+
+  const clientsList = S.allClients || [];
+  const carriersList = S.allCarriers || [];
+
+  // Митні переходи (зі списку у воркфлоу)
+  const borderCrossings = [
+    'Medyka - Шегині (PL-UA)',
+    'Korczowa - Краківець (PL-UA)',
+    'Hrebenne - Рава-Руська (PL-UA)',
+    'Dorohusk - Ягодин (PL-UA)',
+    'Dolhobyczow - Угринів (PL-UA)',
+    'Budomierz - Грушів (PL-UA)',
+    'Zosin - Устилуг (PL-UA)',
+    'Zahony - Чоп (HU-UA)',
+    'Vysne Nemecke - Ужгород (SK-UA)',
+    'Siret - Порубне (RO-UA)',
+    'Halmeu - Дякове (RO-UA)',
+    'Giurgiulesti - Рені (MD-UA)',
+  ];
+
+  // Типи ТЗ
+  const vehicleTypes = [
+    'Тент', 'Тент штора', 'Реф', 'Реф -10', 'Реф -15', 'Реф -18',
+    'Ізотерм', 'Мега', 'Юмбо', 'Сцепка', 'Низькорамний трал', 'Платформа',
+    'Контейнеровоз', 'Зерновоз', 'Самоскидний', 'Автовоз',
+    'Цистерна харчова', 'Цистерна хімічна', 'Бензовоз',
+    'Бус 1.5т', 'Бус 3т', 'Бус 5т',
+    'Рухома підлога', 'Модульний причіп', 'Тваринний причіп',
+  ];
+
+  const ov = document.createElement('div');
+  ov.id = 'zf-overlay';
+  ov.className = 'zf-overlay';
+  ov.onclick = e => { if (e.target === ov) closeApplicationForm(); };
+
+  ov.innerHTML = `
+    <div class="zf-modal">
+      <div class="zf-head">
+        <div style="display:flex;align-items:center;gap:10px">
+          <h2>${st.isEdit ? 'Редагування заявки' : 'Створення заявки'}</h2>
+          <span class="zf-num">${numberDisplay}</span>
+        </div>
+        <button class="zf-close" onclick="closeApplicationForm()">✕</button>
+      </div>
+      <div class="zf-body">
+
+        <div class="zf-section">
+          <div class="zf-section-title">Сторони</div>
+          <div class="zf-grid cols-2">
+            <div class="zf-field">
+              <label class="zf-label">Замовник<span class="req">*</span></label>
+              <select class="zf-select" id="af-client">
+                <option value="">— Оберіть —</option>
+                ${clientsList.map(c => `<option value="${c.id}" ${c.id===d.client_id?'selected':''}>${escapeHtml(c.company)}</option>`).join('')}
+              </select>
+              <div class="zf-hint">Лише ті з якими була переписка</div>
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Перевізник<span class="req">*</span></label>
+              <select class="zf-select" id="af-carrier">
+                <option value="">— Оберіть —</option>
+                ${carriersList.map(c => `<option value="${c.id}" ${c.id===d.carrier_id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+              </select>
+              <div class="zf-hint">З бази перевізників</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="zf-section">
+          <div class="zf-section-title">Маршрут</div>
+          <div class="zf-grid cols-2">
+            <div class="zf-field zf-full">
+              <label class="zf-label">Адреса завантаження<span class="req">*</span></label>
+              <input type="text" class="zf-input" id="af-load-addr" placeholder="вул. Промислова 1, Мюнхен, Німеччина" value="${escapeHtml(d.load_address||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Адреса замитнення</label>
+              <input type="text" class="zf-input" id="af-customs-out" placeholder="на місці завантаження" value="${escapeHtml(d.customs_out||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Митний перехід</label>
+              <select class="zf-select" id="af-border">
+                <option value="">—</option>
+                ${borderCrossings.map(bc => `<option value="${bc}" ${bc===d.border_crossing?'selected':''}>${bc}</option>`).join('')}
+              </select>
+            </div>
+            <div class="zf-field zf-full">
+              <label class="zf-label">Адреса розвантаження<span class="req">*</span></label>
+              <input type="text" class="zf-input" id="af-unload-addr" placeholder="вул. Київська 12, Львів, Україна" value="${escapeHtml(d.unload_address||'')}">
+            </div>
+            <div class="zf-field zf-full">
+              <label class="zf-label">Адреса розмитнення</label>
+              <input type="text" class="zf-input" id="af-customs-in" placeholder="на місці розвантаження або інша адреса" value="${escapeHtml(d.customs_in||'')}">
+            </div>
+          </div>
+        </div>
+
+        <div class="zf-section">
+          <div class="zf-section-title">Вантаж</div>
+          <div class="zf-grid cols-3">
+            <div class="zf-field zf-full">
+              <label class="zf-label">Тип і характер вантажу<span class="req">*</span></label>
+              <input type="text" class="zf-input" id="af-cargo-desc" placeholder="напр. меблеві заготовки, паливо для тракторів" value="${escapeHtml(d.cargo_description||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Вага (т)<span class="req">*</span></label>
+              <input type="number" class="zf-input" id="af-weight" placeholder="0" step="0.1" value="${d.cargo_weight||''}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Об'єм (м³)</label>
+              <input type="number" class="zf-input" id="af-volume" placeholder="0" step="0.1" value="${d.cargo_volume||''}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">АДР (клас)</label>
+              <input type="text" class="zf-input" id="af-adr" placeholder="напр. 3, 6.1, PG II" value="${escapeHtml(d.adr_class||'')}">
+            </div>
+          </div>
+        </div>
+
+        <div class="zf-section">
+          <div class="zf-section-title">Дати</div>
+          <div class="zf-grid cols-2">
+            <div class="zf-field">
+              <label class="zf-label">Дата завантаження<span class="req">*</span></label>
+              <input type="text" class="zf-input" id="af-load-date" placeholder="ДД.ММ.РРРР" value="${escapeHtml(d.load_date||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Дата розвантаження</label>
+              <input type="text" class="zf-input" id="af-unload-date" placeholder="ДД.ММ.РРРР" value="${escapeHtml(d.unload_date||'')}">
+            </div>
+          </div>
+        </div>
+
+        <div class="zf-section">
+          <div class="zf-section-title">Транспорт</div>
+          <div class="zf-grid cols-2">
+            <div class="zf-field">
+              <label class="zf-label">Тип ТЗ<span class="req">*</span></label>
+              <select class="zf-select" id="af-vehicle-type">
+                <option value="">— Оберіть —</option>
+                ${vehicleTypes.map(vt => `<option value="${vt}" ${vt===d.vehicle_type?'selected':''}>${vt}</option>`).join('')}
+              </select>
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Вимоги до ТЗ</label>
+              <input type="text" class="zf-input" id="af-vehicle-req" placeholder="напр. ремені, кутники, GPS" value="${escapeHtml(d.vehicle_requirements||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">№ тягача<span class="req">*</span></label>
+              <input type="text" class="zf-input mono" id="af-truck-plate" placeholder="АТ6380АС" value="${escapeHtml(d.truck_plate||'')}">
+              <div class="zf-hint">Формат UA: 2 літери + 4 цифри + 2 літери</div>
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">№ напівпричіпа<span class="req">*</span></label>
+              <input type="text" class="zf-input mono" id="af-trailer-plate" placeholder="АТ7290ХХ" value="${escapeHtml(d.trailer_plate||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Водій (ПІБ)<span class="req">*</span></label>
+              <input type="text" class="zf-input" id="af-driver-name" placeholder="Петренко І.В." value="${escapeHtml(d.driver_name||'')}">
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Телефон водія<span class="req">*</span></label>
+              <input type="text" class="zf-input" id="af-driver-phone" placeholder="+380 ..." value="${escapeHtml(d.driver_phone||'')}">
+            </div>
+          </div>
+        </div>
+
+        <div class="zf-section">
+          <div class="zf-section-title">Фінанси</div>
+          <div class="zf-grid cols-2">
+            <div class="zf-field">
+              <label class="zf-label">Фрахт замовника<span class="req">*</span></label>
+              <div class="zf-input-wrap">
+                <input type="number" class="zf-input with-suffix" id="af-client-freight" placeholder="0" value="${d.client_freight||''}" oninput="recalcReward()">
+                <span class="zf-suffix">€</span>
+              </div>
+              <div class="zf-warn-text" id="af-client-warn" style="display:none"></div>
+            </div>
+            <div class="zf-field">
+              <label class="zf-label">Фрахт перевізника<span class="req">*</span></label>
+              <div class="zf-input-wrap">
+                <input type="number" class="zf-input with-suffix" id="af-carrier-freight" placeholder="0" value="${d.carrier_freight||''}" oninput="recalcReward()">
+                <span class="zf-suffix">€</span>
+              </div>
+              <div class="zf-warn-text" id="af-carrier-warn" style="display:none"></div>
+            </div>
+          </div>
+          <div class="zf-reward" style="margin-top:14px">
+            <div>
+              <div class="zf-reward-label">Винагорода експедитора</div>
+              <div class="zf-reward-formula" id="af-reward-formula">— − — = —</div>
+            </div>
+            <div class="zf-reward-val" id="af-reward-val">€ 0</div>
+          </div>
+        </div>
+
+        <div class="zf-section">
+          <div class="zf-section-title">Додатково</div>
+          <div class="zf-field">
+            <label class="zf-label">Додаткова інформація</label>
+            <textarea class="zf-textarea" id="af-info" placeholder="Особливі вимоги, контакти на місці, нотатки...">${escapeHtml(d.additional_info||'')}</textarea>
+          </div>
+        </div>
+
+        <div class="zf-section" id="af-server-errors" style="display:none">
+          <div class="zf-warn-text" id="af-server-errors-text"></div>
+        </div>
+
+      </div>
+      <div class="zf-foot">
+        <button class="btn" onclick="closeApplicationForm()">Скасувати</button>
+        <div style="display:flex;gap:10px">
+          <button class="btn primary" id="af-submit" onclick="submitApplication()">${st.isEdit ? '💾 Зберегти зміни' : '✓ Створити заявку'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ov);
+
+  // Перерахуємо винагороду одразу
+  recalcReward();
+}
+
+function recalcReward(){
+  const cf = parseFloat(document.getElementById('af-client-freight')?.value) || 0;
+  const carF = parseFloat(document.getElementById('af-carrier-freight')?.value) || 0;
+  const reward = cf - carF;
+  const formula = document.getElementById('af-reward-formula');
+  const val = document.getElementById('af-reward-val');
+  if (formula) formula.textContent = `€${cf} − €${carF} = €${reward}`;
+  if (val) {
+    val.textContent = `€ ${reward}`;
+    val.style.color = reward > 0 ? 'var(--acc)' : (reward < 0 ? 'var(--red)' : 'var(--t3)');
+  }
+}
+
+async function submitApplication(){
+  const st = _applicationFormState;
+  if (!st) return;
+
+  const get = (id) => document.getElementById(id)?.value?.trim() || '';
+
+  const body = {
+    client_id: get('af-client'),
+    carrier_id: get('af-carrier'),
+    load_address: get('af-load-addr'),
+    customs_out: get('af-customs-out'),
+    customs_in: get('af-customs-in'),
+    unload_address: get('af-unload-addr'),
+    border_crossing: get('af-border'),
+    cargo_description: get('af-cargo-desc'),
+    cargo_weight: get('af-weight'),
+    cargo_volume: get('af-volume'),
+    adr_class: get('af-adr'),
+    load_date: get('af-load-date'),
+    unload_date: get('af-unload-date'),
+    vehicle_type: get('af-vehicle-type'),
+    vehicle_requirements: get('af-vehicle-req'),
+    truck_plate: get('af-truck-plate'),
+    trailer_plate: get('af-trailer-plate'),
+    driver_name: get('af-driver-name'),
+    driver_phone: get('af-driver-phone'),
+    client_freight: get('af-client-freight'),
+    carrier_freight: get('af-carrier-freight'),
+    additional_info: get('af-info'),
+  };
+
+  const btn = document.getElementById('af-submit');
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Збереження...';
+
+  const token = localStorage.getItem('docaa_token');
+  const url = st.isEdit ? `/api/student/applications/${st.id}` : '/api/student/applications';
+  const method = st.isEdit ? 'PATCH' : 'POST';
+
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      const errEl = document.getElementById('af-server-errors');
+      const errText = document.getElementById('af-server-errors-text');
+      errEl.style.display = 'block';
+      errText.textContent = data.message || data.error || 'Помилка';
+      btn.disabled = false;
+      btn.innerHTML = st.isEdit ? '💾 Зберегти зміни' : '✓ Створити заявку';
+      return;
+    }
+
+    // Показуємо попередження (якщо є) — це не помилка, але треба знати
+    if (data.warnings && data.warnings.length > 0) {
+      const warns = data.warnings.filter(w => w.severity === 'warn');
+      if (warns.length > 0) {
+        // Показуємо попередження в окремому місці у формі
+        // (але не блокуємо — заявка вже збережена)
+        const errEl = document.getElementById('af-server-errors');
+        const errText = document.getElementById('af-server-errors-text');
+        errEl.style.display = 'block';
+        errEl.style.background = 'rgba(255,190,99,.08)';
+        errEl.style.borderColor = 'rgba(255,190,99,.3)';
+        errText.innerHTML = '<strong style="color:var(--acc)">⚠ Заявку збережено, але є невідповідності:</strong><br>' +
+          warns.map(w => '• ' + w.message).join('<br>');
+        // Через 4 секунди закриваємо форму
+        notify(`Заявку збережено з попередженнями ⚠`, 'warn');
+        setTimeout(() => {
+          closeApplicationForm();
+          renderOrders();
+        }, 4000);
+        return;
+      }
+    }
+
+    notify(`Заявку ${st.isEdit ? 'оновлено' : 'створено'} ✓`, 'ok');
+    closeApplicationForm();
+    renderOrders();
+  } catch(e){
+    btn.disabled = false;
+    btn.innerHTML = st.isEdit ? '💾 Зберегти зміни' : '✓ Створити заявку';
+    notify('Помилка з\'єднання', 'err');
+  }
+}
+
+// ─── СТАРА carded vкладка (видалена, але функція є для зворотньої сумісності) ──
 function openOrderDetail(orderId){
-  const o=S.orders.find(x=>x.id===orderId); if(!o) return;
-  const car=o.carrierId?S.carriers.find(c=>c.id===o.carrierId):null;
-  notify(`${o.id} · ${o.vehicle} · ${o.loadDate}→${o.delivDate}${car?' · '+car.name:''}`);
+  // Старі картки видалені. Якщо хтось викличе — нічого не робимо.
+  return;
 }
 
 // ================================================================

@@ -773,4 +773,312 @@ function renderApplicationAsText(d, missing){
   return lines.join('\n');
 }
 
+// ─── APPLICATIONS (Заявки) ─────────────────────────────────────
+// Студент сам створює заявки після підтверджень (або раніше — як чорновик).
+// Винагорода = client_freight - carrier_freight, але 0 якщо немає підтверджень з обома.
+// Валідація НЕ блокує збереження — лише записує warnings для резюме.
+
+const appValidator = require('../utils/application-validator');
+
+// Обчислюємо наступний номер заявки для студента
+function getNextApplicationNumber(studentId){
+  const year = new Date().getFullYear();
+  const row = db.prepare('SELECT MAX(number_seq) as max_seq FROM applications WHERE student_id=? AND number_year=?')
+    .get(studentId, year);
+  const nextSeq = (row?.max_seq || 0) + 1;
+  return { number_seq: nextSeq, number_year: year };
+}
+
+// GET /api/student/applications — список усіх заявок студента
+router.get('/applications', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const rows = db.prepare(`
+    SELECT * FROM applications WHERE session_id=? ORDER BY number_seq DESC
+  `).all(session.id);
+
+  const result = rows.map(r => ({
+    ...r,
+    validation_warnings: r.validation_warnings ? JSON.parse(r.validation_warnings) : [],
+  }));
+  res.json(result);
+});
+
+// GET /api/student/applications/:id — одна заявка
+router.get('/applications/:id', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const row = db.prepare('SELECT * FROM applications WHERE id=? AND session_id=?').get(req.params.id, session.id);
+  if (!row) return res.status(404).json({ error: 'not_found' });
+
+  res.json({
+    ...row,
+    validation_warnings: row.validation_warnings ? JSON.parse(row.validation_warnings) : [],
+  });
+});
+
+// POST /api/student/applications — створити заявку
+router.post('/applications', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
+
+  const body = req.body || {};
+
+  // Базова валідація обов'язкових полів
+  // R-поля з воркфлоу: Замовник, Перевізник, адреси завант./розв., вага,
+  // тип вантажу, дата завант., тип ТЗ, номери, водій+тел, фрахти
+  const required = {
+    client_id: 'Замовник',
+    carrier_id: 'Перевізник',
+    load_address: 'Адреса завантаження',
+    unload_address: 'Адреса розвантаження',
+    cargo_description: 'Тип і характер вантажу',
+    cargo_weight: 'Вага',
+    load_date: 'Дата завантаження',
+    vehicle_type: 'Тип ТЗ',
+    truck_plate: '№ тягача',
+    trailer_plate: '№ напівпричіпа',
+    driver_name: 'Водій',
+    driver_phone: 'Телефон водія',
+    client_freight: 'Фрахт замовника',
+    carrier_freight: 'Фрахт перевізника',
+  };
+  const missing = [];
+  for (const [field, label] of Object.entries(required)) {
+    const val = body[field];
+    if (val === undefined || val === null || val === '') missing.push(label);
+  }
+  if (missing.length > 0) {
+    return res.status(400).json({
+      error: 'missing_required',
+      message: `Обов'язкові поля не заповнені: ${missing.join(', ')}`,
+      missing,
+    });
+  }
+
+  // Завантажуємо контекст для валідації (letter, order_progress)
+  let letter = null, client = null, carrier = null, orderProgress = null;
+  if (body.letter_id) {
+    letter = db.prepare('SELECT * FROM letters WHERE id=?').get(body.letter_id);
+    orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+      .get(session.id, body.letter_id);
+  }
+  if (body.client_id) {
+    client = db.prepare('SELECT * FROM clients WHERE id=?').get(body.client_id);
+  }
+  if (body.carrier_id) {
+    carrier = db.prepare('SELECT * FROM carriers WHERE id=?').get(body.carrier_id);
+  }
+
+  // Якщо letter_id не передано — пробуємо знайти letter за client_id
+  // (це допомагає коли студент створює заявку через таблицю не з контексту листа)
+  if (!letter && body.client_id) {
+    letter = db.prepare(`
+      SELECT l.* FROM letters l
+      INNER JOIN assignments a ON a.id = l.assignment_id OR JSON_EXTRACT(a.letter_ids, '$') LIKE '%' || l.id || '%'
+      WHERE a.student_id = ? AND l.client_id = ?
+      LIMIT 1
+    `).get(req.user.id, body.client_id);
+    if (letter) {
+      orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+        .get(session.id, letter.id);
+    }
+  }
+
+  // Запускаємо валідацію
+  const warnings = appValidator.validateApplication({
+    formData: body, orderProgress, letter, client, carrier,
+  });
+
+  // Обчислюємо винагороду
+  const reward = appValidator.computeReward({ formData: body, orderProgress });
+
+  // Генеруємо номер
+  const { number_seq, number_year } = getNextApplicationNumber(req.user.id);
+
+  // Зберігаємо
+  const id = uuidv4();
+  db.prepare(`INSERT INTO applications (
+    id, session_id, student_id, number_seq, number_year,
+    letter_id, client_id, carrier_id,
+    load_address, customs_out, customs_in, unload_address, border_crossing,
+    cargo_description, cargo_weight, cargo_volume, adr_class,
+    load_date, unload_date,
+    vehicle_type, vehicle_requirements,
+    truck_plate, trailer_plate, driver_name, driver_phone,
+    client_freight, carrier_freight, reward,
+    additional_info, status, validation_warnings
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new',?)`).run(
+    id, session.id, req.user.id, number_seq, number_year,
+    letter?.id || null, body.client_id || null, body.carrier_id || null,
+    body.load_address || null, body.customs_out || null, body.customs_in || null,
+    body.unload_address || null, body.border_crossing || null,
+    body.cargo_description || null, parseFloat(body.cargo_weight) || null,
+    parseFloat(body.cargo_volume) || null, body.adr_class || null,
+    body.load_date || null, body.unload_date || null,
+    body.vehicle_type || null, body.vehicle_requirements || null,
+    body.truck_plate || null, body.trailer_plate || null,
+    body.driver_name || null, body.driver_phone || null,
+    parseFloat(body.client_freight) || null,
+    parseFloat(body.carrier_freight) || null,
+    reward,
+    body.additional_info || null,
+    JSON.stringify(warnings),
+  );
+
+  res.json({
+    id,
+    number_seq,
+    number_year,
+    number_display: `${String(number_seq).padStart(4,'0')}/${number_year}`,
+    reward,
+    warnings,
+    status: 'new',
+  });
+});
+
+// PATCH /api/student/applications/:id — редагувати заявку
+router.patch('/applications/:id', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
+
+  const existing = db.prepare('SELECT * FROM applications WHERE id=? AND session_id=?')
+    .get(req.params.id, session.id);
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  // Не дозволяємо редагувати завершені заявки
+  if (existing.status === 'completed') {
+    return res.status(400).json({ error: 'cannot_edit', message: 'Заявку вже виконано, редагування неможливе.' });
+  }
+
+  const body = req.body || {};
+
+  // Базова валідація (як у create)
+  const required = {
+    client_id: 'Замовник',
+    carrier_id: 'Перевізник',
+    load_address: 'Адреса завантаження',
+    unload_address: 'Адреса розвантаження',
+    cargo_description: 'Тип і характер вантажу',
+    cargo_weight: 'Вага',
+    load_date: 'Дата завантаження',
+    vehicle_type: 'Тип ТЗ',
+    truck_plate: '№ тягача',
+    trailer_plate: '№ напівпричіпа',
+    driver_name: 'Водій',
+    driver_phone: 'Телефон водія',
+    client_freight: 'Фрахт замовника',
+    carrier_freight: 'Фрахт перевізника',
+  };
+  const missing = [];
+  for (const [field, label] of Object.entries(required)) {
+    const val = body[field];
+    if (val === undefined || val === null || val === '') missing.push(label);
+  }
+  if (missing.length > 0) {
+    return res.status(400).json({
+      error: 'missing_required',
+      message: `Обов'язкові поля не заповнені: ${missing.join(', ')}`,
+      missing,
+    });
+  }
+
+  // Контекст для валідації
+  let letter = null, client = null, carrier = null, orderProgress = null;
+  const letterId = body.letter_id || existing.letter_id;
+  if (letterId) {
+    letter = db.prepare('SELECT * FROM letters WHERE id=?').get(letterId);
+    orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+      .get(session.id, letterId);
+  }
+  if (body.client_id) client = db.prepare('SELECT * FROM clients WHERE id=?').get(body.client_id);
+  if (body.carrier_id) carrier = db.prepare('SELECT * FROM carriers WHERE id=?').get(body.carrier_id);
+
+  // Якщо немає letter — пробуємо знайти за client_id
+  if (!letter && body.client_id) {
+    letter = db.prepare(`
+      SELECT l.* FROM letters l
+      INNER JOIN assignments a ON a.id = l.assignment_id OR JSON_EXTRACT(a.letter_ids, '$') LIKE '%' || l.id || '%'
+      WHERE a.student_id = ? AND l.client_id = ?
+      LIMIT 1
+    `).get(req.user.id, body.client_id);
+    if (letter) {
+      orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+        .get(session.id, letter.id);
+    }
+  }
+
+  const warnings = appValidator.validateApplication({
+    formData: body, orderProgress, letter, client, carrier,
+  });
+
+  const reward = appValidator.computeReward({ formData: body, orderProgress });
+
+  db.prepare(`UPDATE applications SET
+    letter_id=?, client_id=?, carrier_id=?,
+    load_address=?, customs_out=?, customs_in=?, unload_address=?, border_crossing=?,
+    cargo_description=?, cargo_weight=?, cargo_volume=?, adr_class=?,
+    load_date=?, unload_date=?,
+    vehicle_type=?, vehicle_requirements=?,
+    truck_plate=?, trailer_plate=?, driver_name=?, driver_phone=?,
+    client_freight=?, carrier_freight=?, reward=?,
+    additional_info=?, validation_warnings=?,
+    updated_at=datetime('now')
+    WHERE id=?`).run(
+    letter?.id || null, body.client_id || null, body.carrier_id || null,
+    body.load_address || null, body.customs_out || null, body.customs_in || null,
+    body.unload_address || null, body.border_crossing || null,
+    body.cargo_description || null, parseFloat(body.cargo_weight) || null,
+    parseFloat(body.cargo_volume) || null, body.adr_class || null,
+    body.load_date || null, body.unload_date || null,
+    body.vehicle_type || null, body.vehicle_requirements || null,
+    body.truck_plate || null, body.trailer_plate || null,
+    body.driver_name || null, body.driver_phone || null,
+    parseFloat(body.client_freight) || null,
+    parseFloat(body.carrier_freight) || null,
+    reward,
+    body.additional_info || null,
+    JSON.stringify(warnings),
+    req.params.id,
+  );
+
+  res.json({
+    id: req.params.id,
+    reward,
+    warnings,
+    updated: true,
+  });
+});
+
+// GET /api/student/clients — список замовників (тих хто надсилав листи цьому студенту)
+router.get('/clients', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  // Беремо всіх замовників які є у листах цього студента
+  const rows = db.prepare(`
+    SELECT DISTINCT c.id, c.company, c.person, c.country
+    FROM clients c
+    INNER JOIN letters l ON l.client_id = c.id
+    INNER JOIN assignments a ON a.student_id = ?
+    WHERE (l.id IN (SELECT value FROM json_each(a.letter_ids)))
+    ORDER BY c.company
+  `).all(req.user.id);
+  res.json(rows);
+});
+
+// GET /api/student/all-carriers — повний список перевізників (для dropdown заявки)
+router.get('/all-carriers', STU, (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, name, person, phone FROM carriers
+    WHERE active=1 AND COALESCE(for_exchange,0)=0
+    ORDER BY name
+  `).all();
+  res.json(rows);
+});
+
 module.exports = router;
