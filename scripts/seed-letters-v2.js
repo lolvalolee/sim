@@ -298,7 +298,7 @@ ${fromName}`;
 
   // Завантажуємо у БД
   db.prepare(`INSERT INTO letters (
-    id, client_id, from_name, company, email_addr, country, subject, body_text,
+    id, client_id, from_name, company, email_addr, country, subject, body,
     dirs, vehicle, freight_fixed, freight_amount, freight_min, freight_max,
     cargo_description, incoterms,
     load_address, load_contact_name, load_contact_phone,
@@ -306,8 +306,8 @@ ${fromName}`;
     customs_out_address, customs_in_address,
     vehicle_alternatives, hidden_data, task_hint,
     difficulty_level, distance_km,
-    scenario, load_day_offset, active, created_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,datetime('now'))`)
+    scenario, load_day_offset, missing, active, created_at
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',1,datetime('now'))`)
   .run(
     id, clientId, fromName,
     db.prepare('SELECT company FROM clients WHERE id=?').get(clientId)?.company || 'Компанія',
