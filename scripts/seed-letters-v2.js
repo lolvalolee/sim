@@ -298,18 +298,21 @@ ${fromName}`;
 
   // Завантажуємо у БД
   db.prepare(`INSERT INTO letters (
-    id, client_id, from_name, company, email_addr, country, subject, body,
+    id, code, type, client_id, from_name, company, email_addr, country, subject, body,
     dirs, vehicle, freight_fixed, freight_amount, freight_min, freight_max,
-    cargo_description, incoterms,
+    cargo_description, cargo_weight_kg, incoterms,
     load_address, load_contact_name, load_contact_phone,
     unload_address, unload_contact_name, unload_contact_phone,
     customs_out_address, customs_in_address,
     vehicle_alternatives, hidden_data, task_hint,
     difficulty_level, distance_km,
     scenario, load_day_offset, missing, active, created_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',1,datetime('now'))`)
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',1,datetime('now'))`)
   .run(
-    id, clientId, fromName,
+    id,
+    `L${String(createdCount + 1).padStart(4, '0')}`,  // code: L0001, L0002...
+    'transport_request',  // type
+    clientId, fromName,
     db.prepare('SELECT company FROM clients WHERE id=?').get(clientId)?.company || 'Компанія',
     `letter${createdCount + 1}@example.com`,
     rec.from_country,
@@ -320,6 +323,7 @@ ${fromName}`;
     1, // freight_fixed
     rec.freight, rec.freight, rec.freight,
     rec.letter_text,
+    null, // cargo_weight_kg — буде у hidden якщо є
     rec.incoterms,
     loadAddr, loadContact, pickPhone(rec.from_country),
     unloadAddr, unloadContact, pickPhone(rec.to_country),
