@@ -305,13 +305,13 @@ ${fromName}`;
     unload_address, unload_contact_name, unload_contact_phone,
     customs_out_address, customs_in_address,
     vehicle_alternatives, hidden_data, task_hint,
-    difficulty_level, distance_km,
+    difficulty, difficulty_level, distance, distance_km,
     scenario, load_day_offset, missing, active, created_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',1,datetime('now'))`)
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'[]',1,datetime('now'))`)
   .run(
     id,
     `L${String(createdCount + 1).padStart(4, '0')}`,  // code: L0001, L0002...
-    'transport_request',  // type
+    'complete',  // type: complete/missing/form (CHECK constraint)
     clientId, fromName,
     db.prepare('SELECT company FROM clients WHERE id=?').get(clientId)?.company || 'Компанія',
     `letter${createdCount + 1}@example.com`,
@@ -331,8 +331,10 @@ ${fromName}`;
     JSON.stringify(rec.vehicle_alternatives),
     JSON.stringify(hidden),
     rec.task_hint,
-    rec.difficulty,
-    rec.distance_km,
+    rec.difficulty,  // старе поле
+    rec.difficulty,  // нове поле difficulty_level (теж заповнюємо)
+    rec.distance_km,  // старе поле distance
+    rec.distance_km,  // нове поле distance_km
     'agree',
     Math.floor(Math.random() * 4) + 2, // 2-5 днів від старту
   );
