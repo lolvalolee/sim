@@ -1191,8 +1191,9 @@ router.get('/carriers/search', STU, (req, res) => {
   const q = (req.query.q || '').trim();
   if (q.length < 2) return res.json([]);
 
-  // Шукаємо за name (case-insensitive)
+  // Шукаємо за name АБО person (case-insensitive)
   // Підвищуємо тих з ким уже була переписка у цій сесії
+  const like = '%' + q + '%';
   const rows = db.prepare(`
     SELECT c.id, c.name, c.person, c.phone, c.country,
            CASE WHEN EXISTS(
@@ -1201,10 +1202,10 @@ router.get('/carriers/search', STU, (req, res) => {
            ) THEN 1 ELSE 0 END AS had_chat
     FROM carriers c
     WHERE c.active=1 AND COALESCE(c.for_exchange,0)=0
-      AND LOWER(c.name) LIKE LOWER(?)
+      AND (LOWER(c.name) LIKE LOWER(?) OR LOWER(COALESCE(c.person,'')) LIKE LOWER(?))
     ORDER BY had_chat DESC, c.name
     LIMIT 20
-  `).all(session.id, '%' + q + '%');
+  `).all(session.id, like, like);
   res.json(rows);
 });
 

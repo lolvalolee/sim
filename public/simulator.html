@@ -3096,6 +3096,21 @@ async function renderOrders(){
     if (res.ok) _applicationsCache = await res.json();
   } catch(e) { _applicationsCache = []; }
 
+  // Завантажуємо список замовників і перевізників якщо ще не завантажені
+  // (потрібно для відображення імен у таблиці заявок)
+  if (!S.allClients) {
+    try {
+      const r = await fetch('/api/student/clients', { headers: { 'Authorization': 'Bearer ' + token }});
+      S.allClients = r.ok ? await r.json() : [];
+    } catch(e) { S.allClients = []; }
+  }
+  if (!S.allCarriers) {
+    try {
+      const r = await fetch('/api/student/all-carriers', { headers: { 'Authorization': 'Bearer ' + token }});
+      S.allCarriers = r.ok ? await r.json() : [];
+    } catch(e) { S.allCarriers = []; }
+  }
+
   redrawApplicationsTable();
 }
 
@@ -3512,10 +3527,15 @@ function renderApplicationDocHtml(d){
   const dateStr = new Date(d.created_at || Date.now()).toLocaleDateString('uk-UA', {day:'2-digit', month:'2-digit', year:'numeric'});
 
   // Знаходимо перевізника якщо є
-  let carrierInfo = '<span style="color:var(--t4)">(буде заповнено при надсиланні)</span>';
+  let carrierInfo = '<span style="color:var(--t4)">(не вказано)</span>';
   if (d.carrier_id) {
     const c = (S.allCarriers || []).find(x => x.id === d.carrier_id);
-    if (c) carrierInfo = `${escapeHtml(c.name)}<br><span style="font-size:11px;color:var(--t3)">${escapeHtml(c.person || '')} · ${escapeHtml(c.phone || '')}</span>`;
+    if (c) {
+      carrierInfo = `${escapeHtml(c.name)}<br><span style="font-size:11px;color:var(--t3)">${escapeHtml(c.person || '')} · ${escapeHtml(c.phone || '')}</span>`;
+    } else {
+      // S.allCarriers ще не підвантажено — показуємо тимчасовий маркер
+      carrierInfo = `<span style="color:var(--t3)">ID: ${escapeHtml(d.carrier_id.slice(0,8))}...</span>`;
+    }
   }
 
   const formatVal = (v, fallback = '—') => v ? escapeHtml(String(v)) : `<span style="color:var(--t4)">${fallback}</span>`;
