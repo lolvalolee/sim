@@ -2823,7 +2823,6 @@ function renderChatInCol(col,c,cid,pfx){
       ${msgs.map((m, idx)=>{
         const isLoading = m.loading;
         const isAttachment = m.attachment && m.attachment.type === 'application_to_carrier';
-        const isExpanded = (S.chatAppExpanded || {})[cid + '_' + idx];
         let bubbleContent;
         if (isLoading) {
           bubbleContent = `<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`;
@@ -2832,16 +2831,20 @@ function renderChatInCol(col,c,cid,pfx){
           const fromCity = extractCityFromAddress(data.load_address);
           const toCity = extractCityFromAddress(data.unload_address);
           const num = data.number_display || (data.number_seq ? String(data.number_seq).padStart(4,'0') + '/' + data.number_year : '');
+          // Фрахт: якщо є — показуємо, інакше пропускаємо рядок
+          const freightStr = (data.freight != null && data.freight !== '')
+            ? ` · €${Number(data.freight).toLocaleString('uk-UA').replace(/,/g,' ')}`
+            : '';
+          // Зберігаємо json картки у data-атрибуті щоб модалка могла відкрити
           bubbleContent = `
-            <div class="chat-app-card" onclick="toggleChatAppExpand('${cid}', ${idx})">
+            <div class="chat-app-card" onclick="openApplicationDocModal('${cid}', ${idx})">
               <span class="chat-app-card-icon">📋</span>
               <div class="chat-app-card-body">
                 <div class="chat-app-card-title">Заявка №${escapeHtml(num)}</div>
-                <div class="chat-app-card-sub">${escapeHtml(fromCity)} → ${escapeHtml(toCity)} · ${escapeHtml(data.load_date || '')} · €${data.freight || ''}</div>
+                <div class="chat-app-card-sub">${escapeHtml(fromCity)} → ${escapeHtml(toCity)} · ${escapeHtml(data.load_date || '')}${freightStr}</div>
               </div>
-              <span class="chat-app-card-expand">${isExpanded ? '▲ згорнути' : '▼ розгорнути'}</span>
+              <span class="chat-app-card-expand">↗ відкрити</span>
             </div>
-            ${isExpanded ? `<div class="chat-app-expanded">${renderApplicationDocHtml(data)}</div>` : ''}
           `;
         } else {
           bubbleContent = escapeHtml(m.text);
@@ -3425,18 +3428,33 @@ function selectAfCarrier(carrierId, carrierName){
   document.getElementById('af-carrier-dropdown')?.classList.add('hidden');
 }
 
-// Розгортання/згортання картки заявки в чаті
-function toggleChatAppExpand(cid, msgIdx){
-  if (!S.chatAppExpanded) S.chatAppExpanded = {};
-  const key = cid + '_' + msgIdx;
-  S.chatAppExpanded[key] = !S.chatAppExpanded[key];
-  // Перерендер чату
-  if (typeof openChatById === 'function') openChatById(cid);
-  else {
-    const col = document.querySelector(`#cm-${cid}`)?.parentElement;
-    const c = (S.carriers || []).find(x => x.id === cid);
-    if (col && c) renderChatInCol(col, c, cid, '');
-  }
+// Відкрити модалку з документом заявки (для перегляду в чаті)
+function openApplicationDocModal(cid, msgIdx){
+  const msgs = S.chats?.[cid] || [];
+  const m = msgs[msgIdx];
+  if (!m?.attachment?.data) return;
+  const data = m.attachment.data;
+  const num = data.number_display || '';
+
+  const ov = document.createElement('div');
+  ov.id = 'app-doc-modal-ov';
+  ov.className = 'zf-overlay';
+  ov.onclick = e => { if (e.target === ov) closeApplicationDocModal(); };
+  ov.innerHTML = `
+    <div class="zf-modal" style="max-width:720px">
+      <div class="zf-head">
+        <h2>Заявка ${num ? '№' + num : ''}</h2>
+        <button class="zf-close" onclick="closeApplicationDocModal()" title="Закрити">✕</button>
+      </div>
+      <div class="zf-body" style="padding:18px">
+        ${renderApplicationDocHtml(data)}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ov);
+}
+function closeApplicationDocModal(){
+  document.getElementById('app-doc-modal-ov')?.remove();
 }
 
 async function openSendApplicationPreview(applicationId){
@@ -3676,7 +3694,7 @@ function renderApplicationDocHtml(d){
             <div class="doc-finance-label">Фрахт</div>
             <div class="doc-finance-sub">Оплата 3-5 банк. днів після оригіналів</div>
           </div>
-          <div class="doc-finance-val">€ ${d.carrier_freight ? Number(d.carrier_freight).toLocaleString('uk-UA').replace(/,/g,' ') : '—'}</div>
+          <div class="doc-finance-val">€ ${(d.freight || d.carrier_freight) ? Number(d.freight || d.carrier_freight).toLocaleString('uk-UA').replace(/,/g,' ') : '—'}</div>
         </div>
 
         ${d.additional_info ? `
