@@ -241,6 +241,35 @@ body {
   padding: 1px 7px; line-height: 1.4;
 }
 .nb-r { background: var(--red2); color: #fff; }
+
+/* Бейдж непрочитаних повідомлень у списку чатів */
+.unread-badge {
+  background: var(--red2);
+  color: #fff;
+  border-radius: 11px;
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 2px 7px;
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
+  line-height: 14px;
+}
+
+/* Кнопка звуку у шапці */
+.sound-toggle {
+  background: transparent;
+  border: 1px solid var(--b2);
+  color: var(--t2);
+  border-radius: 50%;
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.sound-toggle:hover { background: var(--bg3); color: var(--t1); }
+.sound-toggle.muted { color: var(--t4); border-color: var(--b1); }
 .nb-g { background: var(--grn2); color: #fff; }
 .nb-o { background: #8a5a00; color: var(--acc); }
 
@@ -1495,6 +1524,7 @@ body {
       <span id="tb-sep" style="display:none;color:var(--t4)">/</span>
       <span id="tb-sub"></span>
       <div id="tb-right"></div>
+      <button id="sound-toggle-btn" class="sound-toggle" onclick="toggleSound()" title="Звук">🔊</button>
     </div>
     <div id="content"></div>
   </main>
@@ -2126,9 +2156,18 @@ function updateBadges(){
     eb.textContent=unread||total;
     eb.style.display=(unread||total)?'':'none';
   }
-  const chats=S.contactedCarriers.size;
+  // Рахуємо непрочитані повідомлення в чатах (від AI/carrier, не системні)
+  let unreadChats = 0;
+  for (const cid in S.chats) {
+    const msgs = S.chats[cid] || [];
+    for (const m of msgs) {
+      if ((m.role === 'ai' || m.role === 'carrier') && !m.isSystem && m.read !== true && !m.loading) {
+        unreadChats++;
+      }
+    }
+  }
   const cb=document.getElementById('badge-chats');
-  if(cb){cb.textContent=chats;cb.style.display=chats?'':'none';}
+  if(cb){cb.textContent=unreadChats;cb.style.display=unreadChats?'':'none';}
   const events=S.orders.filter(o=>o.status==='problem').length;
   const obb=document.getElementById('badge-orders');
   if(obb){obb.textContent=events;obb.style.display=events?'':'none';}
@@ -2849,13 +2888,16 @@ function renderChatInCol(col,c,cid,pfx){
         } else {
           bubbleContent = escapeHtml(m.text);
         }
+        // Атрибути для IntersectionObserver: data-msg-idx, data-unread
+        const isUnread = (m.role === 'ai' || m.role === 'carrier') && !m.isSystem && m.read !== true && !isLoading;
+        const dataAttrs = `data-msg-idx="${idx}" data-unread="${isUnread ? '1' : '0'}"`;
         // Для вкладень — НЕ обгортаємо в .cmsg-bubble (картка має власні стилі і фон)
         if (isAttachment) {
-          return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up cmsg-attachment">
+          return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up cmsg-attachment" ${dataAttrs}>
             ${bubbleContent}
             <div class="cmsg-time">${m.time||''}</div></div>`;
         }
-        return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up">
+        return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up" ${dataAttrs}>
           <div class="cmsg-bubble">${bubbleContent}</div>
           <div class="cmsg-time">${m.time||''}</div></div>`;
       }).join('')}
@@ -3062,38 +3104,81 @@ function renderChats(){
   }
   document.getElementById('content').innerHTML=`
     <div style="display:flex;flex:1;overflow:hidden">
-      <div style="width:220px;min-width:200px;border-right:1px solid var(--b1);display:flex;flex-direction:column">
+      <div style="width:240px;min-width:220px;border-right:1px solid var(--b1);display:flex;flex-direction:column">
         <div class="panel-head"><h3>Контакти</h3></div>
         <div class="scroll-list" id="chats-sb"></div>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;overflow:hidden" id="chats-main"></div>
     </div>`;
-  const sb=document.getElementById('chats-sb');
-  sb.innerHTML=contacted.map(c=>{
-    const deal=S.deals[c.id]||'none';
-    const msgs=S.chats[c.id]?.filter(m=>!m.loading)||[];
-    const last=msgs.slice(-1)[0];
-    // Count unread (carrier messages after last student message)
-    let unread=0;
-    for(let i=msgs.length-1;i>=0;i--){
-      if(msgs[i].role==='student') break;
-      if(msgs[i].role==='carrier'&&!msgs[i].read) unread++;
+
+  // Сортуємо контактів за часом останнього повідомлення (нові зверху)
+  // Чати без повідомлень — внизу
+  const contactedWithMeta = contacted.map(c => {
+    const msgs = S.chats[c.id]?.filter(m => !m.loading) || [];
+    const last = msgs.slice(-1)[0];
+    // Час останнього повідомлення — для сортування
+    const lastTs = last
+      ? (last.timestamp ? new Date(last.timestamp).getTime() : (last.time ? parseTimeStr(last.time) : 0))
+      : 0;
+    // Рахуємо ВСІ непрочитані повідомлення від AI/carrier (не системні)
+    let unread = 0;
+    for (const m of msgs) {
+      if ((m.role === 'ai' || m.role === 'carrier') && !m.isSystem && m.read !== true) {
+        unread++;
+      }
     }
-    const dl={none:'ds-none',talk:'ds-talk',ok:'ds-ok',no:'ds-no'};
-    const dlbl={none:'—',talk:'Переговори',ok:'✓',no:'✗'};
+    return { c, msgs, last, lastTs, unread };
+  });
+
+  // Сортування: чати з повідомленнями за датою desc, без повідомлень внизу
+  contactedWithMeta.sort((a, b) => {
+    if (a.lastTs === 0 && b.lastTs === 0) return 0;
+    if (a.lastTs === 0) return 1;  // a без повідомлень → внизу
+    if (b.lastTs === 0) return -1;
+    return b.lastTs - a.lastTs;     // нові зверху
+  });
+
+  const sb=document.getElementById('chats-sb');
+  sb.innerHTML = contactedWithMeta.map(({ c, msgs, last, unread }) => {
+    const deal = S.deals[c.id] || 'none';
+    const dl = { none:'ds-none', talk:'ds-talk', ok:'ds-ok', no:'ds-no' };
+    const dlbl = { none:'—', talk:'Переговори', ok:'✓', no:'✗' };
+    // Останнє повідомлення — превью
+    let previewText = '';
+    if (last) {
+      if (last.attachment && last.attachment.type === 'application_to_carrier') {
+        previewText = '📋 Заявка';
+      } else if (last.text) {
+        previewText = last.text.length > 45 ? last.text.slice(0,45) + '…' : last.text;
+      }
+    } else {
+      previewText = 'Починай розмову';
+    }
     return `<div class="chats-item${S.selectedCarrier===c.id?' active':''}" onclick="openChatView('${c.id}')" style="padding:12px 14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <span style="font-size:13px;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px">${c.name}</span>
-        <div style="display:flex;gap:5px;align-items:center">
-          ${unread>0?`<span style="background:var(--red2);color:#fff;border-radius:10px;font-size:10px;font-family:var(--mono);padding:1px 6px;font-weight:600">${unread}</span>`:''}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:6px">
+        <span style="font-size:13px;font-weight:${unread>0?'700':'600'};color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${escapeHtml(c.name)}</span>
+        <div style="display:flex;gap:5px;align-items:center;flex-shrink:0">
+          ${unread>0?`<span class="unread-badge">${unread}</span>`:''}
           <span class="tag ${dl[deal]}" style="font-size:9px">${dlbl[deal]}</span>
         </div>
       </div>
-      <div style="font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${last?last.text.slice(0,45)+'…':'Починай розмову'}</div>
+      <div style="font-size:12px;color:${unread>0?'var(--t1)':'var(--t3)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(previewText)}</div>
     </div>`;
   }).join('');
+
   if(S.selectedCarrier&&S.contactedCarriers.has(S.selectedCarrier)) openChatView(S.selectedCarrier);
-  else if(contacted.length) openChatView(contacted[0].id);
+  else if(contactedWithMeta.length) openChatView(contactedWithMeta[0].c.id);
+}
+
+// Допоміжна функція для часу "14:30" → timestamp
+function parseTimeStr(t) {
+  if (!t || typeof t !== 'string') return 0;
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return 0;
+  // Для сортування достатньо умовного timestamp — припускаємо сьогодні
+  const d = new Date();
+  d.setHours(parseInt(m[1]), parseInt(m[2]), 0, 0);
+  return d.getTime();
 }
 
 function openChatView(cid){
@@ -3106,6 +3191,10 @@ function openChatView(cid){
   document.querySelectorAll('.chats-item').forEach(el=>{
     el.classList.toggle('active',el.onclick?.toString().includes(cid));
   });
+  // Activate IntersectionObserver for marking as read
+  if (typeof setupReadObserver === 'function') {
+    setupReadObserver(cid);
+  }
 }
 
 // ================================================================
@@ -4607,6 +4696,226 @@ function notify(msg,type=''){
   setTimeout(()=>el.remove(),3500);
 }
 function showKeyModal(){} function saveKey(){}
+
+// ─── ЗВУКОВІ СПОВІЩЕННЯ (Web Audio API) ──────────────────────────
+// Два різні тони: вищий для замовника, нижчий для перевізника
+const _audio = {
+  ctx: null,
+  enabled: localStorage.getItem('docaa_sound') !== 'off',
+};
+
+function _ensureAudioCtx() {
+  if (!_audio.ctx) {
+    try {
+      _audio.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch(e) { return null; }
+  }
+  if (_audio.ctx.state === 'suspended') {
+    _audio.ctx.resume().catch(()=>{});
+  }
+  return _audio.ctx;
+}
+
+function _playTone(freq1, freq2, duration = 0.15) {
+  if (!_audio.enabled) return;
+  const ctx = _ensureAudioCtx();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const playOne = (freq, startTime) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, startTime);
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(0.18, startTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(startTime);
+    osc.stop(startTime + duration);
+  };
+  playOne(freq1, now);
+  playOne(freq2, now + duration * 0.7);
+}
+
+// Звук від перевізника (нижчий — діловий)
+function playCarrierSound() { _playTone(523, 659, 0.14); }   // C5 → E5
+// Звук від замовника (вищий — клієнтський)
+function playClientSound() { _playTone(880, 1175, 0.12); }   // A5 → D6
+
+function toggleSound() {
+  _audio.enabled = !_audio.enabled;
+  localStorage.setItem('docaa_sound', _audio.enabled ? 'on' : 'off');
+  updateSoundToggleUI();
+  if (_audio.enabled) {
+    _ensureAudioCtx();
+    setTimeout(() => playCarrierSound(), 50);
+  }
+}
+
+function updateSoundToggleUI() {
+  const btn = document.getElementById('sound-toggle-btn');
+  if (btn) {
+    btn.textContent = _audio.enabled ? '🔊' : '🔇';
+    btn.classList.toggle('muted', !_audio.enabled);
+    btn.title = _audio.enabled ? 'Звук увімкнено' : 'Звук вимкнено';
+  }
+}
+
+// ─── POLLING непрочитаних повідомлень ────────────────────────────
+let _unreadPollTimer = null;
+let _lastUnreadByCarrier = {};
+let _firstPollDone = false;
+
+async function pollUnreadMessages() {
+  if (document.visibilityState !== 'visible') return;
+  const token = localStorage.getItem('docaa_token');
+  if (!token) return;
+
+  try {
+    const r = await fetch('/api/student/chats/unread-summary', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const byC = data.by_carrier || {};
+
+    // Звук тільки коли є приріст у когось (і це НЕ перший polling)
+    let hadNew = false;
+    if (_firstPollDone) {
+      for (const carrierId in byC) {
+        const prev = _lastUnreadByCarrier[carrierId]?.unread || 0;
+        const cur = byC[carrierId].unread || 0;
+        if (cur > prev) {
+          hadNew = true;
+          break;
+        }
+      }
+    }
+    if (hadNew) playCarrierSound();
+    _lastUnreadByCarrier = byC;
+    _firstPollDone = true;
+
+    updateChatsBadge(data.total);
+
+    // Якщо студент дивиться вкладку "Переговори" і є нові — перезавантажити
+    if (S.tab === 'chats' && hadNew) {
+      await reloadCarrierChats();
+      renderChats();
+    }
+  } catch(e) {}
+}
+
+function updateChatsBadge(total) {
+  // Лічильник у бічному меню "Переговори"
+  const badge = document.getElementById('badge-chats');
+  if (badge) {
+    if (total > 0) {
+      badge.textContent = total;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+}
+
+async function reloadCarrierChats() {
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const r = await fetch('/api/student/session', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.carrier_chats) {
+      for (const cc of data.carrier_chats) {
+        try {
+          const msgs = typeof cc.messages === 'string' ? JSON.parse(cc.messages) : cc.messages;
+          if (Array.isArray(msgs)) {
+            S.chats[cc.carrier_id] = msgs.map(m => ({
+              ...m,
+              role: m.role === 'user' ? 'student' : (m.role === 'ai' ? 'carrier' : m.role),
+              time: m.time || (m.timestamp ? new Date(m.timestamp).toLocaleTimeString('uk', {hour:'2-digit',minute:'2-digit'}) : ''),
+            }));
+            if (msgs.length > 0 && !S.contactedCarriers.has(cc.carrier_id)) {
+              S.contactedCarriers.add(cc.carrier_id);
+            }
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {}
+}
+
+function startUnreadPolling() {
+  stopUnreadPolling();
+  _unreadPollTimer = setInterval(pollUnreadMessages, 15 * 1000);
+  pollUnreadMessages();
+}
+function stopUnreadPolling() {
+  if (_unreadPollTimer) { clearInterval(_unreadPollTimer); _unreadPollTimer = null; }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    startUnreadPolling();
+    updateSoundToggleUI();
+  }, 5000);
+});
+
+// ─── ПОЗНАЧЕННЯ ПОВІДОМЛЕНЬ ПРОЧИТАНИМИ ПРИ СКРОЛІ ────────────
+let _readObserver = null;
+let _pendingReadIndices = new Set();
+let _readFlushTimer = null;
+
+function setupReadObserver(carrierId) {
+  if (_readObserver) { _readObserver.disconnect(); _readObserver = null; }
+  _pendingReadIndices.clear();
+
+  _readObserver = new IntersectionObserver((entries) => {
+    let any = false;
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        const idx = parseInt(entry.target.dataset.msgIdx);
+        if (!isNaN(idx)) {
+          _pendingReadIndices.add(idx);
+          any = true;
+          _readObserver.unobserve(entry.target);
+        }
+      }
+    }
+    if (any) {
+      if (_readFlushTimer) clearTimeout(_readFlushTimer);
+      _readFlushTimer = setTimeout(() => flushReadIndices(carrierId), 500);
+    }
+  }, { threshold: 0.6 });
+
+  setTimeout(() => {
+    document.querySelectorAll('.cmsg[data-unread="1"][data-msg-idx]').forEach(el => {
+      _readObserver.observe(el);
+    });
+  }, 100);
+}
+
+async function flushReadIndices(carrierId) {
+  if (_pendingReadIndices.size === 0) return;
+  const indices = [..._pendingReadIndices];
+  _pendingReadIndices.clear();
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const r = await fetch(`/api/student/chats/${carrierId}/read`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ indices }),
+    });
+    if (r.ok) {
+      const msgs = S.chats[carrierId] || [];
+      for (const i of indices) {
+        if (msgs[i]) msgs[i].read = true;
+      }
+      pollUnreadMessages();
+    }
+  } catch(e) {}
+}
 
 // ================================================================
 // INIT

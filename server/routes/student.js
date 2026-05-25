@@ -205,6 +205,82 @@ router.post('/chats/:carrierId', STU, (req, res) => {
   res.json({ ok: true });
 });
 
+// PATCH /api/student/chats/:carrierId/read
+// Body: { indices: [0, 1, 5] } — індекси повідомлень які відмічаємо прочитаними
+// Або: { all: true } — позначити всі непрочитані як прочитані
+router.patch('/chats/:carrierId/read', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const chat = db.prepare('SELECT * FROM carrier_chats WHERE session_id=? AND carrier_id=?')
+    .get(session.id, req.params.carrierId);
+  if (!chat) return res.json({ ok: true, updated: 0 });
+
+  let messages = [];
+  try { messages = JSON.parse(chat.messages || '[]'); } catch(e){}
+
+  const { indices, all } = req.body || {};
+  let updated = 0;
+  if (all) {
+    for (const m of messages) {
+      if ((m.role === 'ai' || m.role === 'carrier') && !m.isSystem && m.read !== true) {
+        m.read = true;
+        updated++;
+      }
+    }
+  } else if (Array.isArray(indices)) {
+    for (const i of indices) {
+      if (typeof i === 'number' && messages[i] && messages[i].read !== true) {
+        messages[i].read = true;
+        updated++;
+      }
+    }
+  }
+
+  if (updated > 0) {
+    db.prepare("UPDATE carrier_chats SET messages=?, updated_at=datetime('now') WHERE id=?")
+      .run(JSON.stringify(messages), chat.id);
+  }
+  res.json({ ok: true, updated });
+});
+
+// GET /api/student/chats/unread-summary
+// Повертає кількість непрочитаних по кожному перевізнику
+// + загальну кількість непрочитаних повідомлень
+router.get('/chats/unread-summary', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const chats = db.prepare('SELECT carrier_id, messages, updated_at FROM carrier_chats WHERE session_id=?')
+    .all(session.id);
+
+  const byCarrier = {};
+  let total = 0;
+  for (const c of chats) {
+    let messages = [];
+    try { messages = JSON.parse(c.messages || '[]'); } catch(e){}
+    // Рахуємо повідомлення від AI/carrier які не системні і не прочитані
+    let unread = 0;
+    let lastMsgTime = null;
+    for (const m of messages) {
+      if ((m.role === 'ai' || m.role === 'carrier') && !m.isSystem && m.read !== true) {
+        unread++;
+      }
+      if (m.timestamp || m.time) {
+        lastMsgTime = m.timestamp || m.time;
+      }
+    }
+    byCarrier[c.carrier_id] = {
+      unread,
+      last_msg_time: lastMsgTime,
+      updated_at: c.updated_at,
+      total_msgs: messages.length,
+    };
+    total += unread;
+  }
+  res.json({ total, by_carrier: byCarrier });
+});
+
 // ── ORDER PROGRESS ────────────────────────────────────────────
 router.post('/orders/:letterId', STU, (req, res) => {
   const session = getSession(req.user.id);
@@ -1340,6 +1416,7 @@ router.post('/applications/:id/send-to-carrier', STU, (req, res) => {
     role: 'ai',
     text: tempReplies[Math.floor(Math.random() * tempReplies.length)],
     timestamp: new Date(Date.now() + 1000).toISOString(),
+    read: false,
   };
 
   let messages = [];

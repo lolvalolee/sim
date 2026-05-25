@@ -267,6 +267,7 @@ function processPendingFollowups({ db }) {
         text,
         timestamp: now,
         followup_type: f.trigger_type,
+        read: false,
       };
 
       if (chat) {
