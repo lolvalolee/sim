@@ -1184,29 +1184,40 @@ router.get('/all-carriers', STU, (req, res) => {
 });
 
 // GET /api/student/carriers/search?q=... — пошук для автокомпліту
+// УВАГА: SQLite LOWER() і COLLATE NOCASE працюють тільки з ASCII.
+// Для кирилиці нормалізуємо в Node.js (toLowerCase() українська працює коректно).
 router.get('/carriers/search', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
 
-  const q = (req.query.q || '').trim();
+  const q = (req.query.q || '').trim().toLowerCase();
   if (q.length < 2) return res.json([]);
 
-  // Шукаємо за name АБО person (case-insensitive)
-  // Підвищуємо тих з ким уже була переписка у цій сесії
-  const like = '%' + q + '%';
-  const rows = db.prepare(`
-    SELECT c.id, c.name, c.person, c.phone, c.country,
+  // Беремо всіх активних — їх ~635, можна фільтрувати в пам'яті
+  const all = db.prepare(`
+    SELECT c.id, c.name, c.person, c.phone,
            CASE WHEN EXISTS(
              SELECT 1 FROM carrier_chats cc
              WHERE cc.session_id = ? AND cc.carrier_id = c.id
            ) THEN 1 ELSE 0 END AS had_chat
     FROM carriers c
     WHERE c.active=1 AND COALESCE(c.for_exchange,0)=0
-      AND (LOWER(c.name) LIKE LOWER(?) OR LOWER(COALESCE(c.person,'')) LIKE LOWER(?))
-    ORDER BY had_chat DESC, c.name
-    LIMIT 20
-  `).all(session.id, like, like);
-  res.json(rows);
+  `).all(session.id);
+
+  // Фільтр у Node.js — коректно з кирилицею
+  const filtered = all.filter(c => {
+    const name = (c.name || '').toLowerCase();
+    const person = (c.person || '').toLowerCase();
+    return name.includes(q) || person.includes(q);
+  });
+
+  // Сортуємо: спочатку ті з ким уже спілкувались, потім за алфавітом
+  filtered.sort((a, b) => {
+    if (a.had_chat !== b.had_chat) return b.had_chat - a.had_chat;
+    return (a.name || '').localeCompare(b.name || '', 'uk');
+  });
+
+  res.json(filtered.slice(0, 20));
 });
 
 // ─── НАДСИЛАННЯ ЗАЯВКИ ПЕРЕВІЗНИКУ ────────────────────────────
