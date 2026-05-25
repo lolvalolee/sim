@@ -2398,16 +2398,12 @@ function renderEmailList(filter){
   el.innerHTML=list.map(e=>{
     const ord=S.orders.find(o=>o.id===e.orderId);
     const tags=[
-      e.type==='complete'?`<span class="tag t-complete">Повна</span>`:'',
-      e.type==='missing'?`<span class="tag t-missing">Неповна</span>`:'',
-      e.type==='form'?`<span class="tag t-form">Заявка</span>`:'',
-      e.replies.some(r=>r.role==='student')?`<span class="tag t-replied">Відповідь</span>`:'',
       ord?.clientFreightAgreed?`<span class="tag t-freight">€${ord.clientFreightAgreed}</span>`:'',
     ].filter(Boolean).join('');
     return `<div class="email-row${e.unread?' unread':''}${S.selectedEmail===e.orderId?' active':''}" onclick="openEmail('${e.orderId}')">
       <div class="er-top"><span class="er-from">${e.from}</span><span class="er-time">${e.time}</span></div>
       <div class="er-subject">${e.subject}</div>
-      <div class="er-tags">${tags}</div>
+      ${tags ? `<div class="er-tags">${tags}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -2523,6 +2519,8 @@ async function proposeFreight(orderId){
     const res=await callClaude(sys,[{role:'user',content:prompt}]);
     em.replies=em.replies.filter(r=>!r.loading);
     em.replies.push({role:'ai',text:res});
+    // Звук про нове повідомлення від замовника
+    if (typeof playClientSound === 'function') playClientSound();
     updateBadges();
     saveThreadToServer(orderId);
   }catch(e){em.replies=em.replies.filter(r=>!r.loading);em.replies.push({role:'ai',text:errMsg(e)});}
@@ -2546,6 +2544,8 @@ async function sendEmailReply(orderId){
     const res=await callClaude(sys,hist);
     em.replies=em.replies.filter(r=>!r.loading);
     em.replies.push({role:'ai',text:res});
+    // Звук про нове повідомлення від замовника
+    if (typeof playClientSound === 'function') playClientSound();
     // auto-detect freight agreement
     if(!ord.clientFreightAgreed&&!ord.freightFixed){
       const m=res.match(/€\s?(\d{3,6})/);
@@ -2996,6 +2996,8 @@ async function sendChatMsg(cid,pfx){
     const res=await callClaude(sys,hist);
     S.chats[cid]=S.chats[cid].filter(m=>!m.loading);
     S.chats[cid].push({role:'carrier',text:res,time:nowTime()});
+    // Звук про нове повідомлення від перевізника
+    if (typeof playCarrierSound === 'function') playCarrierSound();
     const lo=res.toLowerCase();
     if(lo.includes('відмовля')||lo.includes('немає вільних')||lo.includes('на жаль')) S.deals[cid]='no';
     else if(lo.includes('домовились')||lo.includes('підтверджуємо')||lo.includes('угода')) {
@@ -4808,48 +4810,55 @@ async function pollUnreadMessages() {
   const token = localStorage.getItem('docaa_token');
   if (!token) return;
 
+  let data = null;
   try {
     const r = await fetch('/api/student/chats/unread-summary', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (!r.ok) return;
-    const data = await r.json();
-    const byC = data.by_carrier || {};
-
-    // Знаходимо приріст
-    let hadNew = false;
-    let newFromCarrierId = null;
-    if (_firstPollDone) {
-      for (const carrierId in byC) {
-        const prev = _lastUnreadByCarrier[carrierId]?.unread || 0;
-        const cur = byC[carrierId].unread || 0;
-        if (cur > prev) {
-          hadNew = true;
-          newFromCarrierId = carrierId;
-          break;
-        }
-      }
-    }
-
-    if (hadNew) {
-      console.log('[unread-poll] Новий повідомлення від carrier:', newFromCarrierId);
-      playCarrierSound();
-    }
-    _lastUnreadByCarrier = byC;
-    _firstPollDone = true;
-
-    updateChatsBadge(data.total);
-
-    // Якщо студент дивиться вкладку "Переговори" і є нові — перезавантажити
-    if (S.tab === 'chats' && hadNew) {
-      await reloadCarrierChats();
-      renderChats();
-    } else if (S.tab === 'chats') {
-      // Навіть якщо нових нема — оновимо sidebar бо може щось змінитись локально
-      // (не критично, але держить картинку свіжою)
+    if (r.ok) {
+      data = await r.json();
     }
   } catch(e) {
-    console.error('[unread-poll] error:', e.message);
+    console.error('[unread-poll] fetch error:', e.message);
+  }
+
+  if (!data) {
+    // Навіть якщо запит провалився — позначаємо що перший опит відбувся
+    // щоб наступний міг відстежити приріст
+    _firstPollDone = true;
+    return;
+  }
+
+  const byC = data.by_carrier || {};
+
+  // Знаходимо приріст
+  let hadNew = false;
+  let newFromCarrierId = null;
+  if (_firstPollDone) {
+    for (const carrierId in byC) {
+      const prev = _lastUnreadByCarrier[carrierId]?.unread || 0;
+      const cur = byC[carrierId].unread || 0;
+      if (cur > prev) {
+        hadNew = true;
+        newFromCarrierId = carrierId;
+        break;
+      }
+    }
+  }
+
+  if (hadNew) {
+    console.log('[unread-poll] Новий від carrier:', newFromCarrierId, '— грає звук');
+    playCarrierSound();
+  }
+  _lastUnreadByCarrier = byC;
+  _firstPollDone = true;
+
+  updateChatsBadge(data.total);
+
+  // Якщо студент дивиться вкладку "Переговори" і є нові — перезавантажити
+  if (S.tab === 'chats' && hadNew) {
+    await reloadCarrierChats();
+    renderChats();
   }
 }
 
