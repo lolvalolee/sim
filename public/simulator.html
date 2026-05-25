@@ -2398,12 +2398,16 @@ function renderEmailList(filter){
   el.innerHTML=list.map(e=>{
     const ord=S.orders.find(o=>o.id===e.orderId);
     const tags=[
+      e.type==='complete'?`<span class="tag t-complete">Повна</span>`:'',
+      e.type==='missing'?`<span class="tag t-missing">Неповна</span>`:'',
+      e.type==='form'?`<span class="tag t-form">Заявка</span>`:'',
+      e.replies.some(r=>r.role==='student')?`<span class="tag t-replied">Відповідь</span>`:'',
       ord?.clientFreightAgreed?`<span class="tag t-freight">€${ord.clientFreightAgreed}</span>`:'',
     ].filter(Boolean).join('');
     return `<div class="email-row${e.unread?' unread':''}${S.selectedEmail===e.orderId?' active':''}" onclick="openEmail('${e.orderId}')">
       <div class="er-top"><span class="er-from">${e.from}</span><span class="er-time">${e.time}</span></div>
       <div class="er-subject">${e.subject}</div>
-      ${tags ? `<div class="er-tags">${tags}</div>` : ''}
+      <div class="er-tags">${tags}</div>
     </div>`;
   }).join('');
 }
@@ -4804,55 +4808,48 @@ async function pollUnreadMessages() {
   const token = localStorage.getItem('docaa_token');
   if (!token) return;
 
-  let data = null;
   try {
     const r = await fetch('/api/student/chats/unread-summary', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (r.ok) {
-      data = await r.json();
-    }
-  } catch(e) {
-    console.error('[unread-poll] fetch error:', e.message);
-  }
+    if (!r.ok) return;
+    const data = await r.json();
+    const byC = data.by_carrier || {};
 
-  if (!data) {
-    // Навіть якщо запит провалився — позначаємо що перший опит відбувся
-    // щоб наступний міг відстежити приріст
-    _firstPollDone = true;
-    return;
-  }
-
-  const byC = data.by_carrier || {};
-
-  // Знаходимо приріст
-  let hadNew = false;
-  let newFromCarrierId = null;
-  if (_firstPollDone) {
-    for (const carrierId in byC) {
-      const prev = _lastUnreadByCarrier[carrierId]?.unread || 0;
-      const cur = byC[carrierId].unread || 0;
-      if (cur > prev) {
-        hadNew = true;
-        newFromCarrierId = carrierId;
-        break;
+    // Знаходимо приріст
+    let hadNew = false;
+    let newFromCarrierId = null;
+    if (_firstPollDone) {
+      for (const carrierId in byC) {
+        const prev = _lastUnreadByCarrier[carrierId]?.unread || 0;
+        const cur = byC[carrierId].unread || 0;
+        if (cur > prev) {
+          hadNew = true;
+          newFromCarrierId = carrierId;
+          break;
+        }
       }
     }
-  }
 
-  if (hadNew) {
-    console.log('[unread-poll] Новий від carrier:', newFromCarrierId, '— грає звук');
-    playCarrierSound();
-  }
-  _lastUnreadByCarrier = byC;
-  _firstPollDone = true;
+    if (hadNew) {
+      console.log('[unread-poll] Новий повідомлення від carrier:', newFromCarrierId);
+      playCarrierSound();
+    }
+    _lastUnreadByCarrier = byC;
+    _firstPollDone = true;
 
-  updateChatsBadge(data.total);
+    updateChatsBadge(data.total);
 
-  // Якщо студент дивиться вкладку "Переговори" і є нові — перезавантажити
-  if (S.tab === 'chats' && hadNew) {
-    await reloadCarrierChats();
-    renderChats();
+    // Якщо студент дивиться вкладку "Переговори" і є нові — перезавантажити
+    if (S.tab === 'chats' && hadNew) {
+      await reloadCarrierChats();
+      renderChats();
+    } else if (S.tab === 'chats') {
+      // Навіть якщо нових нема — оновимо sidebar бо може щось змінитись локально
+      // (не критично, але держить картинку свіжою)
+    }
+  } catch(e) {
+    console.error('[unread-poll] error:', e.message);
   }
 }
 
