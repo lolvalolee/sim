@@ -74,4 +74,26 @@ app.listen(PORT, () => {
   console.log(`   API Key: ${process.env.ANTHROPIC_API_KEY ? '✓ configured' : '✗ MISSING'}\n`);
 });
 
+// ── BACKGROUND: процесор тригерів-нагадувань "де заявка" ─────
+// Запускається раз на 60 секунд. Перевіряє application_followups
+// і додає повідомлення в carrier_chats якщо настав час.
+try {
+  const db = require('./db');
+  const followupScheduler = require('./utils/followup-scheduler');
+
+  const FOLLOWUP_INTERVAL_MS = 60 * 1000; // 60 секунд
+
+  setInterval(() => {
+    try {
+      followupScheduler.processPendingFollowups({ db });
+    } catch (e) {
+      console.error('[followup-cron] error:', e.message);
+    }
+  }, FOLLOWUP_INTERVAL_MS);
+
+  console.log(`   Followup-cron: ✓ запущено (інтервал ${FOLLOWUP_INTERVAL_MS / 1000}s)\n`);
+} catch (e) {
+  console.error('[followup-cron] init error:', e.message);
+}
+
 module.exports = app;

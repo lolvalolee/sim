@@ -886,6 +886,164 @@ body {
   display: inline-flex; align-items: center; justify-content: center;
 }
 .zf-minibar-btn:hover { background: var(--bg3); color: var(--acc); }
+
+/* ─── Send preview модалка ─── */
+.send-doc-preview { margin: -8px 0 0; }
+.send-recipient-field {
+  background: var(--bg3); border: 1px solid var(--b2); border-radius: var(--r);
+  padding: 10px 14px; min-width: 320px; flex: 1; max-width: 400px;
+}
+.send-recipient-label {
+  font-size: 10px; color: var(--t3); text-transform: uppercase;
+  letter-spacing: .07em; font-weight: 600; margin-bottom: 6px;
+}
+
+/* ─── Автокомпліт перевізника ─── */
+.ac-input-wrap { position: relative; }
+.ac-input {
+  width: 100%; background: transparent; border: none; color: var(--t1);
+  padding: 4px 4px 4px 26px; font-family: inherit; font-size: 13px;
+  font-weight: 500; outline: none;
+}
+.ac-input::placeholder { color: var(--t4); font-weight: 400; }
+.ac-icon {
+  position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
+  color: var(--t3); font-size: 12px; pointer-events: none;
+}
+.ac-dropdown {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
+  background: var(--bg2); border: 1px solid var(--b2); border-radius: var(--r);
+  box-shadow: 0 -8px 24px rgba(0,0,0,.5); z-index: 100;
+  max-height: 280px; overflow-y: auto; padding: 5px;
+}
+.ac-dropdown.hidden { display: none; }
+.ac-empty { padding: 14px; text-align: center; color: var(--t4); font-size: 12px; }
+.ac-item {
+  padding: 9px 11px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 9px;
+}
+.ac-item:hover { background: var(--bg3); }
+.ac-item-info { flex: 1; min-width: 0; }
+.ac-item-name { font-size: 12px; font-weight: 500; color: var(--t1); }
+.ac-match { background: rgba(255,190,99,.25); color: var(--acc); padding: 0 2px; border-radius: 2px; }
+.ac-item-meta { font-size: 10px; color: var(--t3); margin-top: 2px; }
+.ac-item-pill {
+  font-size: 9px; padding: 2px 7px; border-radius: 8px; white-space: nowrap;
+  background: rgba(74,222,128,.12); color: var(--grn);
+}
+
+/* ─── Документ Docaa (заявка, довідка тощо) ─── */
+.doc-docaa {
+  background: linear-gradient(180deg, #1a1a1a 0%, #1d1d1d 100%);
+  border: 1px solid var(--acc); border-radius: var(--r2);
+  overflow: hidden; box-shadow: 0 0 0 3px rgba(255,190,99,.03);
+}
+.doc-header {
+  background: linear-gradient(180deg, rgba(255,190,99,.1), rgba(255,190,99,.02));
+  border-bottom: 1px solid rgba(255,190,99,.25);
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 18px;
+}
+.doc-logo { display: flex; align-items: center; gap: 9px; }
+.doc-logo-svg {
+  width: 32px; height: 32px; background: var(--acc); border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  color: #000; font-weight: 800; font-size: 16px;
+}
+.doc-logo-name {
+  font-size: 16px; font-weight: 700; color: var(--acc); letter-spacing: .02em;
+}
+.doc-header-right {
+  margin-left: auto; text-align: right;
+  font-size: 11px; color: var(--t2); line-height: 1.5;
+}
+.doc-header-right strong { color: var(--t1); }
+
+.doc-body { padding: 20px 22px; }
+
+.doc-title-row {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 18px; padding-bottom: 14px; border-bottom: 2px solid var(--acc);
+}
+.doc-title { font-size: 17px; font-weight: 700; color: var(--t1); }
+.doc-title-sub { font-size: 11px; color: var(--t3); margin-top: 3px; font-family: var(--mono); }
+.doc-num { text-align: right; }
+.doc-num-label {
+  font-size: 9px; color: var(--t3); text-transform: uppercase;
+  letter-spacing: .08em; font-weight: 600; margin-bottom: 3px;
+}
+.doc-num-val { font-family: var(--mono); font-size: 14px; color: var(--acc); font-weight: 600; }
+
+.doc-section { margin-bottom: 16px; }
+.doc-section-title {
+  font-size: 10px; color: var(--acc); text-transform: uppercase;
+  letter-spacing: .1em; font-weight: 700; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.doc-section-title::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(255,190,99,.3), transparent);
+}
+.doc-row {
+  display: grid; grid-template-columns: 180px 1fr; gap: 10px;
+  padding: 5px 0; font-size: 12px; align-items: start;
+}
+.doc-row + .doc-row { border-top: 1px solid var(--b1); }
+.doc-row-label {
+  color: var(--t3); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .06em; font-weight: 500;
+}
+.doc-row-val { color: var(--t1); font-weight: 500; }
+.doc-row-val.mono { font-family: var(--mono); }
+.doc-row-val .secondary {
+  display: block; font-size: 10px; color: var(--t3); margin-top: 2px; font-weight: 400;
+}
+
+.doc-finance {
+  background: rgba(255,190,99,.05);
+  border: 1px solid rgba(255,190,99,.2); border-radius: var(--r);
+  padding: 12px 16px; margin-top: 10px;
+  display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+}
+.doc-finance-label {
+  font-size: 10px; color: var(--acc); text-transform: uppercase;
+  letter-spacing: .08em; font-weight: 700;
+}
+.doc-finance-sub { font-size: 10px; color: var(--t3); margin-top: 3px; }
+.doc-finance-val { font-family: var(--mono); font-size: 20px; color: var(--acc); font-weight: 700; }
+
+.doc-footer {
+  padding: 12px 20px; background: var(--bg);
+  border-top: 1px solid var(--b1);
+  font-size: 10px; color: var(--t4); text-align: center; font-family: var(--mono);
+}
+
+/* ─── Згорнута картка заявки у чаті ─── */
+.chat-app-card {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: rgba(255,190,99,.1);
+  border: 1px solid rgba(255,190,99,.3);
+  border-radius: var(--r); padding: 10px 14px;
+  cursor: pointer; font-size: 12px;
+  transition: background .15s;
+  max-width: 340px;
+}
+.chat-app-card:hover { background: rgba(255,190,99,.18); }
+.chat-app-card-icon { font-size: 18px; }
+.chat-app-card-body { flex: 1; min-width: 0; }
+.chat-app-card-title { font-weight: 600; color: var(--acc); font-size: 12px; }
+.chat-app-card-sub {
+  font-size: 11px; color: var(--t3); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-app-card-expand { color: var(--t3); font-size: 10px; flex-shrink: 0; }
+
+/* Розгорнута заявка в чаті */
+.chat-app-expanded {
+  margin-top: 8px; max-width: 100%;
+}
+.chat-app-expanded .doc-docaa { font-size: 11px; }
+.chat-app-expanded .doc-body { padding: 16px 18px; }
 .kpi-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 16px; }
 .kpi-card { background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r2); padding: 14px; }
 .kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--t3); font-weight: 600; margin-bottom: 5px; }
@@ -2639,9 +2797,36 @@ function renderChatInCol(col,c,cid,pfx){
     </div>
     <div class="chat-msgs" id="cm-${cid}" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:9px">
       ${msgs.length===0?`<div class="chat-empty-s" style="flex:1"><div style="font-size:20px;opacity:.15">💬</div><div>Представтесь та опишіть вантаж</div></div>`:''}
-      ${msgs.map(m=>`<div class="cmsg ${m.role==='student'?'out':'in'} fade-up">
-        <div class="cmsg-bubble">${m.loading?`<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`:escapeHtml(m.text)}</div>
-        <div class="cmsg-time">${m.time||''}</div></div>`).join('')}
+      ${msgs.map((m, idx)=>{
+        const isLoading = m.loading;
+        const isAttachment = m.attachment && m.attachment.type === 'application_to_carrier';
+        const isExpanded = (S.chatAppExpanded || {})[cid + '_' + idx];
+        let bubbleContent;
+        if (isLoading) {
+          bubbleContent = `<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`;
+        } else if (isAttachment) {
+          const data = m.attachment.data || {};
+          const fromCity = extractCityFromAddress(data.load_address);
+          const toCity = extractCityFromAddress(data.unload_address);
+          const num = data.number_display || (data.number_seq ? String(data.number_seq).padStart(4,'0') + '/' + data.number_year : '');
+          bubbleContent = `
+            <div class="chat-app-card" onclick="toggleChatAppExpand('${cid}', ${idx})">
+              <span class="chat-app-card-icon">📋</span>
+              <div class="chat-app-card-body">
+                <div class="chat-app-card-title">Заявка №${escapeHtml(num)}</div>
+                <div class="chat-app-card-sub">${escapeHtml(fromCity)} → ${escapeHtml(toCity)} · ${escapeHtml(data.load_date || '')} · €${data.freight || ''}</div>
+              </div>
+              <span class="chat-app-card-expand">${isExpanded ? '▲ згорнути' : '▼ розгорнути'}</span>
+            </div>
+            ${isExpanded ? `<div class="chat-app-expanded">${renderApplicationDocHtml(data)}</div>` : ''}
+          `;
+        } else {
+          bubbleContent = escapeHtml(m.text);
+        }
+        return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up">
+          <div class="cmsg-bubble"${isAttachment ? ' style="max-width:100%;background:transparent;padding:0"' : ''}>${bubbleContent}</div>
+          <div class="cmsg-time">${m.time||''}</div></div>`;
+      }).join('')}
     </div>
     <div class="chat-deal-bar">
       <span style="color:var(--t3)">Фрахт:</span>
@@ -3044,17 +3229,42 @@ function renderApplicationRow(a){
   };
   const status = statusMap[a.status] || statusMap['new'];
 
+  // Перевіряємо чи можна надсилати заявку перевізнику
+  // Умови: 1) заявка створена (так, бо вона тут); 2) угода закрита з обома
+  let canSend = false;
+  let cantSendReason = '';
+  if (a.letter_id) {
+    const ord = S.orders?.find(o => o.id === a.letter_id);
+    if (ord) {
+      const closed = (ord.state === 'closed' || ord.state === 'closed_changed');
+      if (closed) canSend = true;
+      else cantSendReason = 'Спочатку підтвердіть угоду з замовником і перевізником';
+    } else {
+      cantSendReason = 'Не знайдено пов\'язаного рейсу';
+    }
+  } else {
+    cantSendReason = 'Не прив\'язано до листа замовника';
+  }
+
+  const isSent = !!a.sent_to_carrier_at;
+  const sendBtnClass = isSent ? 'apps-act-btn done' : (canSend ? 'apps-act-btn' : 'apps-act-btn');
+  const sendBtnTitle = isSent
+    ? 'Заявку надіслано — можна переглянути'
+    : (canSend ? 'Надіслати заявку перевізнику' : cantSendReason);
+  const sendBtnDisabled = (!canSend && !isSent) ? 'disabled' : '';
+  const sendBtnIcon = isSent ? '📤' : '📋';
+
   // Дії
-  // У деплої 9 робоча тільки кнопка ✏ Редагувати
-  // Решта — задеактивовано (буде у деплої 10)
+  // У деплої 11 робочі: 📋 (надсилання) і ✏ (редагування)
   const actions = `
     <div class="apps-act-row">
-      <button class="apps-act-btn" title="Заявка для перевізника (деплой 10)" disabled>📋</button>
-      <button class="apps-act-btn" title="Довідка (деплой 10)" disabled>📄</button>
-      <button class="apps-act-btn" title="Рахунок (деплой 10)" disabled>💰</button>
-      <button class="apps-act-btn" title="Акт (деплой 10)" disabled>✓</button>
+      <button class="${sendBtnClass}" title="${escapeHtml(sendBtnTitle)}" ${sendBtnDisabled}
+              onclick="openSendApplicationPreview('${a.id}')">${sendBtnIcon}</button>
+      <button class="apps-act-btn" title="Довідка (наступний деплой)" disabled>📄</button>
+      <button class="apps-act-btn" title="Рахунок (наступний деплой)" disabled>💰</button>
+      <button class="apps-act-btn" title="Акт (наступний деплой)" disabled>✓</button>
       <button class="apps-act-btn" title="Редагувати" onclick="openApplicationForm('${a.id}')">✏</button>
-      ${a.status === 'in_transit' ? `<button class="apps-act-btn" title="Підтвердити доставку (деплой 10)" disabled>🚛</button>` : ''}
+      ${a.status === 'in_transit' ? `<button class="apps-act-btn" title="Підтвердити доставку (наступний деплой)" disabled>🚛</button>` : ''}
     </div>
   `;
 
@@ -3098,6 +3308,443 @@ function setApplicationsFilter(f){
 
 // ─── ФОРМА створення/редагування заявки ──────────────────────
 let _applicationFormState = null;
+
+// ─── PREVIEW МОДАЛКА надсилання заявки перевізнику ─────────────
+let _sendPreviewState = null;
+
+// Автокомпліт перевізника у формі створення/редагування заявки
+let _afCarrierSearchTimer = null;
+async function onAfCarrierSearch(query){
+  if (_afCarrierSearchTimer) clearTimeout(_afCarrierSearchTimer);
+  query = (query || '').trim();
+  const dropdown = document.getElementById('af-carrier-dropdown');
+  if (!dropdown) return;
+
+  if (query.length < 2) {
+    dropdown.classList.add('hidden');
+    // Якщо стерто все — очищаємо id
+    if (query.length === 0) {
+      const hidden = document.getElementById('af-carrier');
+      if (hidden) hidden.value = '';
+    }
+    return;
+  }
+
+  _afCarrierSearchTimer = setTimeout(async () => {
+    const token = localStorage.getItem('docaa_token');
+    try {
+      const r = await fetch(`/api/student/carriers/search?q=${encodeURIComponent(query)}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const results = r.ok ? await r.json() : [];
+      renderAfCarrierResults(results, query);
+    } catch(e) {
+      dropdown.classList.add('hidden');
+    }
+  }, 200);
+}
+
+function renderAfCarrierResults(results, query){
+  const dropdown = document.getElementById('af-carrier-dropdown');
+  if (!dropdown) return;
+  if (!results.length) {
+    dropdown.innerHTML = '<div class="ac-empty">Нікого не знайдено</div>';
+    dropdown.classList.remove('hidden');
+    return;
+  }
+  const highlight = (text, q) => {
+    if (!text || !q) return escapeHtml(text || '');
+    const escapedQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(' + escapedQ + ')', 'gi');
+    return escapeHtml(text).replace(re, '<span class="ac-match">$1</span>');
+  };
+  dropdown.innerHTML = results.map(c => {
+    const safeName = c.name.replace(/'/g, "\\'");
+    return `
+      <div class="ac-item" onclick="selectAfCarrier('${c.id}', '${safeName}')">
+        <div class="ac-item-info">
+          <div class="ac-item-name">${highlight(c.name, query)}</div>
+          <div class="ac-item-meta">${escapeHtml(c.person || '')} · ${escapeHtml(c.phone || '')}</div>
+        </div>
+        ${c.had_chat ? '<span class="ac-item-pill">✓ Працювали</span>' : ''}
+      </div>
+    `;
+  }).join('');
+  dropdown.classList.remove('hidden');
+}
+
+function selectAfCarrier(carrierId, carrierName){
+  const input = document.getElementById('af-carrier-input');
+  const hidden = document.getElementById('af-carrier');
+  if (input) input.value = carrierName;
+  if (hidden) hidden.value = carrierId;
+  document.getElementById('af-carrier-dropdown')?.classList.add('hidden');
+}
+
+// Розгортання/згортання картки заявки в чаті
+function toggleChatAppExpand(cid, msgIdx){
+  if (!S.chatAppExpanded) S.chatAppExpanded = {};
+  const key = cid + '_' + msgIdx;
+  S.chatAppExpanded[key] = !S.chatAppExpanded[key];
+  // Перерендер чату
+  if (typeof openChatById === 'function') openChatById(cid);
+  else {
+    const col = document.querySelector(`#cm-${cid}`)?.parentElement;
+    const c = (S.carriers || []).find(x => x.id === cid);
+    if (col && c) renderChatInCol(col, c, cid, '');
+  }
+}
+
+async function openSendApplicationPreview(applicationId){
+  const token = localStorage.getItem('docaa_token');
+  let app = null;
+  try {
+    const r = await fetch(`/api/student/applications/${applicationId}`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (r.ok) app = await r.json();
+  } catch(e){}
+  if (!app) { notify('Не вдалось завантажити заявку', 'err'); return; }
+
+  // Знаходимо клієнта і перевізника з заявки
+  let clientName = '';
+  let carrierFromApp = null;
+  if (app.client_id) {
+    const c = (S.allClients || []).find(x => x.id === app.client_id);
+    clientName = c?.company || '';
+  }
+  if (app.carrier_id) {
+    carrierFromApp = (S.allCarriers || []).find(x => x.id === app.carrier_id);
+  }
+
+  _sendPreviewState = {
+    app,
+    selectedCarrierId: null,    // студент має сам обрати у автокомпліті — без передзаповнення
+    selectedCarrierName: null,
+    isSent: !!app.sent_to_carrier_at,
+  };
+
+  showSendPreviewModal();
+}
+
+function closeSendPreview(){
+  document.getElementById('sp-overlay-send')?.remove();
+  _sendPreviewState = null;
+}
+
+function showSendPreviewModal(){
+  const st = _sendPreviewState;
+  if (!st) return;
+  const d = st.app;
+  const numDisplay = `${String(d.number_seq).padStart(4,'0')}/${d.number_year}`;
+
+  // Карта route
+  const routeFrom = extractCityFromAddress(d.load_address);
+  const routeTo = extractCityFromAddress(d.unload_address);
+
+  const isSentNow = st.isSent;
+
+  const ov = document.createElement('div');
+  ov.id = 'sp-overlay-send';
+  ov.className = 'zf-overlay';
+  ov.onclick = e => { if (e.target === ov) closeSendPreview(); };
+  ov.innerHTML = `
+    <div class="zf-modal" style="max-width:760px">
+      <div class="zf-head">
+        <div style="display:flex;align-items:center;gap:10px">
+          <h2>Заявка №${numDisplay}</h2>
+          ${isSentNow ? '<span class="zf-num" style="background:rgba(74,222,128,.15);color:var(--grn)">✓ Надіслано</span>' : '<span class="zf-num">Перегляньте перед надсиланням</span>'}
+        </div>
+        <button class="zf-close" onclick="closeSendPreview()" title="Закрити">✕</button>
+      </div>
+      <div class="zf-body">
+        <div class="send-doc-preview">
+          ${renderApplicationDocHtml(d)}
+        </div>
+      </div>
+      <div class="zf-foot">
+        ${isSentNow ? `
+          <div style="color:var(--t3);font-size:12px;flex:1">
+            ✓ Надіслано ${new Date(d.sent_to_carrier_at).toLocaleString('uk-UA', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})}
+          </div>
+          <button class="btn" onclick="closeSendPreview()">Закрити</button>
+        ` : `
+          <div class="send-recipient-field">
+            <div class="send-recipient-label">Надіслати кому</div>
+            <div class="ac-input-wrap">
+              <span class="ac-icon">🔍</span>
+              <input type="text" class="ac-input" id="send-carrier-input"
+                     placeholder="Почніть писати назву перевізника..."
+                     oninput="onSendCarrierSearch(this.value)"
+                     onfocus="onSendCarrierSearch(this.value)"
+                     autocomplete="off">
+              <div class="ac-dropdown hidden" id="send-carrier-dropdown"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn" onclick="closeSendPreview()">Скасувати</button>
+            <button class="btn primary" id="send-submit-btn" disabled style="opacity:.4;cursor:not-allowed"
+                    onclick="submitSendApplication()">📤 Надіслати</button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ov);
+}
+
+// Витягуємо місто з повної адреси (просте евристичне)
+function extractCityFromAddress(addr){
+  if (!addr) return '';
+  const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+  // Беремо найдовший шматок без цифр як ймовірне місто
+  for (const p of parts) {
+    if (!/^\d/.test(p) && !/вул\.?|street|str\.?|просп\.?/i.test(p) && p.length > 2 && p.length < 30) {
+      return p;
+    }
+  }
+  return parts[0] || '';
+}
+
+// Рендер документа-заявки HTML
+function renderApplicationDocHtml(d){
+  const numDisplay = `${String(d.number_seq).padStart(4,'0')}/${d.number_year}`;
+  const dateStr = new Date(d.created_at || Date.now()).toLocaleDateString('uk-UA', {day:'2-digit', month:'2-digit', year:'numeric'});
+
+  // Знаходимо перевізника якщо є
+  let carrierInfo = '<span style="color:var(--t4)">(буде заповнено при надсиланні)</span>';
+  if (d.carrier_id) {
+    const c = (S.allCarriers || []).find(x => x.id === d.carrier_id);
+    if (c) carrierInfo = `${escapeHtml(c.name)}<br><span style="font-size:11px;color:var(--t3)">${escapeHtml(c.person || '')} · ${escapeHtml(c.phone || '')}</span>`;
+  }
+
+  const formatVal = (v, fallback = '—') => v ? escapeHtml(String(v)) : `<span style="color:var(--t4)">${fallback}</span>`;
+  const formatNum = (v, suffix = '') => v ? `<span style="font-family:var(--mono)">${Number(v).toLocaleString('uk-UA').replace(/,/g,' ')} ${suffix}</span>` : '<span style="color:var(--t4)">—</span>';
+
+  return `
+    <div class="doc-docaa">
+      <div class="doc-header">
+        <div class="doc-logo">
+          <div class="doc-logo-svg">D</div>
+          <div class="doc-logo-name">Docaa</div>
+        </div>
+        <div class="doc-header-right">
+          <strong>Docaa LLC</strong><br>
+          м. Івано-Франківськ, вул. Української Дивізії 27<br>
+          ЄДРПОУ 37794411 · тел. +380 342 26 07 42
+        </div>
+      </div>
+      <div class="doc-body">
+        <div class="doc-title-row">
+          <div>
+            <div class="doc-title">Заявка</div>
+            <div class="doc-title-sub">Договір транспортного експедирування</div>
+          </div>
+          <div class="doc-num">
+            <div class="doc-num-label">№</div>
+            <div class="doc-num-val">${numDisplay}</div>
+            <div class="doc-num-label" style="margin-top:6px">від</div>
+            <div class="doc-num-val" style="font-size:13px">${dateStr}</div>
+          </div>
+        </div>
+
+        <div class="doc-section">
+          <div class="doc-section-title">Сторони</div>
+          <div class="doc-row">
+            <div class="doc-row-label">Замовник (експедитор)</div>
+            <div class="doc-row-val">Docaa LLC<span class="secondary">м. Івано-Франківськ, вул. Української Дивізії 27 · ЄДРПОУ 37794411</span></div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-row-label">Перевізник</div>
+            <div class="doc-row-val">${carrierInfo}</div>
+          </div>
+        </div>
+
+        <div class="doc-section">
+          <div class="doc-section-title">Маршрут</div>
+          <div class="doc-row">
+            <div class="doc-row-label">Завантаження</div>
+            <div class="doc-row-val">${formatVal(d.load_address)}</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-row-label">Замитнення</div>
+            <div class="doc-row-val">${formatVal(d.customs_out)}</div>
+          </div>
+          ${d.border_crossing ? `<div class="doc-row"><div class="doc-row-label">Митний перехід</div><div class="doc-row-val mono">${escapeHtml(d.border_crossing)}</div></div>` : ''}
+          <div class="doc-row">
+            <div class="doc-row-label">Розвантаження</div>
+            <div class="doc-row-val">${formatVal(d.unload_address)}</div>
+          </div>
+          ${d.customs_in ? `<div class="doc-row"><div class="doc-row-label">Розмитнення</div><div class="doc-row-val">${escapeHtml(d.customs_in)}</div></div>` : ''}
+        </div>
+
+        <div class="doc-section">
+          <div class="doc-section-title">Вантаж</div>
+          <div class="doc-row">
+            <div class="doc-row-label">Тип</div>
+            <div class="doc-row-val">${formatVal(d.cargo_description)}</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-row-label">Вага</div>
+            <div class="doc-row-val">${formatNum(d.cargo_weight, 'кг')}</div>
+          </div>
+          ${d.cargo_volume ? `<div class="doc-row"><div class="doc-row-label">Об'єм</div><div class="doc-row-val">${formatNum(d.cargo_volume, 'м³')}</div></div>` : ''}
+          ${d.adr_class ? `<div class="doc-row"><div class="doc-row-label">АДР</div><div class="doc-row-val mono">${escapeHtml(d.adr_class)}</div></div>` : ''}
+        </div>
+
+        <div class="doc-section">
+          <div class="doc-section-title">Дати</div>
+          <div class="doc-row">
+            <div class="doc-row-label">Завантаження</div>
+            <div class="doc-row-val mono">${formatVal(d.load_date)}</div>
+          </div>
+          ${d.unload_date ? `<div class="doc-row"><div class="doc-row-label">Розвантаження</div><div class="doc-row-val mono">${escapeHtml(d.unload_date)}</div></div>` : ''}
+        </div>
+
+        <div class="doc-section">
+          <div class="doc-section-title">Транспорт</div>
+          <div class="doc-row">
+            <div class="doc-row-label">Тип ТЗ</div>
+            <div class="doc-row-val">${formatVal(d.vehicle_type)}</div>
+          </div>
+          ${d.vehicle_requirements ? `<div class="doc-row"><div class="doc-row-label">Вимоги</div><div class="doc-row-val">${escapeHtml(d.vehicle_requirements)}</div></div>` : ''}
+          <div class="doc-row">
+            <div class="doc-row-label">№ тягача</div>
+            <div class="doc-row-val mono">${formatVal(d.truck_plate)}</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-row-label">№ напівпричіпа</div>
+            <div class="doc-row-val mono">${formatVal(d.trailer_plate)}</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-row-label">Водій</div>
+            <div class="doc-row-val">${formatVal(d.driver_name)}${d.driver_phone ? ', ' + escapeHtml(d.driver_phone) : ''}</div>
+          </div>
+        </div>
+
+        <div class="doc-finance">
+          <div>
+            <div class="doc-finance-label">Фрахт</div>
+            <div class="doc-finance-sub">Оплата 3-5 банк. днів після оригіналів</div>
+          </div>
+          <div class="doc-finance-val">€ ${d.carrier_freight ? Number(d.carrier_freight).toLocaleString('uk-UA').replace(/,/g,' ') : '—'}</div>
+        </div>
+
+        ${d.additional_info ? `
+        <div class="doc-section">
+          <div class="doc-section-title">Додатково</div>
+          <div style="font-size:13px;color:var(--t2);line-height:1.5">${escapeHtml(d.additional_info)}</div>
+        </div>` : ''}
+      </div>
+      <div class="doc-footer">━━━ Заявка є невід'ємною частиною Договору транспортного експедирування ━━━</div>
+    </div>
+  `;
+}
+
+// Автокомпліт пошуку перевізника
+let _sendSearchTimer = null;
+async function onSendCarrierSearch(query){
+  if (_sendSearchTimer) clearTimeout(_sendSearchTimer);
+  query = (query || '').trim();
+  const dropdown = document.getElementById('send-carrier-dropdown');
+  if (!dropdown) return;
+
+  if (query.length < 2) {
+    dropdown.classList.add('hidden');
+    return;
+  }
+
+  _sendSearchTimer = setTimeout(async () => {
+    const token = localStorage.getItem('docaa_token');
+    try {
+      const r = await fetch(`/api/student/carriers/search?q=${encodeURIComponent(query)}`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const results = r.ok ? await r.json() : [];
+      renderSendSearchResults(results, query);
+    } catch(e) {
+      dropdown.classList.add('hidden');
+    }
+  }, 200);
+}
+
+function renderSendSearchResults(results, query){
+  const dropdown = document.getElementById('send-carrier-dropdown');
+  if (!dropdown) return;
+  if (!results.length) {
+    dropdown.innerHTML = '<div class="ac-empty">Нікого не знайдено</div>';
+    dropdown.classList.remove('hidden');
+    return;
+  }
+
+  const highlight = (text, q) => {
+    if (!text || !q) return escapeHtml(text || '');
+    const escapedQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(' + escapedQ + ')', 'gi');
+    return escapeHtml(text).replace(re, '<span class="ac-match">$1</span>');
+  };
+
+  dropdown.innerHTML = results.map(c => `
+    <div class="ac-item" onclick="selectSendCarrier('${c.id}', ${JSON.stringify(c.name).replace(/"/g, '&quot;')})">
+      <div class="ac-item-info">
+        <div class="ac-item-name">${highlight(c.name, query)}</div>
+        <div class="ac-item-meta">${escapeHtml(c.person || '')} · ${escapeHtml(c.phone || '')}</div>
+      </div>
+      ${c.had_chat ? '<span class="ac-item-pill">✓ Працювали</span>' : ''}
+    </div>
+  `).join('');
+  dropdown.classList.remove('hidden');
+}
+
+function selectSendCarrier(carrierId, carrierName){
+  if (!_sendPreviewState) return;
+  _sendPreviewState.selectedCarrierId = carrierId;
+  _sendPreviewState.selectedCarrierName = carrierName;
+
+  const input = document.getElementById('send-carrier-input');
+  if (input) input.value = carrierName;
+  document.getElementById('send-carrier-dropdown')?.classList.add('hidden');
+
+  // Активуємо кнопку
+  const btn = document.getElementById('send-submit-btn');
+  if (btn) {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+  }
+}
+
+async function submitSendApplication(){
+  const st = _sendPreviewState;
+  if (!st || !st.selectedCarrierId) return;
+  const btn = document.getElementById('send-submit-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Надсилаю...';
+  }
+
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const r = await fetch(`/api/student/applications/${st.app.id}/send-to-carrier`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ carrier_id: st.selectedCarrierId }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      notify(data.message || data.error || 'Помилка', 'err');
+      if (btn) { btn.disabled = false; btn.innerHTML = '📤 Надіслати'; }
+      return;
+    }
+    notify(`Заявку надіслано ${st.selectedCarrierName} ✓`, 'ok');
+    closeSendPreview();
+    // Оновити таблицю заявок
+    if (typeof renderOrders === 'function') renderOrders();
+  } catch(e) {
+    notify('Помилка з\'єднання', 'err');
+    if (btn) { btn.disabled = false; btn.innerHTML = '📤 Надіслати'; }
+  }
+}
 
 async function openApplicationForm(applicationId){
   // Завжди дозавантажуємо списки (на випадок коли клієнти оновились)
@@ -3375,11 +4022,19 @@ function showApplicationForm(){
             </div>
             <div class="zf-field">
               <label class="zf-label">Перевізник<span class="req">*</span></label>
-              <select class="zf-select" id="af-carrier">
-                <option value="">— Оберіть —</option>
-                ${carriersList.map(c => `<option value="${c.id}" ${c.id===d.carrier_id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
-              </select>
-              <div class="zf-hint">З бази перевізників</div>
+              <div class="ac-input-wrap" style="background:var(--bg3);border:1px solid var(--b2);border-radius:var(--r);padding:9px 12px;position:relative">
+                <span class="ac-icon" style="left:12px">🔍</span>
+                <input type="text" class="ac-input" id="af-carrier-input"
+                       data-carrier-id="${d.carrier_id || ''}"
+                       value="${d.carrier_id ? escapeHtml((carriersList.find(c => c.id === d.carrier_id)?.name) || '') : ''}"
+                       placeholder="Почніть писати назву..."
+                       oninput="onAfCarrierSearch(this.value)"
+                       onfocus="onAfCarrierSearch(this.value)"
+                       autocomplete="off">
+                <input type="hidden" id="af-carrier" value="${d.carrier_id || ''}">
+                <div class="ac-dropdown hidden" id="af-carrier-dropdown" style="top:calc(100% + 4px);bottom:auto"></div>
+              </div>
+              <div class="zf-hint">Введіть мін 2 літери — система покаже варіанти</div>
             </div>
           </div>
         </div>

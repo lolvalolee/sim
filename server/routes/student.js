@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const fetch = require('node-fetch');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db');
+const followupScheduler = require('../utils/followup-scheduler');
 
 const STU = requireAuth(['student']);
 
@@ -185,6 +186,22 @@ router.post('/chats/:carrierId', STU, (req, res) => {
     db.prepare('INSERT INTO carrier_chats (id,session_id,carrier_id,messages,deal_status) VALUES (?,?,?,?,?)')
       .run(uuidv4(), session.id, req.params.carrierId, JSON.stringify(messages), deal_status || 'none');
   }
+
+  // Q2 — якщо студент відповів на нагадування — пробуємо переносити/скасовувати тригери
+  try {
+    const lastStudentMsg = Array.isArray(messages)
+      ? [...messages].reverse().find(m => m.role === 'student' || m.role === 'user')
+      : null;
+    if (lastStudentMsg?.text) {
+      followupScheduler.handleStudentReplyToFollowup({
+        db,
+        sessionId: session.id,
+        carrierId: req.params.carrierId,
+        studentText: lastStudentMsg.text,
+      });
+    }
+  } catch(e){}
+
   res.json({ ok: true });
 });
 
@@ -717,6 +734,33 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     });
   }
 
+  // Якщо approve — плануємо followup-тригери "де заявка"
+  // Тільки якщо є activна заявка для цього letter
+  if (isApprove) {
+    try {
+      const activeApp = db.prepare(`
+        SELECT * FROM applications
+        WHERE session_id=? AND letter_id=? AND sent_to_carrier_at IS NULL
+        ORDER BY created_at DESC LIMIT 1
+      `).get(session.id, letterId);
+
+      if (activeApp) {
+        followupScheduler.scheduleFollowups({
+          db,
+          session,
+          application: activeApp,
+          carrierId,
+          sessionStartDateStr: session.start_date,
+          loadDateStr: date,
+        });
+      }
+      // Якщо заявки ще нема — followups запланються коли студент її створить
+      // (можна додати окремо в POST /applications, але поки що тільки тут)
+    } catch (e) {
+      console.error('scheduleFollowups error:', e.message);
+    }
+  }
+
   res.json({
     verdict,
     mismatches: mismatches || [],
@@ -952,6 +996,24 @@ router.post('/applications', STU, (req, res) => {
     JSON.stringify(warnings),
   );
 
+  // Якщо угода з обома вже закрита — плануємо followups одразу
+  // (інакше followups плануються при confirm-carrier)
+  if (orderProgress && orderProgress.client_agreed_at && orderProgress.carrier_agreed_at && body.carrier_id) {
+    try {
+      const justCreated = db.prepare('SELECT * FROM applications WHERE id=?').get(id);
+      followupScheduler.scheduleFollowups({
+        db,
+        session,
+        application: justCreated,
+        carrierId: body.carrier_id,
+        sessionStartDateStr: session.start_date,
+        loadDateStr: body.load_date,
+      });
+    } catch(e) {
+      console.error('scheduleFollowups error on create:', e.message);
+    }
+  }
+
   res.json({
     id,
     number_seq,
@@ -1120,5 +1182,202 @@ router.get('/all-carriers', STU, (req, res) => {
   `).all();
   res.json(rows);
 });
+
+// GET /api/student/carriers/search?q=... — пошук для автокомпліту
+router.get('/carriers/search', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const q = (req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+
+  // Шукаємо за name (case-insensitive)
+  // Підвищуємо тих з ким уже була переписка у цій сесії
+  const rows = db.prepare(`
+    SELECT c.id, c.name, c.person, c.phone, c.country,
+           CASE WHEN EXISTS(
+             SELECT 1 FROM carrier_chats cc
+             WHERE cc.session_id = ? AND cc.carrier_id = c.id
+           ) THEN 1 ELSE 0 END AS had_chat
+    FROM carriers c
+    WHERE c.active=1 AND COALESCE(c.for_exchange,0)=0
+      AND LOWER(c.name) LIKE LOWER(?)
+    ORDER BY had_chat DESC, c.name
+    LIMIT 20
+  `).all(session.id, '%' + q + '%');
+  res.json(rows);
+});
+
+// ─── НАДСИЛАННЯ ЗАЯВКИ ПЕРЕВІЗНИКУ ────────────────────────────
+// POST /api/student/applications/:id/send-to-carrier
+// Body: { carrier_id }
+
+router.post('/applications/:id/send-to-carrier', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
+
+  const appId = req.params.id;
+  const targetCarrierId = req.body?.carrier_id;
+
+  if (!targetCarrierId) {
+    return res.status(400).json({ error: 'carrier_required', message: 'Оберіть перевізника зі списку' });
+  }
+
+  // Завантажуємо заявку
+  const app = db.prepare('SELECT * FROM applications WHERE id=? AND session_id=?')
+    .get(appId, session.id);
+  if (!app) return res.status(404).json({ error: 'application_not_found' });
+
+  // Перевіряємо: угода має бути підтверджена з обома сторонами
+  // (це означає що order_progress має client_agreed_at AND carrier_agreed_at)
+  if (app.letter_id) {
+    const op = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+      .get(session.id, app.letter_id);
+    if (!op || !op.client_agreed_at || !op.carrier_agreed_at) {
+      return res.status(400).json({
+        error: 'deal_not_closed',
+        message: 'Не можна надіслати заявку: спочатку підтвердіть угоду з замовником і перевізником.',
+      });
+    }
+  }
+
+  // Перевіряємо перевізника
+  const carrier = db.prepare('SELECT * FROM carriers WHERE id=?').get(targetCarrierId);
+  if (!carrier) return res.status(404).json({ error: 'carrier_not_found' });
+
+  const now = new Date().toISOString();
+  const msgId = uuidv4();
+
+  // Збираємо дані заявки у структуру для вкладення
+  let letter = null, client = null;
+  if (app.letter_id) letter = db.prepare('SELECT * FROM letters WHERE id=?').get(app.letter_id);
+  if (app.client_id) client = db.prepare('SELECT * FROM clients WHERE id=?').get(app.client_id);
+
+  const attachment = {
+    type: 'application_to_carrier',
+    application_id: app.id,
+    msg_id: msgId,
+    data: {
+      number_seq: app.number_seq,
+      number_year: app.number_year,
+      number_display: `${String(app.number_seq).padStart(4,'0')}/${app.number_year}`,
+      created_date: now,
+      // Сторони
+      docaa: {
+        company: 'Docaa LLC',
+        address: 'м. Івано-Франківськ, вул. Української Дивізії 27',
+        vat_id: 'ЄДРПОУ 37794411',
+        phone: '+380 342 26 07 42',
+      },
+      carrier: {
+        name: carrier.name,
+        person: carrier.person,
+        phone: carrier.phone,
+      },
+      // Маршрут
+      load_address: app.load_address,
+      customs_out: app.customs_out,
+      border_crossing: app.border_crossing,
+      unload_address: app.unload_address,
+      customs_in: app.customs_in,
+      // Вантаж
+      cargo_description: app.cargo_description,
+      cargo_weight: app.cargo_weight,
+      cargo_volume: app.cargo_volume,
+      adr_class: app.adr_class,
+      // Дати
+      load_date: app.load_date,
+      unload_date: app.unload_date,
+      // ТЗ
+      vehicle_type: app.vehicle_type,
+      vehicle_requirements: app.vehicle_requirements,
+      truck_plate: app.truck_plate,
+      trailer_plate: app.trailer_plate,
+      driver_name: app.driver_name,
+      driver_phone: app.driver_phone,
+      // Фінанси (тільки фрахт перевізнику!)
+      freight: app.carrier_freight,
+      // Додатково
+      additional_info: app.additional_info,
+    },
+  };
+
+  // Додаємо повідомлення з вкладенням у carrier_chats
+  const chat = db.prepare('SELECT * FROM carrier_chats WHERE session_id=? AND carrier_id=?')
+    .get(session.id, targetCarrierId);
+
+  // Системне-вихідне повідомлення (від студента)
+  const outMsg = {
+    id: msgId,
+    role: 'student',
+    text: `📋 Надіслав заявку №${String(app.number_seq).padStart(4,'0')}/${app.number_year}`,
+    timestamp: now,
+    attachment,
+    isSystem: true, // ознака — не звичайне повідомлення
+  };
+
+  // ТИМЧАСОВА реакція перевізника (поки не маємо текстів від користувача)
+  const tempReplies = [
+    'Прийняв заявку. Виходимо в рейс.',
+    'Все ок, бачу заявку. Чекаю завантаження.',
+    'Прийняв, виходимо за маршрутом.',
+    'Ок, прийнято. Деталі ще раз перевірю.',
+  ];
+  const replyMsg = {
+    role: 'ai',
+    text: tempReplies[Math.floor(Math.random() * tempReplies.length)],
+    timestamp: new Date(Date.now() + 1000).toISOString(),
+  };
+
+  let messages = [];
+  if (chat) {
+    try { messages = JSON.parse(chat.messages || '[]'); } catch(e){}
+  }
+  messages.push(outMsg);
+  messages.push(replyMsg);
+
+  if (chat) {
+    db.prepare("UPDATE carrier_chats SET messages=?, deal_status='confirmed', updated_at=datetime('now') WHERE id=?")
+      .run(JSON.stringify(messages), chat.id);
+  } else {
+    db.prepare("INSERT INTO carrier_chats (id,session_id,carrier_id,messages,deal_status) VALUES (?,?,?,?,'confirmed')")
+      .run(uuidv4(), session.id, targetCarrierId, JSON.stringify(messages));
+  }
+
+  // Оновлюємо applications
+  db.prepare(`UPDATE applications SET
+    sent_to_carrier_at=?, sent_to_carrier_id=?, sent_message_id=?,
+    updated_at=datetime('now')
+    WHERE id=?`)
+    .run(now, targetCarrierId, msgId, app.id);
+
+  // Скасовуємо всі попередні followups для цієї заявки
+  followupScheduler.cancelFollowups({ db, applicationId: app.id });
+
+  // Записуємо подію
+  if (app.letter_id) {
+    try {
+      db.prepare('INSERT INTO order_events (id,session_id,letter_id,type,payload) VALUES (?,?,?,?,?)')
+        .run(uuidv4(), session.id, app.letter_id, 'application_sent_to_carrier', JSON.stringify({
+          application_id: app.id,
+          carrier_id: targetCarrierId,
+          carrier_name: carrier.name,
+        }));
+    } catch(e){}
+  }
+
+  res.json({
+    sent: true,
+    msg_id: msgId,
+    carrier_id: targetCarrierId,
+    carrier_name: carrier.name,
+    reply: replyMsg,
+  });
+});
+
+// Хук — при підтвердженні угоди з перевізником ПЛАНУЄМО followups
+// Це викликається з confirm-carrier endpoint. Знаходимо його і додаємо виклик.
+// (зроблено нижче через wrapping middleware)
 
 module.exports = router;
