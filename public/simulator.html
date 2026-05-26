@@ -3291,6 +3291,8 @@ function redrawApplicationsTable(){
       <h2 class="apps-title">Замовлення</h2>
     </div>
 
+    ${renderDraftBanner()}
+
     <div class="apps-kpi">
       <div class="kpi-card">
         <div class="kpi-label">Створено заявок</div>
@@ -4192,21 +4194,19 @@ async function openApplicationForm(applicationId){
   // Чернетка релевантна якщо ми відкриваємо ту саму запис або нову (без id)
   const draft = loadFormDraft();
   let dataToUse = existing || {};
+  let openWith = dataToUse;
   if (draft) {
     const isDraftForSameRecord = (applicationId && draft.isEdit && draft.id === applicationId);
     const isDraftForNew = (!applicationId && !draft.isEdit);
     if (isDraftForSameRecord || isDraftForNew) {
-      if (confirm('Знайдено незбережену чернетку. Завантажити її?')) {
-        dataToUse = { ...dataToUse, ...draft.data };
-      } else {
-        clearFormDraft();
-      }
+      // Беремо чернетку автоматично (у нас же є банер який її показує, тому користувач знає що вона є)
+      openWith = { ...dataToUse, ...draft.data };
     } else {
       // Чернетка від іншого запису у поточній сесії — просто видаляємо
-      // (студент відкрив інший запис — стара чернетка не релевантна)
       clearFormDraft();
     }
   }
+  dataToUse = openWith;
 
   _applicationFormState = {
     id: existing?.id || null,
@@ -4324,7 +4324,17 @@ function loadFormDraft(){
 
 function clearFormDraft(){
   try {
+    // Очищаємо поточний (за студентом+сесією)
     localStorage.removeItem(_getDraftKey());
+    // Очищаємо ВСІ можливі ключі чернеток — на всяк випадок щоб не лишилось
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k === 'docaa_app_form_draft' || (k && k.startsWith('docaa_app_form_draft_'))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
     if (typeof updateOrdersDraftBadge === 'function') updateOrdersDraftBadge();
   } catch(e){}
 }
@@ -4339,6 +4349,72 @@ function updateOrdersDraftBadge(){
   const el = document.getElementById('draft-indicator-orders');
   if (!el) return;
   el.style.display = hasFormDraft() ? '' : 'none';
+}
+
+// Банер незбереженої чернетки на сторінці "Замовлення"
+function renderDraftBanner(){
+  const draft = loadFormDraft();
+  if (!draft) return '';
+  // Описуємо коротко що у чернетці
+  const d = draft.data || {};
+  const parts = [];
+  if (d.client_id) {
+    const c = (S.allClients || []).find(x => x.id === d.client_id);
+    if (c) parts.push(escapeHtml(c.company || c.from_name || ''));
+  }
+  if (d.carrier_id) {
+    const cr = (S.allCarriers || []).find(x => x.id === d.carrier_id) ||
+               (S.carriers || []).find(x => x.id === d.carrier_id);
+    if (cr) parts.push('→ ' + escapeHtml(cr.name || ''));
+  }
+  if (d.cargo_description) parts.push(escapeHtml(String(d.cargo_description).slice(0, 40)));
+  const summary = parts.join(' · ') || 'Заявка без даних';
+  const ts = draft.ts ? new Date(draft.ts).toLocaleString('uk-UA', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+  return `
+    <div style="
+      background: rgba(255,190,99,.08);
+      border: 1px solid rgba(255,190,99,.25);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    ">
+      <div style="font-size:20px;line-height:1">📝</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:var(--t1);font-weight:600;margin-bottom:2px">
+          Є незбережена чернетка заявки
+        </div>
+        <div style="font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${summary}${ts ? ' · оновлено ' + ts : ''}
+        </div>
+      </div>
+      <button onclick="openApplicationForm(${draft.isEdit && draft.id ? `'${draft.id}'` : ''})" style="
+        background: var(--acc);
+        border: none;
+        border-radius: 8px;
+        padding: 8px 14px;
+        cursor: pointer;
+        color: #000;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      ">Продовжити</button>
+      <button onclick="discardApplicationForm()" title="Видалити чернетку" style="
+        background: transparent;
+        border: 1px solid var(--b2);
+        border-radius: 8px;
+        padding: 8px 10px;
+        cursor: pointer;
+        color: var(--t2);
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1;
+      ">🗑</button>
+    </div>
+  `;
 }
 
 let _formAutosaveTimer = null;
@@ -4387,23 +4463,33 @@ function expandApplicationForm(){
 }
 
 function discardApplicationForm(){
-  // Замість confirm — гарна модалка підтвердження
   document.getElementById('discard-confirm-dialog')?.remove();
   const ov = document.createElement('div');
   ov.id = 'discard-confirm-dialog';
-  ov.className = 'zf-overlay';
-  ov.style.zIndex = '10000';
+  ov.style.cssText = `
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    z-index: 10000; display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  `;
   ov.onclick = e => { if (e.target === ov) ov.remove(); };
   ov.innerHTML = `
-    <div class="zf-modal" style="max-width:380px">
-      <div class="zf-head"><h2>Видалити чернетку?</h2></div>
-      <div class="zf-body" style="padding:16px 22px">
-        <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:14px">
-          Введені дані будуть втрачені.
-        </p>
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;max-width:380px;width:100%;overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--b1)">
+        <div style="font-size:15px;font-weight:600;color:var(--t1)">Видалити чернетку?</div>
+      </div>
+      <div style="padding:18px 20px">
+        <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:18px">
+          Усі введені дані буде втрачено. Цю дію не можна скасувати.
+        </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
-          <button class="btn" onclick="document.getElementById('discard-confirm-dialog')?.remove()">Скасувати</button>
-          <button class="btn danger" onclick="confirmDiscardDraft()">🗑 Видалити</button>
+          <button onclick="document.getElementById('discard-confirm-dialog')?.remove()" style="
+            background:var(--bg3);border:1px solid var(--b2);border-radius:8px;
+            padding:9px 16px;cursor:pointer;color:var(--t1);font-family:inherit;font-size:13px;
+          ">Скасувати</button>
+          <button onclick="confirmDiscardDraft()" style="
+            background:#d44;border:1px solid #d44;border-radius:8px;
+            padding:9px 16px;cursor:pointer;color:#fff;font-family:inherit;font-size:13px;font-weight:600;
+          ">🗑 Видалити</button>
         </div>
       </div>
     </div>
@@ -4414,27 +4500,39 @@ function discardApplicationForm(){
 function confirmDiscardDraft(){
   document.getElementById('discard-confirm-dialog')?.remove();
   clearFormDraft();
+  stopFormAutosave();
   document.getElementById('zf-minibar')?.remove();
   document.getElementById('zf-overlay')?.remove();
   _applicationFormState = null;
   _formCollapsed = false;
+  updateOrdersDraftBadge();
+  notify('Чернетку видалено', 'ok');
 }
 
 function closeApplicationForm(){
-  // Перевіряємо чи є щось у формі
-  const hasData = !!document.getElementById('af-client-freight')?.value
-    || !!document.getElementById('af-carrier-freight')?.value
-    || !!document.getElementById('af-cargo-desc')?.value
-    || !!document.getElementById('af-load-addr')?.value
-    || !!document.getElementById('af-unload-addr')?.value;
+  // Перевіряємо чи є щось у формі — будь-яке заповнене поле
+  const ids = [
+    'af-client', 'af-carrier', 'af-client-input', 'af-carrier-input',
+    'af-load-addr', 'af-customs-out', 'af-unload-addr', 'af-customs-in',
+    'af-border', 'af-cargo-desc', 'af-weight', 'af-volume', 'af-adr',
+    'af-load-date', 'af-unload-date', 'af-vehicle-type', 'af-vehicle-req',
+    'af-truck-plate', 'af-trailer-plate', 'af-driver-name', 'af-driver-phone',
+    'af-client-freight', 'af-carrier-freight', 'af-info',
+  ];
+  const hasData = ids.some(id => {
+    const v = document.getElementById(id)?.value;
+    return v && String(v).trim().length > 0;
+  });
 
   if (hasData && _applicationFormState && !_applicationFormState._closing) {
     showCloseFormDialog();
     return;
   }
-  // Якщо нічого немає — закриваємо без питань
+  // Якщо нічого немає — закриваємо без питань і прибираємо чернетку
+  clearFormDraft();
   stopFormAutosave();
   document.getElementById('zf-overlay')?.remove();
+  document.getElementById('zf-minibar')?.remove();
   _applicationFormState = null;
   _formCollapsed = false;
 }
@@ -4446,28 +4544,46 @@ function showCloseFormDialog(){
 
   const ov = document.createElement('div');
   ov.id = 'close-form-dialog';
-  ov.className = 'zf-overlay';
-  ov.style.zIndex = '10000';
+  ov.style.cssText = `
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    z-index: 10000; display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  `;
   ov.onclick = e => { if (e.target === ov) ov.remove(); };
   ov.innerHTML = `
-    <div class="zf-modal" style="max-width:420px">
-      <div class="zf-head">
-        <h2>Що зробити з формою?</h2>
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;max-width:420px;width:100%;overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--b1)">
+        <div style="font-size:15px;font-weight:600;color:var(--t1)">Що зробити з формою?</div>
       </div>
-      <div class="zf-body" style="padding:18px 22px">
-        <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:18px">
+      <div style="padding:18px 20px">
+        <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:16px">
           У формі є дані. Виберіть що зробити:
-        </p>
-        <div style="display:flex;flex-direction:column;gap:10px">
-          <button class="btn primary" onclick="doCollapseForm()" style="text-align:left;padding:12px 16px">
-            <strong>📥 Згорнути</strong><br>
-            <span style="font-size:11px;color:rgba(0,0,0,.7);font-weight:400">Дані збережуться у чернетці, форму можна відкрити пізніше</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button onclick="doCollapseForm()" style="
+            background:var(--bg3);border:1px solid var(--b2);border-radius:8px;
+            padding:12px 14px;text-align:left;cursor:pointer;color:var(--t1);
+            font-family:inherit;font-size:13px;line-height:1.4;
+            transition:border-color .15s,background .15s
+          " onmouseover="this.style.borderColor='var(--acc)';this.style.background='var(--bg4)'" onmouseout="this.style.borderColor='var(--b2)';this.style.background='var(--bg3)'">
+            <div style="font-weight:600;margin-bottom:2px">📥 Згорнути форму</div>
+            <div style="font-size:11px;color:var(--t3)">Дані залишаться у чернетці, можна відкрити пізніше</div>
           </button>
-          <button class="btn danger" onclick="doDiscardForm()" style="text-align:left;padding:12px 16px">
-            <strong>🗑 Видалити чернетку</strong><br>
-            <span style="font-size:11px;color:rgba(255,255,255,.7);font-weight:400">Усі введені дані будуть втрачені</span>
+          <button onclick="doDiscardForm()" style="
+            background:var(--bg3);border:1px solid var(--b2);border-radius:8px;
+            padding:12px 14px;text-align:left;cursor:pointer;color:var(--t1);
+            font-family:inherit;font-size:13px;line-height:1.4;
+            transition:border-color .15s,background .15s
+          " onmouseover="this.style.borderColor='#d44';this.style.background='rgba(220,68,68,.08)'" onmouseout="this.style.borderColor='var(--b2)';this.style.background='var(--bg3)'">
+            <div style="font-weight:600;margin-bottom:2px;color:#e66">🗑 Видалити чернетку</div>
+            <div style="font-size:11px;color:var(--t3)">Усі введені дані буде втрачено</div>
           </button>
-          <button class="btn" onclick="document.getElementById('close-form-dialog')?.remove()" style="text-align:center">
+          <button onclick="document.getElementById('close-form-dialog')?.remove()" style="
+            background:transparent;border:1px solid var(--b1);border-radius:8px;
+            padding:10px 14px;text-align:center;cursor:pointer;color:var(--t2);
+            font-family:inherit;font-size:13px;margin-top:4px;
+            transition:color .15s,border-color .15s
+          " onmouseover="this.style.color='var(--t1)';this.style.borderColor='var(--b2)'" onmouseout="this.style.color='var(--t2)';this.style.borderColor='var(--b1)'">
             Повернутись до форми
           </button>
         </div>
@@ -4484,12 +4600,19 @@ function doCollapseForm(){
 
 function doDiscardForm(){
   document.getElementById('close-form-dialog')?.remove();
+  // Повністю очищаємо чернетку зі сховища
   clearFormDraft();
+  // Зупиняємо автозбереження ПЕРШИМ — щоб воно не записало ще раз
   stopFormAutosave();
+  // Видаляємо UI
   document.getElementById('zf-overlay')?.remove();
   document.getElementById('zf-minibar')?.remove();
+  // Скидаємо стан
   _applicationFormState = null;
   _formCollapsed = false;
+  // Оновлюємо бейдж
+  updateOrdersDraftBadge();
+  notify('Чернетку видалено', 'ok');
 }
 
 function showApplicationForm(){
