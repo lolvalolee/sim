@@ -242,6 +242,19 @@ body {
 }
 .nb-r { background: var(--red2); color: #fff; }
 
+/* Індикатор чернетки заявки у меню — жовта крапка */
+.draft-indicator {
+  color: var(--acc);
+  font-size: 18px;
+  line-height: 1;
+  margin-left: auto;
+  animation: draftPulse 2s ease-in-out infinite;
+}
+@keyframes draftPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 /* Бейдж непрочитаних повідомлень у списку чатів */
 .unread-badge {
   background: var(--red2);
@@ -1513,6 +1526,7 @@ body {
       </div>
       <div class="nav-item locked" onclick="go('orders')" id="n-orders">
         <span class="nav-icon">📋</span><span class="nav-label">Замовлення</span>
+        <span class="draft-indicator" id="draft-indicator-orders" style="display:none" title="Є незбережена чернетка заявки">●</span>
         <span class="nav-badge nb-o" id="badge-orders" style="display:none">0</span>
       </div>
       <div class="nav-item locked" onclick="go('docs')" id="n-docs">
@@ -2187,6 +2201,8 @@ function updateBadges(){
   const events=S.orders.filter(o=>o.status==='problem').length;
   const obb=document.getElementById('badge-orders');
   if(obb){obb.textContent=events;obb.style.display=events?'':'none';}
+  // Індикатор чернетки заявки
+  if (typeof updateOrdersDraftBadge === 'function') updateOrdersDraftBadge();
   updateProfit();
 }
 
@@ -3474,13 +3490,18 @@ async function onAfCarrierSearch(query){
   const dropdown = document.getElementById('af-carrier-dropdown');
   if (!dropdown) return;
 
-  if (query.length < 2) {
-    dropdown.classList.add('hidden');
-    // Якщо стерто все — очищаємо id
-    if (query.length === 0) {
-      const hidden = document.getElementById('af-carrier');
-      if (hidden) hidden.value = '';
-    }
+  // При порожньому запиті — показуємо топ-10 (з ким уже працювали + інші)
+  if (query.length === 0) {
+    // Очищаємо id
+    const hidden = document.getElementById('af-carrier');
+    if (hidden) hidden.value = '';
+    showAfCarrierTop();
+    return;
+  }
+
+  if (query.length === 1) {
+    // Один символ — показуємо топ-10 у якому є цей символ
+    showAfCarrierTop(query);
     return;
   }
 
@@ -3496,6 +3517,49 @@ async function onAfCarrierSearch(query){
       dropdown.classList.add('hidden');
     }
   }, 200);
+}
+
+// Показати топ-10 (тих з ким уже листувався + ще декілька)
+async function showAfCarrierTop(query){
+  const dropdown = document.getElementById('af-carrier-dropdown');
+  if (!dropdown) return;
+  const token = localStorage.getItem('docaa_token');
+  // Якщо у нас є S.carriers (контактна база студента) — беремо звідти топ-10
+  const haveChat = (S.carriers || []).filter(c => S.chats?.[c.id]?.length > 0);
+  // Доповнюємо до 10 будь-якими з S.carriers
+  const others = (S.carriers || []).filter(c => !haveChat.find(x => x.id === c.id));
+  let top = [...haveChat, ...others].slice(0, 10);
+  // Якщо є запит — фільтруємо локально
+  if (query) {
+    const q = query.toLowerCase();
+    top = top.filter(c => 
+      (c.name||'').toLowerCase().includes(q) || 
+      (c.person||'').toLowerCase().includes(q)
+    );
+  }
+  if (top.length === 0 && !query) {
+    dropdown.innerHTML = '<div class="ac-empty">Почніть писати щоб знайти перевізника</div>';
+    dropdown.classList.remove('hidden');
+    return;
+  }
+  if (top.length === 0) {
+    dropdown.classList.add('hidden');
+    return;
+  }
+  dropdown.innerHTML = top.map(c => {
+    const safeName = (c.name||'').replace(/'/g, "\\'");
+    const hadChat = S.chats?.[c.id]?.length > 0;
+    return `
+      <div class="ac-item" onclick="selectAfCarrier('${c.id}', '${safeName}')">
+        <div class="ac-item-info">
+          <div class="ac-item-name">${escapeHtml(c.name||'')}</div>
+          <div class="ac-item-meta">${escapeHtml(c.person || '')}</div>
+        </div>
+        ${hadChat ? '<span class="ac-item-pill">✓ Працювали</span>' : ''}
+      </div>
+    `;
+  }).join('');
+  dropdown.classList.remove('hidden');
 }
 
 function renderAfCarrierResults(results, query){
@@ -3534,6 +3598,188 @@ function selectAfCarrier(carrierId, carrierName){
   if (hidden) hidden.value = carrierId;
   document.getElementById('af-carrier-dropdown')?.classList.add('hidden');
 }
+
+// ─── Автокомпліт ЗАМОВНИКА ──────────────────────────────────────
+function onAfClientSearch(query){
+  query = (query || '').trim().toLowerCase();
+  const dropdown = document.getElementById('af-client-dropdown');
+  if (!dropdown) return;
+
+  // Якщо стерто все — очищаємо id
+  if (query.length === 0) {
+    const hidden = document.getElementById('af-client');
+    if (hidden) hidden.value = '';
+  }
+
+  // Список клієнтів — з S.allClients (всі з ким була переписка)
+  const list = S.allClients || [];
+  let filtered = list;
+  if (query) {
+    filtered = list.filter(c => 
+      (c.company||'').toLowerCase().includes(query) ||
+      (c.name||'').toLowerCase().includes(query) ||
+      (c.from_name||'').toLowerCase().includes(query)
+    );
+  }
+  // Топ-10
+  filtered = filtered.slice(0, 10);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = query 
+      ? '<div class="ac-empty">Нікого не знайдено</div>'
+      : '<div class="ac-empty">Поки що немає замовників з якими була переписка</div>';
+    dropdown.classList.remove('hidden');
+    return;
+  }
+  dropdown.innerHTML = filtered.map(c => {
+    const safeCompany = (c.company||'').replace(/'/g, "\\'");
+    return `
+      <div class="ac-item" onclick="selectAfClient('${c.id}', '${safeCompany}')">
+        <div class="ac-item-info">
+          <div class="ac-item-name">${escapeHtml(c.company||'')}</div>
+          <div class="ac-item-meta">${escapeHtml(c.from_name || c.name || '')}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  dropdown.classList.remove('hidden');
+}
+
+function selectAfClient(clientId, clientName){
+  const input = document.getElementById('af-client-input');
+  const hidden = document.getElementById('af-client');
+  if (input) input.value = clientName;
+  if (hidden) hidden.value = clientId;
+  document.getElementById('af-client-dropdown')?.classList.add('hidden');
+}
+
+// ─── Автокомпліт МИТНОГО ПЕРЕХОДУ ───────────────────────────────
+const BORDER_CROSSINGS_LIST = [
+  'Zosin (PL303040) - Устилуг (UA205110)',
+  'Halmeu (ROCJ4310) - Дякове (UA305240)',
+  'Giurgiulesti (3030) - Рені (UA500380)',
+  'Medyka (PL401030) - Шегині (UA209040)',
+  'Siret (ROIS8200) - Порубне (UA408050)',
+  'Dolhobyczow (PL303091) - Угринів (UA209100)',
+  'Zahony (HU724000) - Чоп (UA305060)',
+  'Vysne Nemecke (SK532100) - Ужгород (UA305090)',
+  'Dorohusk (PL302060) - Ягодин (UA205020)',
+  'Hrebenne (PL303020) - Рава-Руська (UA209060)',
+  'Budomierz (PL401080) - Грушів (UA209090)',
+  'Korczowa (PL401060) - Краківець (UA209030)',
+];
+
+function onAfBorderSearch(query){
+  query = (query || '').trim().toLowerCase();
+  const dropdown = document.getElementById('af-border-dropdown');
+  if (!dropdown) return;
+
+  const hidden = document.getElementById('af-border');
+  if (hidden) hidden.value = (query ? document.getElementById('af-border-input')?.value : '') || '';
+
+  let filtered = BORDER_CROSSINGS_LIST;
+  if (query) {
+    filtered = BORDER_CROSSINGS_LIST.filter(bc => bc.toLowerCase().includes(query));
+  }
+  // Топ-10 (хоча їх лише 12)
+  filtered = filtered.slice(0, 12);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div class="ac-empty">Не знайдено</div>';
+    dropdown.classList.remove('hidden');
+    return;
+  }
+  dropdown.innerHTML = filtered.map(bc => {
+    const safe = bc.replace(/'/g, "\\'");
+    return `
+      <div class="ac-item" onclick="selectAfBorder('${safe}')">
+        <div class="ac-item-info">
+          <div class="ac-item-name">${escapeHtml(bc)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  dropdown.classList.remove('hidden');
+}
+
+function selectAfBorder(border){
+  const input = document.getElementById('af-border-input');
+  const hidden = document.getElementById('af-border');
+  if (input) input.value = border;
+  if (hidden) hidden.value = border;
+  document.getElementById('af-border-dropdown')?.classList.add('hidden');
+}
+
+// ─── Автокомпліт ТИПУ ТЗ ────────────────────────────────────────
+const VEHICLE_TYPES_LIST = [
+  'Тент',
+  'Реф',
+  'Реф -10',
+  'Реф -15',
+  'Реф -18',
+  'Реф +2/+8',
+  'Ізотерм',
+  'Контейнеровоз',
+  'Зерновоз',
+  'Самоскид',
+  'Цистерна',
+  'Сцепка',
+  'Мега',
+  'Трал',
+  'Бортовий',
+];
+
+function onAfVehicleTypeSearch(query){
+  query = (query || '').trim().toLowerCase();
+  const dropdown = document.getElementById('af-vehicle-type-dropdown');
+  if (!dropdown) return;
+
+  const inputEl = document.getElementById('af-vehicle-type-input');
+  const hidden = document.getElementById('af-vehicle-type');
+  if (hidden) hidden.value = inputEl?.value || '';
+
+  let filtered = VEHICLE_TYPES_LIST;
+  if (query) {
+    filtered = VEHICLE_TYPES_LIST.filter(vt => vt.toLowerCase().includes(query));
+  }
+  filtered = filtered.slice(0, 10);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div class="ac-empty">Не знайдено</div>';
+    dropdown.classList.remove('hidden');
+    return;
+  }
+  dropdown.innerHTML = filtered.map(vt => {
+    const safe = vt.replace(/'/g, "\\'");
+    return `
+      <div class="ac-item" onclick="selectAfVehicleType('${safe}')">
+        <div class="ac-item-info">
+          <div class="ac-item-name">${escapeHtml(vt)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  dropdown.classList.remove('hidden');
+}
+
+function selectAfVehicleType(vt){
+  const input = document.getElementById('af-vehicle-type-input');
+  const hidden = document.getElementById('af-vehicle-type');
+  if (input) input.value = vt;
+  if (hidden) hidden.value = vt;
+  document.getElementById('af-vehicle-type-dropdown')?.classList.add('hidden');
+}
+
+// Закривати дропдауни при кліку поза ними
+document.addEventListener('click', (e) => {
+  ['af-carrier', 'af-client', 'af-border', 'af-vehicle-type'].forEach(prefix => {
+    const wrap = document.getElementById(prefix + '-input')?.closest('.ac-input-wrap');
+    const dropdown = document.getElementById(prefix + '-dropdown');
+    if (wrap && dropdown && !wrap.contains(e.target)) {
+      dropdown.classList.add('hidden');
+    }
+  });
+});
 
 // Відкрити модалку з документом заявки (для перегляду в чаті)
 function openApplicationDocModal(cid, msgIdx){
@@ -3956,10 +4202,9 @@ async function openApplicationForm(applicationId){
         clearFormDraft();
       }
     } else {
-      // Чернетка від іншої форми — пропонуємо
-      if (confirm('Є чернетка з минулого сеансу. Видалити її щоб не плутала?')) {
-        clearFormDraft();
-      }
+      // Чернетка від іншого запису у поточній сесії — просто видаляємо
+      // (студент відкрив інший запис — стара чернетка не релевантна)
+      clearFormDraft();
     }
   }
 
@@ -3990,7 +4235,38 @@ function isoToDate(s){
 }
 
 // ─── Autosave чернетки в localStorage ───
-const DRAFT_KEY = 'docaa_app_form_draft';
+// Ключ прив'язаний до студента+сесії — щоб після скидання сесії
+// або переходу на іншого студента не пропонувались старі чернетки.
+function _getDraftKey(){
+  // student_id з JWT (заголовка) + session_id з S
+  const token = localStorage.getItem('docaa_token') || '';
+  // Простий хеш токена (перші 16 символів) — достатньо щоб розділити студентів
+  const studentTag = token.slice(0, 16) || 'anon';
+  const sessionTag = (S.sessionId || S.session_id || 'nosession').slice(0, 16);
+  return `docaa_app_form_draft_${studentTag}_${sessionTag}`;
+}
+
+// Очищення СТАРИХ ключів (з попередніх сесій/студентів) при логіні —
+// викликається з init() після завантаження сесії
+function cleanupOldDrafts(){
+  try {
+    const currentKey = _getDraftKey();
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      // Видаляємо старі ключі чернеток (як зі старого глобального формату, так і з інших сесій/студентів)
+      if (k === 'docaa_app_form_draft') {
+        keysToRemove.push(k);
+      } else if (k && k.startsWith('docaa_app_form_draft_') && k !== currentKey) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+    if (keysToRemove.length > 0) {
+      console.log('[drafts] Очищено старі чернетки:', keysToRemove.length);
+    }
+  } catch(e){}
+}
 
 function saveFormDraft(){
   if (!_applicationFormState) return;
@@ -4026,18 +4302,20 @@ function saveFormDraft(){
         additional_info: get('af-info'),
       },
     };
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    localStorage.setItem(_getDraftKey(), JSON.stringify(draft));
+    // Оновлюємо бейдж після зберігання
+    if (typeof updateOrdersDraftBadge === 'function') updateOrdersDraftBadge();
   } catch(e){}
 }
 
 function loadFormDraft(){
   try {
-    const raw = localStorage.getItem(DRAFT_KEY);
+    const raw = localStorage.getItem(_getDraftKey());
     if (!raw) return null;
     const draft = JSON.parse(raw);
     // Якщо чернетці більше ніж 24 години — ігноруємо
     if (Date.now() - (draft.ts || 0) > 24*60*60*1000) {
-      localStorage.removeItem(DRAFT_KEY);
+      localStorage.removeItem(_getDraftKey());
       return null;
     }
     return draft;
@@ -4045,7 +4323,22 @@ function loadFormDraft(){
 }
 
 function clearFormDraft(){
-  try { localStorage.removeItem(DRAFT_KEY); } catch(e){}
+  try {
+    localStorage.removeItem(_getDraftKey());
+    if (typeof updateOrdersDraftBadge === 'function') updateOrdersDraftBadge();
+  } catch(e){}
+}
+
+// Чи є зараз чернетка (для бейджу)
+function hasFormDraft(){
+  return !!loadFormDraft();
+}
+
+// Оновлення індикатора чернетки у меню "Замовлення"
+function updateOrdersDraftBadge(){
+  const el = document.getElementById('draft-indicator-orders');
+  if (!el) return;
+  el.style.display = hasFormDraft() ? '' : 'none';
 }
 
 let _formAutosaveTimer = null;
@@ -4094,28 +4387,107 @@ function expandApplicationForm(){
 }
 
 function discardApplicationForm(){
-  if (!confirm('Видалити чернетку заявки? Введені дані будуть втрачені.')) return;
+  // Замість confirm — гарна модалка підтвердження
+  document.getElementById('discard-confirm-dialog')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'discard-confirm-dialog';
+  ov.className = 'zf-overlay';
+  ov.style.zIndex = '10000';
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  ov.innerHTML = `
+    <div class="zf-modal" style="max-width:380px">
+      <div class="zf-head"><h2>Видалити чернетку?</h2></div>
+      <div class="zf-body" style="padding:16px 22px">
+        <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:14px">
+          Введені дані будуть втрачені.
+        </p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn" onclick="document.getElementById('discard-confirm-dialog')?.remove()">Скасувати</button>
+          <button class="btn danger" onclick="confirmDiscardDraft()">🗑 Видалити</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ov);
+}
+
+function confirmDiscardDraft(){
+  document.getElementById('discard-confirm-dialog')?.remove();
   clearFormDraft();
   document.getElementById('zf-minibar')?.remove();
+  document.getElementById('zf-overlay')?.remove();
   _applicationFormState = null;
   _formCollapsed = false;
 }
 
 function closeApplicationForm(){
-  // Перевіряємо чи є щось у формі — пропонуємо згорнути замість закриття
+  // Перевіряємо чи є щось у формі
   const hasData = !!document.getElementById('af-client-freight')?.value
     || !!document.getElementById('af-carrier-freight')?.value
-    || !!document.getElementById('af-cargo-desc')?.value;
+    || !!document.getElementById('af-cargo-desc')?.value
+    || !!document.getElementById('af-load-addr')?.value
+    || !!document.getElementById('af-unload-addr')?.value;
+
   if (hasData && _applicationFormState && !_applicationFormState._closing) {
-    if (confirm('Згорнути форму (дані збережуться) або видалити чернетку?\n\nOK = згорнути\nСкасувати = видалити')) {
-      collapseApplicationForm();
-      return;
-    } else {
-      clearFormDraft();
-    }
+    showCloseFormDialog();
+    return;
   }
+  // Якщо нічого немає — закриваємо без питань
   stopFormAutosave();
   document.getElementById('zf-overlay')?.remove();
+  _applicationFormState = null;
+  _formCollapsed = false;
+}
+
+// Модалка вибору: згорнути чи видалити
+function showCloseFormDialog(){
+  // Видаляємо попередню якщо була
+  document.getElementById('close-form-dialog')?.remove();
+
+  const ov = document.createElement('div');
+  ov.id = 'close-form-dialog';
+  ov.className = 'zf-overlay';
+  ov.style.zIndex = '10000';
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  ov.innerHTML = `
+    <div class="zf-modal" style="max-width:420px">
+      <div class="zf-head">
+        <h2>Що зробити з формою?</h2>
+      </div>
+      <div class="zf-body" style="padding:18px 22px">
+        <p style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:18px">
+          У формі є дані. Виберіть що зробити:
+        </p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <button class="btn primary" onclick="doCollapseForm()" style="text-align:left;padding:12px 16px">
+            <strong>📥 Згорнути</strong><br>
+            <span style="font-size:11px;color:rgba(0,0,0,.7);font-weight:400">Дані збережуться у чернетці, форму можна відкрити пізніше</span>
+          </button>
+          <button class="btn danger" onclick="doDiscardForm()" style="text-align:left;padding:12px 16px">
+            <strong>🗑 Видалити чернетку</strong><br>
+            <span style="font-size:11px;color:rgba(255,255,255,.7);font-weight:400">Усі введені дані будуть втрачені</span>
+          </button>
+          <button class="btn" onclick="document.getElementById('close-form-dialog')?.remove()" style="text-align:center">
+            Повернутись до форми
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ov);
+}
+
+function doCollapseForm(){
+  document.getElementById('close-form-dialog')?.remove();
+  collapseApplicationForm();
+}
+
+function doDiscardForm(){
+  document.getElementById('close-form-dialog')?.remove();
+  clearFormDraft();
+  stopFormAutosave();
+  document.getElementById('zf-overlay')?.remove();
+  document.getElementById('zf-minibar')?.remove();
   _applicationFormState = null;
   _formCollapsed = false;
 }
@@ -4188,10 +4560,17 @@ function showApplicationForm(){
           <div class="zf-grid cols-2">
             <div class="zf-field">
               <label class="zf-label">Замовник<span class="req">*</span></label>
-              <select class="zf-select" id="af-client">
-                <option value="">— Оберіть —</option>
-                ${clientsList.map(c => `<option value="${c.id}" ${c.id===d.client_id?'selected':''}>${escapeHtml(c.company)}</option>`).join('')}
-              </select>
+              <div class="ac-input-wrap" style="background:var(--bg3);border:1px solid var(--b2);border-radius:var(--r);padding:9px 12px;position:relative">
+                <span class="ac-icon" style="left:12px">🔍</span>
+                <input type="text" class="ac-input" id="af-client-input"
+                       value="${d.client_id ? escapeHtml((clientsList.find(c => c.id === d.client_id)?.company) || '') : ''}"
+                       placeholder="Натисніть і виберіть або почніть писати"
+                       oninput="onAfClientSearch(this.value)"
+                       onfocus="onAfClientSearch(this.value)"
+                       autocomplete="off">
+                <input type="hidden" id="af-client" value="${d.client_id || ''}">
+                <div class="ac-dropdown hidden" id="af-client-dropdown" style="top:calc(100% + 4px);bottom:auto"></div>
+              </div>
               <div class="zf-hint">Лише ті з якими була переписка</div>
             </div>
             <div class="zf-field">
@@ -4201,14 +4580,14 @@ function showApplicationForm(){
                 <input type="text" class="ac-input" id="af-carrier-input"
                        data-carrier-id="${d.carrier_id || ''}"
                        value="${d.carrier_id ? escapeHtml((carriersList.find(c => c.id === d.carrier_id)?.name) || '') : ''}"
-                       placeholder="Почніть писати назву..."
+                       placeholder="Натисніть і виберіть або почніть писати"
                        oninput="onAfCarrierSearch(this.value)"
                        onfocus="onAfCarrierSearch(this.value)"
                        autocomplete="off">
                 <input type="hidden" id="af-carrier" value="${d.carrier_id || ''}">
                 <div class="ac-dropdown hidden" id="af-carrier-dropdown" style="top:calc(100% + 4px);bottom:auto"></div>
               </div>
-              <div class="zf-hint">Введіть мін 2 літери — система покаже варіанти</div>
+              <div class="zf-hint">Спочатку — перевізники з ким вже листувались. Почніть писати — пошук по всій базі</div>
             </div>
           </div>
         </div>
@@ -4226,10 +4605,17 @@ function showApplicationForm(){
             </div>
             <div class="zf-field">
               <label class="zf-label">Митний перехід</label>
-              <select class="zf-select" id="af-border">
-                <option value="">—</option>
-                ${borderCrossings.map(bc => `<option value="${bc}" ${bc===d.border_crossing?'selected':''}>${bc}</option>`).join('')}
-              </select>
+              <div class="ac-input-wrap" style="background:var(--bg3);border:1px solid var(--b2);border-radius:var(--r);padding:9px 12px;position:relative">
+                <span class="ac-icon" style="left:12px">🔍</span>
+                <input type="text" class="ac-input" id="af-border-input"
+                       value="${escapeHtml(d.border_crossing||'')}"
+                       placeholder="Натисніть і виберіть або почніть писати"
+                       oninput="onAfBorderSearch(this.value)"
+                       onfocus="onAfBorderSearch(this.value)"
+                       autocomplete="off">
+                <input type="hidden" id="af-border" value="${escapeHtml(d.border_crossing||'')}">
+                <div class="ac-dropdown hidden" id="af-border-dropdown" style="top:calc(100% + 4px);bottom:auto"></div>
+              </div>
             </div>
             <div class="zf-field zf-full">
               <label class="zf-label">Адреса розвантаження<span class="req">*</span></label>
@@ -4283,10 +4669,17 @@ function showApplicationForm(){
           <div class="zf-grid cols-2">
             <div class="zf-field">
               <label class="zf-label">Тип ТЗ<span class="req">*</span></label>
-              <select class="zf-select" id="af-vehicle-type">
-                <option value="">— Оберіть —</option>
-                ${vehicleTypes.map(vt => `<option value="${vt}" ${vt===d.vehicle_type?'selected':''}>${vt}</option>`).join('')}
-              </select>
+              <div class="ac-input-wrap" style="background:var(--bg3);border:1px solid var(--b2);border-radius:var(--r);padding:9px 12px;position:relative">
+                <span class="ac-icon" style="left:12px">🔍</span>
+                <input type="text" class="ac-input" id="af-vehicle-type-input"
+                       value="${escapeHtml(d.vehicle_type||'')}"
+                       placeholder="Натисніть і виберіть або почніть писати"
+                       oninput="onAfVehicleTypeSearch(this.value)"
+                       onfocus="onAfVehicleTypeSearch(this.value)"
+                       autocomplete="off">
+                <input type="hidden" id="af-vehicle-type" value="${escapeHtml(d.vehicle_type||'')}">
+                <div class="ac-dropdown hidden" id="af-vehicle-type-dropdown" style="top:calc(100% + 4px);bottom:auto"></div>
+              </div>
             </div>
             <div class="zf-field">
               <label class="zf-label">Вимоги до ТЗ</label>
@@ -7182,6 +7575,9 @@ async function loadSessionFromServer(token){
   S.sessionId=data.session.id;
   S.sessionVersion=data.session.version||'';
   S.startDate=new Date();
+
+  // Очищення СТАРИХ чернеток (з попередніх сесій/студентів)
+  try { cleanupOldDrafts(); } catch(e){}
 
   // Parse start_date string DD.MM.YYYY
   const parts=data.session.start_date.split('.');
