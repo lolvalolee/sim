@@ -4756,30 +4756,37 @@ document.addEventListener('click', unlockAudio, { once: false });
 document.addEventListener('keydown', unlockAudio, { once: false });
 
 function _playTone(freq1, freq2, duration = 0.15) {
-  if (!_audio.enabled) return;
+  if (!_audio.enabled) { console.log('[audio] disabled'); return; }
   const ctx = _ensureAudioCtx();
-  if (!ctx) return;
+  if (!ctx) { console.log('[audio] no context'); return; }
+  console.log('[audio] play tone', freq1, freq2, '| ctx.state=', ctx.state);
+
   const now = ctx.currentTime;
   const playOne = (freq, startTime) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, startTime);
-    gain.gain.setValueAtTime(0, startTime);
-    gain.gain.linearRampToValueAtTime(0.18, startTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(startTime);
-    osc.stop(startTime + duration);
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, startTime);
+      // Linear envelope — щоб уникнути проблем з exponential з нуля
+      gain.gain.setValueAtTime(0.0001, startTime);
+      gain.gain.linearRampToValueAtTime(0.2, startTime + 0.015);
+      gain.gain.linearRampToValueAtTime(0.0001, startTime + duration);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + duration + 0.05);
+    } catch(e) {
+      console.error('[audio] playOne error:', e.message);
+    }
   };
   playOne(freq1, now);
   playOne(freq2, now + duration * 0.7);
 }
 
 // Звук від перевізника (нижчий — діловий)
-function playCarrierSound() { _playTone(523, 659, 0.14); }   // C5 → E5
+function playCarrierSound() { _playTone(523, 659, 0.18); }   // C5 → E5
 // Звук від замовника (вищий — клієнтський)
-function playClientSound() { _playTone(880, 1175, 0.12); }   // A5 → D6
+function playClientSound() { _playTone(880, 1175, 0.15); }   // A5 → D6
 
 function toggleSound() {
   _audio.enabled = !_audio.enabled;
