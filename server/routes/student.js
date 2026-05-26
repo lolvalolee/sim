@@ -459,7 +459,23 @@ router.post('/orders/:letterId/confirm-client', STU, async (req, res) => {
     return `${role}: ${m.text || m.content || ''}`;
   }).join('\n');
 
+  // Витягуємо РЕАЛЬНИЙ маршрут (міста, не лише країни) з листа
   const route = (() => {
+    // Пріоритет 1: з subject листа — "Запит на перевезення: Коломия (UA) — Новий Сонч (PL)"
+    if (letter.subject) {
+      const m1 = letter.subject.match(/:\s*(.+?)\s*$/);
+      if (m1 && m1[1].includes(' — ')) return m1[1].trim();
+      const m2 = letter.subject.match(/(.+?)\s*[—–-]\s*(.+)$/);
+      if (m2) return `${m2[1].trim()} — ${m2[2].trim()}`;
+    }
+    // Пріоритет 2: з body — "Маршрут: ..."
+    if (letter.body) {
+      const m = letter.body.match(/Маршрут:\s*(.+?)(?:\n|$)/);
+      if (m) return m[1].trim();
+      const m2 = letter.body.match(/Route:\s*(.+?)(?:\n|$)/);
+      if (m2) return m2[1].trim();
+    }
+    // Фолбек: країни (як було)
     try {
       const dirs = JSON.parse(letter.dirs || '[]');
       return dirs.join(' → ');
@@ -674,7 +690,20 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     return `${role}: ${m.text || m.content || ''}`;
   }).join('\n');
 
+  // Витягуємо РЕАЛЬНИЙ маршрут (міста, не лише країни) з листа
   const route = (() => {
+    if (letter.subject) {
+      const m1 = letter.subject.match(/:\s*(.+?)\s*$/);
+      if (m1 && m1[1].includes(' — ')) return m1[1].trim();
+      const m2 = letter.subject.match(/(.+?)\s*[—–-]\s*(.+)$/);
+      if (m2) return `${m2[1].trim()} — ${m2[2].trim()}`;
+    }
+    if (letter.body) {
+      const m = letter.body.match(/Маршрут:\s*(.+?)(?:\n|$)/);
+      if (m) return m[1].trim();
+      const m2 = letter.body.match(/Route:\s*(.+?)(?:\n|$)/);
+      if (m2) return m2[1].trim();
+    }
     try {
       const dirs = JSON.parse(letter.dirs || '[]');
       return dirs.join(' → ');

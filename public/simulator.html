@@ -919,31 +919,44 @@ body {
   .zf-grid.cols-2, .zf-grid.cols-3 { grid-template-columns: 1fr; }
 }
 
-/* ─── Згорнута форма (мінібар) ─── */
-.zf-minibar {
+/* ─── Згорнуті форми (мінібар-контейнер) ─── */
+.zf-minibar-container {
   position: fixed; bottom: 18px; right: 18px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 9999; max-width: 320px;
+  align-items: flex-end;
+}
+.zf-minibar {
   background: var(--bg2); border: 1px solid var(--acc);
   border-radius: var(--r2); padding: 10px 12px;
   display: flex; align-items: center; gap: 10px;
   box-shadow: 0 8px 28px rgba(0,0,0,.5), 0 0 0 4px rgba(255,190,99,.08);
-  z-index: 9999; min-width: 240px;
+  min-width: 240px; max-width: 320px;
   animation: minibarIn .25s ease-out;
+  cursor: default;
 }
 @keyframes minibarIn {
   from { transform: translateY(20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
-.zf-minibar-icon { font-size: 16px; }
+.zf-minibar-icon { font-size: 16px; flex-shrink: 0; }
 .zf-minibar-text {
   flex: 1; font-size: 12px; color: var(--t1); font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
 }
 .zf-minibar-btn {
   background: transparent; border: none; color: var(--t3); cursor: pointer;
   font-size: 14px; width: 26px; height: 26px; border-radius: 5px;
   display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
 }
 .zf-minibar-btn:hover { background: var(--bg3); color: var(--acc); }
+.zf-minibar-limit {
+  background: var(--bg2); border: 1px dashed var(--b2);
+  border-radius: var(--r2); padding: 6px 10px;
+  font-size: 11px; color: var(--t3);
+}
 
 /* ─── Send preview модалка ─── */
 .send-doc-preview { margin: -8px 0 0; }
@@ -2755,7 +2768,7 @@ function renderCarriers(){
             ${['Мультилок','Гідроборт','Допельшток','Рухома підлога'].map(p=>`<option value="equip_${p}" ${S.carrierFilter.special==='equip_'+p?'selected':''}>${p}</option>`).join('')}
           </optgroup>
         </select>
-        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="">
+        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="" autocomplete="off" name="docaa-search-carriers" type="search" data-form-type="other">
         <button class="btn sm" onclick="resetCarF()" title="Скинути фільтри">✕ Скинути</button>
       </div>
     </div>
@@ -3290,8 +3303,6 @@ function redrawApplicationsTable(){
     <div class="apps-head">
       <h2 class="apps-title">Замовлення</h2>
     </div>
-
-    ${renderDraftBanner()}
 
     <div class="apps-kpi">
       <div class="kpi-card">
@@ -4168,7 +4179,15 @@ async function submitSendApplication(){
   }
 }
 
-async function openApplicationForm(applicationId){
+async function openApplicationForm(applicationId, draftIdToOpen){
+  // Якщо вже відкрита якась форма — спершу зберігаємо її і закриваємо UI
+  if (_applicationFormState && _applicationFormState.draftId) {
+    saveFormDraft();
+    document.getElementById('zf-overlay')?.remove();
+    stopFormAutosave();
+    _applicationFormState = null;
+  }
+
   // Завжди дозавантажуємо списки (на випадок коли клієнти оновились)
   const token = localStorage.getItem('docaa_token');
   try {
@@ -4190,32 +4209,53 @@ async function openApplicationForm(applicationId){
     } catch(e){}
   }
 
-  // Перевіряємо чи є чернетка
-  // Чернетка релевантна якщо ми відкриваємо ту саму запис або нову (без id)
-  const draft = loadFormDraft();
-  let dataToUse = existing || {};
-  let openWith = dataToUse;
-  if (draft) {
-    const isDraftForSameRecord = (applicationId && draft.isEdit && draft.id === applicationId);
-    const isDraftForNew = (!applicationId && !draft.isEdit);
-    if (isDraftForSameRecord || isDraftForNew) {
-      // Беремо чернетку автоматично (у нас же є банер який її показує, тому користувач знає що вона є)
-      openWith = { ...dataToUse, ...draft.data };
-    } else {
-      // Чернетка від іншого запису у поточній сесії — просто видаляємо
-      clearFormDraft();
+  // Знаходимо потрібну чернетку
+  let draft = null;
+  let resolvedDraftId = draftIdToOpen || null;
+
+  if (draftIdToOpen) {
+    // Відкриваємо конкретну чернетку (по кліку з міні-картки)
+    draft = loadFormDraftById(draftIdToOpen);
+  } else if (applicationId) {
+    // Редагування заявки — шукаємо чернетку саме для неї
+    const arr = listFormDrafts();
+    draft = arr.find(d => d.isEdit && d.id === applicationId) || null;
+    resolvedDraftId = draft?.draftId || null;
+  } else {
+    // Нова заявка — НЕ беремо чужу чернетку. Створимо нову.
+    draft = null;
+    resolvedDraftId = null;
+  }
+
+  // Перевірка ліміту: лише якщо створюємо НОВУ чернетку (не відкриваємо існуючу)
+  if (!resolvedDraftId) {
+    const existingDrafts = listFormDrafts();
+    if (existingDrafts.length >= MAX_DRAFTS) {
+      notify(`Досягнуто ліміт ${MAX_DRAFTS} чернеток. Закрийте одну щоб створити нову.`, 'err');
+      refreshDraftBars();
+      return;
     }
   }
-  dataToUse = openWith;
+
+  let dataToUse = existing || {};
+  if (draft) {
+    dataToUse = { ...dataToUse, ...(draft.data || {}) };
+  }
 
   _applicationFormState = {
-    id: existing?.id || null,
-    isEdit: !!existing,
+    id: existing?.id || (draft?.isEdit ? draft.id : null),
+    isEdit: !!(existing || draft?.isEdit),
     data: dataToUse,
+    draftId: resolvedDraftId, // якщо null — буде створено у saveFormDraft
   };
+
+  // Прибираємо контейнер мінібарів — форма зараз відкрита (на місці чернетки)
+  document.getElementById('zf-minibar-container')?.remove();
 
   showApplicationForm();
   startFormAutosave();
+  // Зберігаємо одразу щоб з'явилася картка у списку (на випадок одразного згортання)
+  saveFormDraft();
 }
 
 // ─── Helpers для дат ───
@@ -4235,31 +4275,37 @@ function isoToDate(s){
 }
 
 // ─── Autosave чернетки в localStorage ───
-// Ключ прив'язаний до студента+сесії — щоб після скидання сесії
-// або переходу на іншого студента не пропонувались старі чернетки.
-function _getDraftKey(){
-  // student_id з JWT (заголовка) + session_id з S
+// Зберігаємо МАСИВ чернеток (до 8). Кожна має draftId.
+// Ключ масиву прив'язаний до студента+сесії — щоб після скидання сесії
+// або зміни студента не пропонувались старі чернетки.
+const MAX_DRAFTS = 8;
+
+function _getDraftsKey(){
   const token = localStorage.getItem('docaa_token') || '';
-  // Простий хеш токена (перші 16 символів) — достатньо щоб розділити студентів
+  const studentTag = token.slice(0, 16) || 'anon';
+  const sessionTag = (S.sessionId || S.session_id || 'nosession').slice(0, 16);
+  return `docaa_drafts_${studentTag}_${sessionTag}`;
+}
+
+// LEGACY (для cleanup) — старий ключ і ще старіший
+function _getOldDraftKey(){
+  const token = localStorage.getItem('docaa_token') || '';
   const studentTag = token.slice(0, 16) || 'anon';
   const sessionTag = (S.sessionId || S.session_id || 'nosession').slice(0, 16);
   return `docaa_app_form_draft_${studentTag}_${sessionTag}`;
 }
 
-// Очищення СТАРИХ ключів (з попередніх сесій/студентів) при логіні —
-// викликається з init() після завантаження сесії
+// Очищення СТАРИХ ключів (з попередніх сесій/студентів)
 function cleanupOldDrafts(){
   try {
-    const currentKey = _getDraftKey();
+    const currentDraftsKey = _getDraftsKey();
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      // Видаляємо старі ключі чернеток (як зі старого глобального формату, так і з інших сесій/студентів)
-      if (k === 'docaa_app_form_draft') {
-        keysToRemove.push(k);
-      } else if (k && k.startsWith('docaa_app_form_draft_') && k !== currentKey) {
-        keysToRemove.push(k);
-      }
+      if (!k) continue;
+      if (k === 'docaa_app_form_draft') keysToRemove.push(k);
+      else if (k.startsWith('docaa_app_form_draft_')) keysToRemove.push(k); // старий формат
+      else if (k.startsWith('docaa_drafts_') && k !== currentDraftsKey) keysToRemove.push(k);
     }
     keysToRemove.forEach(k => localStorage.removeItem(k));
     if (keysToRemove.length > 0) {
@@ -4268,153 +4314,143 @@ function cleanupOldDrafts(){
   } catch(e){}
 }
 
+// Список усіх чернеток (масив)
+function listFormDrafts(){
+  try {
+    const raw = localStorage.getItem(_getDraftsKey());
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    // Видаляємо чернетки старші 24 годин
+    const fresh = arr.filter(d => Date.now() - (d.ts || 0) <= 24*60*60*1000);
+    if (fresh.length !== arr.length) {
+      _saveDraftsArray(fresh);
+    }
+    return fresh;
+  } catch(e) { return []; }
+}
+
+function _saveDraftsArray(arr){
+  try { localStorage.setItem(_getDraftsKey(), JSON.stringify(arr)); } catch(e){}
+}
+
+// Зібрати дані з полів форми
+function _collectFormData(){
+  const get = (id) => document.getElementById(id)?.value || '';
+  return {
+    client_id: get('af-client'),
+    carrier_id: get('af-carrier'),
+    load_address: get('af-load-addr'),
+    customs_out: get('af-customs-out'),
+    customs_in: get('af-customs-in'),
+    unload_address: get('af-unload-addr'),
+    border_crossing: get('af-border'),
+    cargo_description: get('af-cargo-desc'),
+    cargo_weight: get('af-weight'),
+    cargo_volume: get('af-volume'),
+    adr_class: get('af-adr'),
+    load_date: get('af-load-date'),
+    unload_date: get('af-unload-date'),
+    vehicle_type: get('af-vehicle-type'),
+    vehicle_requirements: get('af-vehicle-req'),
+    truck_plate: get('af-truck-plate'),
+    trailer_plate: get('af-trailer-plate'),
+    driver_name: get('af-driver-name'),
+    driver_phone: get('af-driver-phone'),
+    client_freight: get('af-client-freight'),
+    carrier_freight: get('af-carrier-freight'),
+    additional_info: get('af-info'),
+  };
+}
+
+// Зберегти/оновити поточну чернетку у масиві
 function saveFormDraft(){
   if (!_applicationFormState) return;
   try {
-    // Збираю поточні значення з полів
-    const get = (id) => document.getElementById(id)?.value || '';
+    // Гарантуємо що є draftId
+    if (!_applicationFormState.draftId) {
+      _applicationFormState.draftId = 'd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    }
+    const data = _collectFormData();
     const draft = {
+      draftId: _applicationFormState.draftId,
       isEdit: _applicationFormState.isEdit,
       id: _applicationFormState.id,
       ts: Date.now(),
-      data: {
-        client_id: get('af-client'),
-        carrier_id: get('af-carrier'),
-        load_address: get('af-load-addr'),
-        customs_out: get('af-customs-out'),
-        customs_in: get('af-customs-in'),
-        unload_address: get('af-unload-addr'),
-        border_crossing: get('af-border'),
-        cargo_description: get('af-cargo-desc'),
-        cargo_weight: get('af-weight'),
-        cargo_volume: get('af-volume'),
-        adr_class: get('af-adr'),
-        load_date: get('af-load-date'),
-        unload_date: get('af-unload-date'),
-        vehicle_type: get('af-vehicle-type'),
-        vehicle_requirements: get('af-vehicle-req'),
-        truck_plate: get('af-truck-plate'),
-        trailer_plate: get('af-trailer-plate'),
-        driver_name: get('af-driver-name'),
-        driver_phone: get('af-driver-phone'),
-        client_freight: get('af-client-freight'),
-        carrier_freight: get('af-carrier-freight'),
-        additional_info: get('af-info'),
-      },
+      data,
     };
-    localStorage.setItem(_getDraftKey(), JSON.stringify(draft));
-    // Оновлюємо бейдж після зберігання
-    if (typeof updateOrdersDraftBadge === 'function') updateOrdersDraftBadge();
+    let arr = listFormDrafts();
+    const idx = arr.findIndex(d => d.draftId === draft.draftId);
+    if (idx >= 0) arr[idx] = draft;
+    else {
+      // Перевіряємо ліміт
+      if (arr.length >= MAX_DRAFTS) {
+        // Якщо MAX досягнуто — не додаємо нову (не має статись бо openApplicationForm перевіряє)
+        return;
+      }
+      arr.push(draft);
+    }
+    _saveDraftsArray(arr);
+    refreshDraftBars();
+    updateOrdersDraftBadge();
   } catch(e){}
 }
 
-function loadFormDraft(){
-  try {
-    const raw = localStorage.getItem(_getDraftKey());
-    if (!raw) return null;
-    const draft = JSON.parse(raw);
-    // Якщо чернетці більше ніж 24 години — ігноруємо
-    if (Date.now() - (draft.ts || 0) > 24*60*60*1000) {
-      localStorage.removeItem(_getDraftKey());
-      return null;
-    }
-    return draft;
-  } catch(e) { return null; }
+// Завантажити конкретну чернетку за draftId
+function loadFormDraftById(draftId){
+  const arr = listFormDrafts();
+  return arr.find(d => d.draftId === draftId) || null;
 }
 
-function clearFormDraft(){
+// Видалити чернетку за draftId
+function deleteFormDraft(draftId){
+  let arr = listFormDrafts();
+  arr = arr.filter(d => d.draftId !== draftId);
+  _saveDraftsArray(arr);
+  refreshDraftBars();
+  updateOrdersDraftBadge();
+}
+
+// Видалити ВСЕ
+function clearAllFormDrafts(){
   try {
-    // Очищаємо поточний (за студентом+сесією)
-    localStorage.removeItem(_getDraftKey());
-    // Очищаємо ВСІ можливі ключі чернеток — на всяк випадок щоб не лишилось
+    localStorage.removeItem(_getDraftsKey());
+    // Очищення legacy-ключів теж
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k === 'docaa_app_form_draft' || (k && k.startsWith('docaa_app_form_draft_'))) {
+      if (k && (k === 'docaa_app_form_draft' || k.startsWith('docaa_app_form_draft_'))) {
         keysToRemove.push(k);
       }
     }
     keysToRemove.forEach(k => localStorage.removeItem(k));
-    if (typeof updateOrdersDraftBadge === 'function') updateOrdersDraftBadge();
+    refreshDraftBars();
+    updateOrdersDraftBadge();
   } catch(e){}
 }
 
-// Чи є зараз чернетка (для бейджу)
+// Аліаси для зворотньої сумісності
+function clearFormDraft(){
+  if (_applicationFormState?.draftId) {
+    deleteFormDraft(_applicationFormState.draftId);
+  }
+}
+
+function loadFormDraft(){
+  // Старий API — для випадків коли логіка спирається на одну чернетку
+  const arr = listFormDrafts();
+  return arr[0] || null;
+}
+
 function hasFormDraft(){
-  return !!loadFormDraft();
+  return listFormDrafts().length > 0;
 }
 
 // Оновлення індикатора чернетки у меню "Замовлення"
 function updateOrdersDraftBadge(){
   const el = document.getElementById('draft-indicator-orders');
   if (!el) return;
-  el.style.display = hasFormDraft() ? '' : 'none';
-}
-
-// Банер незбереженої чернетки на сторінці "Замовлення"
-function renderDraftBanner(){
-  const draft = loadFormDraft();
-  if (!draft) return '';
-  // Описуємо коротко що у чернетці
-  const d = draft.data || {};
-  const parts = [];
-  if (d.client_id) {
-    const c = (S.allClients || []).find(x => x.id === d.client_id);
-    if (c) parts.push(escapeHtml(c.company || c.from_name || ''));
-  }
-  if (d.carrier_id) {
-    const cr = (S.allCarriers || []).find(x => x.id === d.carrier_id) ||
-               (S.carriers || []).find(x => x.id === d.carrier_id);
-    if (cr) parts.push('→ ' + escapeHtml(cr.name || ''));
-  }
-  if (d.cargo_description) parts.push(escapeHtml(String(d.cargo_description).slice(0, 40)));
-  const summary = parts.join(' · ') || 'Заявка без даних';
-  const ts = draft.ts ? new Date(draft.ts).toLocaleString('uk-UA', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
-  return `
-    <div style="
-      background: rgba(255,190,99,.08);
-      border: 1px solid rgba(255,190,99,.25);
-      border-radius: 10px;
-      padding: 12px 16px;
-      margin-bottom: 18px;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    ">
-      <div style="font-size:20px;line-height:1">📝</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;color:var(--t1);font-weight:600;margin-bottom:2px">
-          Є незбережена чернетка заявки
-        </div>
-        <div style="font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-          ${summary}${ts ? ' · оновлено ' + ts : ''}
-        </div>
-      </div>
-      <button onclick="openApplicationForm(${draft.isEdit && draft.id ? `'${draft.id}'` : ''})" style="
-        background: var(--acc);
-        border: none;
-        border-radius: 8px;
-        padding: 8px 14px;
-        cursor: pointer;
-        color: #000;
-        font-family: inherit;
-        font-size: 12px;
-        font-weight: 600;
-        white-space: nowrap;
-      ">Продовжити</button>
-      <button onclick="discardApplicationForm()" title="Видалити чернетку" style="
-        background: transparent;
-        border: 1px solid var(--b2);
-        border-radius: 8px;
-        padding: 8px 10px;
-        cursor: pointer;
-        color: var(--t2);
-        font-family: inherit;
-        font-size: 13px;
-        line-height: 1;
-      ">🗑</button>
-    </div>
-  `;
+  el.style.display = (typeof listFormDrafts === 'function' && listFormDrafts().length > 0) ? '' : 'none';
 }
 
 let _formAutosaveTimer = null;
@@ -4428,7 +4464,7 @@ function stopFormAutosave(){
 
 // ─── Згортання форми ───
 // Коли студент хоче переключитись на чат — згортає форму у міні-кнопку.
-// Дані залишаються в _applicationFormState і в localStorage.
+// Дані залишаються в localStorage. Чернеток може бути до 8 — для кожної своя картка.
 let _formCollapsed = false;
 
 function collapseApplicationForm(){
@@ -4436,34 +4472,103 @@ function collapseApplicationForm(){
   _formCollapsed = true;
   // Прибираю модалку (overlay і panel)
   document.getElementById('zf-overlay')?.remove();
-  // Показую міні-кнопку
-  showMinibar();
-}
-
-function showMinibar(){
-  if (document.getElementById('zf-minibar')) return;
-  const st = _applicationFormState;
-  const title = st?.isEdit ? `Редагування #${st.id?.slice(0,8)}` : 'Нова заявка';
-  const mb = document.createElement('div');
-  mb.id = 'zf-minibar';
-  mb.className = 'zf-minibar';
-  mb.innerHTML = `
-    <span class="zf-minibar-icon">📋</span>
-    <span class="zf-minibar-text">${title}</span>
-    <button class="zf-minibar-btn" onclick="expandApplicationForm()" title="Розгорнути">↗</button>
-    <button class="zf-minibar-btn" onclick="discardApplicationForm()" title="Видалити чернетку">✕</button>
-  `;
-  document.body.appendChild(mb);
-}
-
-function expandApplicationForm(){
-  document.getElementById('zf-minibar')?.remove();
+  // Очищаємо стан поточної форми (бо чернетка вже в localStorage)
+  stopFormAutosave();
+  _applicationFormState = null;
   _formCollapsed = false;
-  showApplicationForm();
+  // Перемальовуємо мінібари
+  refreshDraftBars();
 }
 
-function discardApplicationForm(){
+// Перемалювати ВСІ міні-картки (для усіх чернеток у localStorage)
+function refreshDraftBars(){
+  // Видаляємо старий контейнер
+  document.getElementById('zf-minibar-container')?.remove();
+
+  const drafts = listFormDrafts();
+  if (drafts.length === 0) return;
+
+  // Сортуємо за датою (нові зверху)
+  drafts.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  const container = document.createElement('div');
+  container.id = 'zf-minibar-container';
+  container.className = 'zf-minibar-container';
+
+  drafts.forEach(draft => {
+    const title = _draftTitle(draft);
+    const mb = document.createElement('div');
+    mb.className = 'zf-minibar';
+    mb.dataset.draftId = draft.draftId;
+    mb.innerHTML = `
+      <span class="zf-minibar-icon">📋</span>
+      <span class="zf-minibar-text">${escapeHtml(title)}</span>
+      <button class="zf-minibar-btn" onclick="expandDraftById('${draft.draftId}')" title="Розгорнути">↗</button>
+      <button class="zf-minibar-btn" onclick="askDeleteDraft('${draft.draftId}')" title="Видалити чернетку">✕</button>
+    `;
+    container.appendChild(mb);
+  });
+
+  // Якщо досягнуто ліміт — показуємо підказку
+  if (drafts.length >= MAX_DRAFTS) {
+    const limit = document.createElement('div');
+    limit.className = 'zf-minibar-limit';
+    limit.textContent = `Досягнуто ліміт: ${MAX_DRAFTS} чернеток. Закрийте одну щоб створити нову.`;
+    container.appendChild(limit);
+  }
+
+  document.body.appendChild(container);
+}
+
+// Сформувати читабельну назву чернетки
+function _draftTitle(draft){
+  const d = draft.data || {};
+  // Якщо це редагування — показуємо номер
+  if (draft.isEdit) {
+    return `Редагування #${(draft.id || '').slice(0, 8)}`;
+  }
+  // Якщо є замовник — кажемо його
+  const parts = [];
+  if (d.client_id) {
+    const c = (S.allClients || []).find(x => x.id === d.client_id);
+    if (c) parts.push(c.company || c.from_name || '');
+  }
+  if (d.carrier_id) {
+    const cr = (S.allCarriers || []).find(x => x.id === d.carrier_id) ||
+               (S.carriers || []).find(x => x.id === d.carrier_id);
+    if (cr) parts.push(cr.name || '');
+  }
+  if (parts.length === 0 && d.cargo_description) {
+    parts.push(String(d.cargo_description).slice(0, 30));
+  }
+  return parts.length ? parts.join(' → ') : 'Нова заявка';
+}
+
+// Розгорнути чернетку (з міні-картки)
+async function expandDraftById(draftId){
+  const draft = loadFormDraftById(draftId);
+  if (!draft) {
+    refreshDraftBars();
+    return;
+  }
+  // Якщо вже відкрита якась форма — спершу зберігаємо її
+  if (_applicationFormState) {
+    saveFormDraft();
+    document.getElementById('zf-overlay')?.remove();
+    stopFormAutosave();
+    _applicationFormState = null;
+  }
+  // Видаляємо контейнер міні-карток (бо відкриваємо форму)
+  document.getElementById('zf-minibar-container')?.remove();
+  // Відкриваємо форму
+  await openApplicationForm(draft.isEdit ? draft.id : null, draft.draftId);
+}
+
+// Запит на видалення чернетки (зі скріна)
+function askDeleteDraft(draftId){
   document.getElementById('discard-confirm-dialog')?.remove();
+  const draft = loadFormDraftById(draftId);
+  const title = draft ? _draftTitle(draft) : 'Чернетку';
   const ov = document.createElement('div');
   ov.id = 'discard-confirm-dialog';
   ov.style.cssText = `
@@ -4479,14 +4584,15 @@ function discardApplicationForm(){
       </div>
       <div style="padding:18px 20px">
         <div style="font-size:13px;color:var(--t2);line-height:1.5;margin-bottom:18px">
-          Усі введені дані буде втрачено. Цю дію не можна скасувати.
+          <strong>${escapeHtml(title)}</strong><br>
+          Усі введені дані буде втрачено.
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button onclick="document.getElementById('discard-confirm-dialog')?.remove()" style="
             background:var(--bg3);border:1px solid var(--b2);border-radius:8px;
             padding:9px 16px;cursor:pointer;color:var(--t1);font-family:inherit;font-size:13px;
           ">Скасувати</button>
-          <button onclick="confirmDiscardDraft()" style="
+          <button onclick="confirmDeleteDraft('${draftId}')" style="
             background:#d44;border:1px solid #d44;border-radius:8px;
             padding:9px 16px;cursor:pointer;color:#fff;font-family:inherit;font-size:13px;font-weight:600;
           ">🗑 Видалити</button>
@@ -4497,16 +4603,33 @@ function discardApplicationForm(){
   document.body.appendChild(ov);
 }
 
-function confirmDiscardDraft(){
+function confirmDeleteDraft(draftId){
   document.getElementById('discard-confirm-dialog')?.remove();
-  clearFormDraft();
-  stopFormAutosave();
-  document.getElementById('zf-minibar')?.remove();
-  document.getElementById('zf-overlay')?.remove();
-  _applicationFormState = null;
-  _formCollapsed = false;
-  updateOrdersDraftBadge();
+  // Якщо це поточно відкрита форма — закриваємо її теж
+  if (_applicationFormState?.draftId === draftId) {
+    stopFormAutosave();
+    document.getElementById('zf-overlay')?.remove();
+    _applicationFormState = null;
+    _formCollapsed = false;
+  }
+  deleteFormDraft(draftId);
   notify('Чернетку видалено', 'ok');
+}
+
+// LEGACY — викликається з кнопок старого UI міні-бара
+function expandApplicationForm(){
+  // Поточна логіка: якщо є відкрита форма — просто повертаємось до неї
+  // Якщо ні — нічого не робимо (треба клікнути на конкретну картку)
+  if (_applicationFormState) {
+    showApplicationForm();
+  }
+}
+
+function discardApplicationForm(){
+  // LEGACY — якщо викликано з відкритої форми — видаляємо її чернетку
+  if (_applicationFormState?.draftId) {
+    askDeleteDraft(_applicationFormState.draftId);
+  }
 }
 
 function closeApplicationForm(){
@@ -4528,13 +4651,15 @@ function closeApplicationForm(){
     showCloseFormDialog();
     return;
   }
-  // Якщо нічого немає — закриваємо без питань і прибираємо чернетку
-  clearFormDraft();
+  // Якщо нічого немає — просто закриваємо без чернетки
+  if (_applicationFormState?.draftId) {
+    deleteFormDraft(_applicationFormState.draftId);
+  }
   stopFormAutosave();
   document.getElementById('zf-overlay')?.remove();
-  document.getElementById('zf-minibar')?.remove();
   _applicationFormState = null;
   _formCollapsed = false;
+  refreshDraftBars();
 }
 
 // Модалка вибору: згорнути чи видалити
@@ -4600,18 +4725,18 @@ function doCollapseForm(){
 
 function doDiscardForm(){
   document.getElementById('close-form-dialog')?.remove();
-  // Повністю очищаємо чернетку зі сховища
-  clearFormDraft();
-  // Зупиняємо автозбереження ПЕРШИМ — щоб воно не записало ще раз
+  const draftId = _applicationFormState?.draftId;
+  // Зупиняємо автозбереження ПЕРШИМ
   stopFormAutosave();
-  // Видаляємо UI
+  // Видаляємо UI форми
   document.getElementById('zf-overlay')?.remove();
-  document.getElementById('zf-minibar')?.remove();
   // Скидаємо стан
   _applicationFormState = null;
   _formCollapsed = false;
-  // Оновлюємо бейдж
-  updateOrdersDraftBadge();
+  // Видаляємо саму чернетку з масиву
+  if (draftId) {
+    deleteFormDraft(draftId);
+  }
   notify('Чернетку видалено', 'ok');
 }
 
@@ -7699,8 +7824,11 @@ async function loadSessionFromServer(token){
   S.sessionVersion=data.session.version||'';
   S.startDate=new Date();
 
-  // Очищення СТАРИХ чернеток (з попередніх сесій/студентів)
-  try { cleanupOldDrafts(); } catch(e){}
+  // Очищення СТАРИХ чернеток (з попередніх сесій/студентів) і показ актуальних
+  try {
+    cleanupOldDrafts();
+    refreshDraftBars();
+  } catch(e){}
 
   // Parse start_date string DD.MM.YYYY
   const parts=data.session.start_date.split('.');
