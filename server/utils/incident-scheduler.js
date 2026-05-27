@@ -143,8 +143,8 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
 
   // R4: М'якша реакція після затримки розвантаження
   if (scenario === 4) {
-    // Замовник погрожує штрафом — за день до розвантаження
-    add('client_threat_fine', atTerminal.scheduledAt, 1, {});
+    // Замовник погрожує штрафом — за день до прибуття на термінал
+    add('client_threat_fine', atTerminal.scheduledAt, -2, {});
     // Після розвантаження — м'яко
     add('client_no_fine_actually', unloadingDone.scheduledAt, inc.delivery_to_no_fine, {});
   }
@@ -162,19 +162,51 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
       'client_cancel_order', cancelScheduled, JSON.stringify({ is_breaking: true }));
   }
 
-  // R6: Розмитнення без простоїв — замінюємо клієнтський запит на повідомлення про затримку
+  // R6: Розмитнення без простоїв
+  // Перевізник пише що термінал затримує + замовник підтверджує
+  // ВАЖЛИВО: зсуваємо наступні події (unloading тощо) на +24год сим бо розмитнення затягнулось
   if (scenario === 6) {
     add('carrier_customs_delay', atTerminal.scheduledAt, 1, { carrier_chat_id: carrierChatId });
-    add('client_customs_delay', atTerminal.scheduledAt, 1.5, {});
+    add('client_customs_will_delay', atTerminal.scheduledAt, 1.5, {});
+    // Зсуваємо at_unloading, unloading_done, client_delivery_confirmed +24год
+    const shiftSeconds = Math.round(simHoursToMs(24) / 1000);
+    db.prepare(`
+      UPDATE incidents SET scheduled_at = datetime(scheduled_at, '+' || ? || ' seconds')
+      WHERE letter_id=? AND state='pending'
+      AND type IN ('at_unloading_arrived','at_unloading_wait','unloading_done','client_delivery_confirmed')
+    `).run(shiftSeconds, letterId);
   }
 
   // R7: Розмитнення + простої
+  // Як R6 + перевізник вимагає €50/добу простою
   if (scenario === 7) {
     add('carrier_customs_delay', atTerminal.scheduledAt, 1, { carrier_chat_id: carrierChatId });
-    add('carrier_customs_simple_demand', atTerminal.scheduledAt, inc.arrived_terminal_to_customs_simple, {
-      carrier_chat_id: carrierChatId,
-      amount: 50,
-    });
+    // Простій-вимога — створюється з demand_amount щоб торг знав суму
+    const simpleId = uuidv4();
+    const simpleScheduled = new Date(new Date(atTerminal.scheduledAt).getTime()
+      + simHoursToMs(inc.arrived_terminal_to_customs_simple)).toISOString();
+    db.prepare(`
+      INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id,
+                              type, state, scheduled_at, payload_json, demand_amount)
+      VALUES (?,?,?,?,?,?,?,'pending',?,?,?)
+    `).run(simpleId, sessionId, studentId, letterId, applicationId || null, scenario,
+      'carrier_customs_simple_demand', simpleScheduled,
+      JSON.stringify({ carrier_chat_id: carrierChatId, amount: 50 }), 50);
+    // Зсуваємо наступні події +48год сим (2 доби простою)
+    const shiftSeconds = Math.round(simHoursToMs(48) / 1000);
+    db.prepare(`
+      UPDATE incidents SET scheduled_at = datetime(scheduled_at, '+' || ? || ' seconds')
+      WHERE letter_id=? AND state='pending'
+      AND type IN ('at_unloading_arrived','at_unloading_wait','unloading_done','client_delivery_confirmed')
+    `).run(shiftSeconds, letterId);
+  }
+
+  // R3: Затримка ПД + простій — додаємо demand_amount до раніше створеного інциденту
+  if (scenario === 3) {
+    db.prepare(`
+      UPDATE incidents SET demand_amount=50
+      WHERE session_id=? AND letter_id=? AND type='carrier_simple_demand' AND state='pending'
+    `).run(sessionId, letterId);
   }
 
   // R8: помилка в документах (EXW)
