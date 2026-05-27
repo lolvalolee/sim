@@ -627,6 +627,110 @@ function shouldAutoOpenSimpleModal({ sessionId, letterId }) {
   return (incident.negotiation_round || 0) >= 2;
 }
 
+// ────────────────────────────────────────────────────────────
+// ДОВІДКА ПРО ТРАНСПОРТНІ ВИТРАТИ (R8 — EXW перевірка)
+// ────────────────────────────────────────────────────────────
+function handleCertificateSubmission({ sessionId, studentId, letterId, notes, isEXW, hasLoadingNote }) {
+  // Знаходимо активний інцидент client_docs_error_exw (запланований для R8)
+  const pendingError = db.prepare(`
+    SELECT * FROM incidents
+    WHERE session_id=? AND letter_id=? AND type='client_docs_error_exw'
+    AND state='pending' LIMIT 1
+  `).get(sessionId, letterId);
+
+  // Чи студент уже подавав довідку раніше (повторна подача = виправлення)
+  const previousAttempt = db.prepare(`
+    SELECT * FROM resume_points
+    WHERE session_id=? AND letter_id=? AND type IN ('cert_submitted_exw_ok','cert_submitted_exw_missing','cert_resubmitted_exw_ok')
+    ORDER BY created_at DESC LIMIT 1
+  `).get(sessionId, letterId);
+
+  const now = new Date().toISOString();
+
+  if (isEXW) {
+    if (hasLoadingNote) {
+      // Все правильно
+      if (previousAttempt && previousAttempt.type === 'cert_submitted_exw_missing') {
+        // Виправлення після помилки
+        addResumePoint({
+          sessionId, studentId, letterId,
+          type: 'cert_resubmitted_exw_ok',
+          impact: 1,
+          context: { notes_excerpt: (notes || '').slice(0, 100) },
+        });
+        // Скасовуємо інцидент-помилку якщо ще не спрацював
+        if (pendingError) {
+          db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`)
+            .run(now, pendingError.id);
+        }
+        // Створюємо інцидент "ок"
+        scheduleClientDocsOkAfterFix({ sessionId, studentId, letterId });
+        return { ok: true, status: 'fixed', message: 'Довідка прийнята' };
+      } else {
+        // Студент сам врахував EXW з першої подачі
+        addResumePoint({
+          sessionId, studentId, letterId,
+          type: 'cert_submitted_exw_ok',
+          impact: 2,
+          context: { notes_excerpt: (notes || '').slice(0, 100) },
+        });
+        // Скасовуємо інцидент-помилку (зайвий бо студент усе зробив правильно)
+        if (pendingError) {
+          db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`)
+            .run(now, pendingError.id);
+        }
+        return { ok: true, status: 'ok', message: 'Довідка ок' };
+      }
+    } else {
+      // EXW але без згадки про навантажувальні
+      if (!previousAttempt || previousAttempt.type !== 'cert_submitted_exw_missing') {
+        // Перша спроба з помилкою
+        addResumePoint({
+          sessionId, studentId, letterId,
+          type: 'cert_submitted_exw_missing',
+          impact: -1,
+          context: { notes_excerpt: (notes || '').slice(0, 100) },
+        });
+      } else {
+        // Повторна помилка
+        addResumePoint({
+          sessionId, studentId, letterId,
+          type: 'cert_repeated_error_exw',
+          impact: -2,
+          context: { notes_excerpt: (notes || '').slice(0, 100) },
+        });
+      }
+      // Тригеримо інцидент відразу (замовник пише про помилку)
+      if (pendingError) {
+        fireIncident(pendingError);
+      }
+      return { ok: true, status: 'has_error', message: 'Довідка надіслана. Замовник перевіряє...' };
+    }
+  } else {
+    // Не EXW — просто фіксуємо що довідка надіслана
+    addResumePoint({
+      sessionId, studentId, letterId,
+      type: 'cert_submitted_ok',
+      impact: 0,
+      context: {},
+    });
+    return { ok: true, status: 'ok', message: 'Довідка ок' };
+  }
+}
+
+// Запланувати інцидент "замовник підтверджує що довідка ок" після виправлення EXW
+function scheduleClientDocsOkAfterFix({ sessionId, studentId, letterId }) {
+  const id = uuidv4();
+  // Через ~30 хв сим
+  const scheduledAt = nowPlus(simHoursToMs(0.5));
+  const letter = db.prepare('SELECT scenario_id FROM letters WHERE id=?').get(letterId);
+  db.prepare(`
+    INSERT INTO incidents (id, session_id, student_id, letter_id, scenario_id, type, state, scheduled_at, payload_json)
+    VALUES (?,?,?,?,?,?,'pending',?,?)
+  `).run(id, sessionId, studentId, letterId, letter?.scenario_id || null,
+    'client_docs_ok_after_fix', scheduledAt, JSON.stringify({}));
+}
+
 module.exports = {
   scheduleInitialIncidents,
   scheduleReactiveIncidentsCarrierRefused,
@@ -640,5 +744,6 @@ module.exports = {
   studentNegotiateClient,
   studentResolveSimple,
   shouldAutoOpenSimpleModal,
+  handleCertificateSubmission,
   SIM_HOUR_MS_REAL,
 };

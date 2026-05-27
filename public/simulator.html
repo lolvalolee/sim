@@ -7395,7 +7395,7 @@ function generateSpravka(idx){
     </div>
     <div class="form-group">
       <label class="form-label">Додаткова інформація</label>
-      <textarea id="sp-notes" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:50px"></textarea>
+      <textarea id="sp-notes" placeholder="напр. для EXW обов'язково додайте текст про навантажувальні роботи" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:50px"></textarea>
     </div>
     <div style="display:flex;gap:8px">
       <button class="btn primary" style="flex:1" onclick="doGenerateSpravka(${idx},'${contract}',${rate})">Згенерувати</button>
@@ -7445,7 +7445,7 @@ function doGenerateSpravka(idx, contract, rate){
 </body></html>`;
 
   // Save spravka data to order
-  (S.savedOrders||[])[idx].spravka={before,after,fee,totalUAH,rate};
+  (S.savedOrders||[])[idx].spravka={before,after,fee,totalUAH,rate,notes};
   document.querySelector('.modal-ov')?.remove();
   previewAndSend(html_doc,`Довідка про транспортні витрати — ${o.client_name}`,idx,'spravka');
 }
@@ -7641,8 +7641,33 @@ async function doSendDoc(emailOrderId, orderIdx, docType, btn){
     renderOrders2List();
   }
 
-  // Now AI client checks the document
-  checkDocWithAI(emailOrderId, docType, subject);
+  // Для ДОВІДКИ — серверна перевірка EXW (інакше AI-перевірка як було)
+  if (docType === 'spravka' && o?.spravka) {
+    try {
+      const token = localStorage.getItem('docaa_token');
+      const r = await fetch(`/api/student/orders/${emailOrderId}/submit-certificate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({
+          notes: o.spravka.notes || body || '',
+          before: o.spravka.before,
+          after: o.spravka.after,
+          fee: o.spravka.fee,
+        }),
+      });
+      const data = await r.json();
+      if (data.ok && data.status === 'has_error') {
+        // Замовник напише про помилку через тригер інциденту
+        // (інцидент уже спрацював в БД, polling підтягне у пошту)
+        setTimeout(() => {
+          if (typeof reloadEmailThreads === 'function') reloadEmailThreads();
+        }, 1000);
+      }
+    } catch(e) {}
+  } else {
+    // Для інших документів — AI-перевірка як було
+    checkDocWithAI(emailOrderId, docType, subject);
+  }
   mo?.remove();
 }
 

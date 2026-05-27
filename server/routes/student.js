@@ -1688,4 +1688,33 @@ router.post('/orders/:letterId/simple-resolve', STU, (req, res) => {
   res.json(result);
 });
 
+// POST /api/student/orders/:letterId/submit-certificate
+// Студент згенерував і "надсилає" довідку про транспортні витрати замовнику.
+// Перевіряємо чи рейс EXW і чи у тексті є згадка про навантажувальні роботи.
+router.post('/orders/:letterId/submit-certificate', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { notes, before, after, fee } = req.body;
+
+  const letter = db.prepare('SELECT scenario_id, body FROM letters WHERE id=?').get(req.params.letterId);
+  if (!letter) return res.status(404).json({ error: 'Letter not found' });
+
+  // Чи це EXW сценарій?
+  const isEXW = letter.scenario_id === 8 || (letter.body || '').toLowerCase().includes('exw');
+  // Чи у нотатках є згадка про навантажувальні роботи?
+  const notesText = (notes || '').toLowerCase();
+  const hasLoadingNote = notesText.includes('навантаж') || notesText.includes('завантаж') || notesText.includes('exw');
+
+  const result = incidentScheduler.handleCertificateSubmission({
+    sessionId: session.id,
+    studentId: req.user.id,
+    letterId: req.params.letterId,
+    notes: notes || '',
+    isEXW,
+    hasLoadingNote,
+  });
+
+  res.json(result);
+});
+
 module.exports = router;
