@@ -4171,6 +4171,12 @@ async function submitSendApplication(){
     }
     notify(`Заявку надіслано ${st.selectedCarrierName} ✓`, 'ok');
     closeSendPreview();
+    // Миттєво підтягнути нові повідомлення (заявка + відповідь перевізника)
+    // щоб коли студент відкриє чат — вони вже були видимі
+    try {
+      if (typeof reloadCarrierChats === 'function') await reloadCarrierChats();
+      if (S.tab === 'chats' && typeof renderChats === 'function') renderChats();
+    } catch(e) {}
     // Оновити таблицю заявок
     if (typeof renderOrders === 'function') renderOrders();
   } catch(e) {
