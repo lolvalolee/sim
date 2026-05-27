@@ -1769,4 +1769,152 @@ router.post('/orders/:letterId/cancel-trip', STU, (req, res) => {
   res.json(result);
 });
 
+// GET /api/student/resume — резюме студента (для UI у симуляторі)
+router.get('/resume', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const points = db.prepare(`
+    SELECT rp.id, rp.type, rp.impact, rp.context_json, rp.letter_id, rp.created_at,
+           l.subject, l.scenario_id
+    FROM resume_points rp
+    LEFT JOIN letters l ON l.id = rp.letter_id
+    WHERE rp.session_id=?
+    ORDER BY rp.created_at DESC
+  `).all(session.id);
+
+  // Розбираємо JSON
+  const enriched = points.map(p => ({
+    id: p.id,
+    type: p.type,
+    impact: p.impact,
+    context: (() => { try { return JSON.parse(p.context_json || '{}'); } catch (e) { return {}; } })(),
+    letter_id: p.letter_id,
+    letter_subject: p.subject,
+    scenario_id: p.scenario_id,
+    created_at: p.created_at,
+  }));
+
+  // Агрегати
+  const totalScore = enriched.reduce((s, p) => s + p.impact, 0);
+
+  // По рейсах
+  const byLetter = {};
+  for (const p of enriched) {
+    if (!p.letter_id) continue;
+    if (!byLetter[p.letter_id]) {
+      byLetter[p.letter_id] = {
+        letter_id: p.letter_id,
+        letter_subject: p.letter_subject,
+        scenario_id: p.scenario_id,
+        score: 0,
+        points: [],
+      };
+    }
+    byLetter[p.letter_id].score += p.impact;
+    byLetter[p.letter_id].points.push(p);
+  }
+
+  // Прибуток + простої з order_progress
+  const profitData = db.prepare(`
+    SELECT
+      SUM(COALESCE(client_freight,0)) AS revenue,
+      SUM(COALESCE(carrier_freight,0)) AS carrier_paid,
+      SUM(COALESCE(simple_paid_by_student,0)) AS simples_self,
+      SUM(COALESCE(simple_paid_by_client,0)) AS simples_client
+    FROM order_progress WHERE session_id=?
+  `).get(session.id);
+
+  res.json({
+    total_score: totalScore,
+    total_points: enriched.length,
+    profit: {
+      revenue: profitData?.revenue || 0,
+      carrier_paid: profitData?.carrier_paid || 0,
+      simples_paid_self: profitData?.simples_self || 0,
+      simples_paid_by_client: profitData?.simples_client || 0,
+      net: (profitData?.revenue || 0) - (profitData?.carrier_paid || 0) - (profitData?.simples_self || 0),
+    },
+    by_letter: Object.values(byLetter),
+    points: enriched,
+  });
+});
+
+// GET /api/student/resume/analysis — AI-аналіз 6 параметрів (важкий запит до Claude)
+router.get('/resume/analysis', STU, async (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const points = db.prepare(`
+    SELECT type, impact, context_json FROM resume_points WHERE session_id=?
+  `).all(session.id);
+
+  // Підрахунок по типах
+  const typeCounts = {};
+  for (const p of points) {
+    typeCounts[p.type] = (typeCounts[p.type] || 0) + 1;
+  }
+
+  // 6 параметрів рахуємо локально (без AI) — швидко і дешево
+  // Кожен у діапазоні 0-100
+  const tactfulness = Math.max(0, Math.min(100,
+    50 +
+    (typeCounts['informed_client_about_simple'] || 0) * 10 +
+    (typeCounts['informed_carrier_about_cancel'] || 0) * 10 -
+    (typeCounts['cert_repeated_error_exw'] || 0) * 15
+  ));
+
+  const confidence = Math.max(0, Math.min(100,
+    50 +
+    (typeCounts['simple_avoided'] || 0) * 20 +
+    (typeCounts['simple_compromise'] || 0) * 10 -
+    (typeCounts['simple_paid_self'] || 0) * 10
+  ));
+
+  const initiative = Math.max(0, Math.min(100,
+    40 +
+    (typeCounts['pd_proactive'] || 0) * 20 +
+    (typeCounts['pd_forwarded'] || 0) * 10 -
+    (typeCounts['pd_not_forwarded'] || 0) * 15
+  ));
+
+  const creativity = Math.max(0, Math.min(100,
+    50 +
+    (typeCounts['simple_compromise'] || 0) * 15 +
+    (typeCounts['simple_paid_by_client'] || 0) * 15
+  ));
+
+  const discipline = Math.max(0, Math.min(100,
+    50 +
+    (typeCounts['cert_submitted_exw_ok'] || 0) * 20 +
+    (typeCounts['cert_resubmitted_exw_ok'] || 0) * 10 -
+    (typeCounts['cert_submitted_exw_missing'] || 0) * 10 -
+    (typeCounts['cert_repeated_error_exw'] || 0) * 25
+  ));
+
+  const profitData = db.prepare(`
+    SELECT
+      SUM(COALESCE(client_freight,0)) AS revenue,
+      SUM(COALESCE(carrier_freight,0)) AS carrier_paid,
+      SUM(COALESCE(simple_paid_by_student,0)) AS simples_self
+    FROM order_progress WHERE session_id=?
+  `).get(session.id);
+  const margin = (profitData?.revenue || 0) - (profitData?.carrier_paid || 0) - (profitData?.simples_self || 0);
+  // Мета — €1000 маржі
+  const result = Math.max(0, Math.min(100, Math.round((margin / 1000) * 100)));
+
+  res.json({
+    metrics: {
+      tactfulness: Math.round(tactfulness),
+      confidence: Math.round(confidence),
+      initiative: Math.round(initiative),
+      creativity: Math.round(creativity),
+      discipline: Math.round(discipline),
+      result: Math.round(result),
+    },
+    margin,
+    type_counts: typeCounts,
+  });
+});
+
 module.exports = router;

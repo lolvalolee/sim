@@ -1549,6 +1549,9 @@ body {
         <span class="nav-icon">📦</span><span class="nav-label">Біржа вантажів</span>
         <span class="nav-badge nb-g" id="badge-exchange" style="display:none">0</span>
       </div>
+      <div class="nav-item locked" onclick="go('resume')" id="n-resume">
+        <span class="nav-icon">📊</span><span class="nav-label">Резюме</span>
+      </div>
       <!-- admin nav hidden for students -->
     </nav>
 
@@ -2172,9 +2175,10 @@ const TB={
   orders:['Замовлення','Стан перевезень'],
   docs:['Документи','Підготовка документів'],
   exchange:['Біржа вантажів','Розміщення вантажів'],
+  resume:['Резюме','Оцінка вашої роботи'],
   admin:['Кабінет лектора','Налаштування курсу'],
 };
-const RENDERERS={welcome:renderWelcome,email:renderEmail,carriers:renderCarriers,chats:renderChats,orders:renderOrders,orders2:renderOrders2,docs:renderDocs,exchange:renderExchange,admin:renderAdmin};
+const RENDERERS={welcome:renderWelcome,email:renderEmail,carriers:renderCarriers,chats:renderChats,orders:renderOrders,orders2:renderOrders2,docs:renderDocs,exchange:renderExchange,resume:renderResume,admin:renderAdmin};
 
 function go(mod){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -2380,7 +2384,7 @@ function renderWelcome(){
         <div class="wc-chip">📄 Заявки та документи</div>
       </div>
       <button class="btn primary" style="font-size:14px;padding:10px 32px;border-radius:10px"
-        onclick="go('email');['carriers','chats','orders','docs','exchange'].forEach(unlock)">
+        onclick="go('email');['carriers','chats','orders','docs','exchange','resume'].forEach(unlock)">
         Почати роботу →
       </button>
     </div>
@@ -6777,6 +6781,167 @@ async function doConfirmCarrier(cid, btn){
 }
 
 
+// ─── РЕЗЮМЕ (Деплой 18) ─────────────────────────────────────
+async function renderResume(){
+  document.getElementById('tb-right').innerHTML='<button class="btn sm" onclick="logout()" style="color:var(--t3)">Вийти</button>';
+  document.getElementById('content').innerHTML=`
+    <div style="flex:1;overflow-y:auto;padding:24px;min-height:0">
+      <div id="resume-content" style="max-width:900px;margin:0 auto">
+        <div style="text-align:center;padding:40px;color:var(--t3)">Завантаження...</div>
+      </div>
+    </div>
+  `;
+
+  const token = localStorage.getItem('docaa_token');
+  let data, analysis;
+  try {
+    const [r1, r2] = await Promise.all([
+      fetch('/api/student/resume', { headers: { 'Authorization': 'Bearer ' + token }}),
+      fetch('/api/student/resume/analysis', { headers: { 'Authorization': 'Bearer ' + token }}),
+    ]);
+    data = r1.ok ? await r1.json() : null;
+    analysis = r2.ok ? await r2.json() : null;
+  } catch(e) {
+    document.getElementById('resume-content').innerHTML = `<div style="color:var(--t3);text-align:center;padding:40px">Помилка завантаження</div>`;
+    return;
+  }
+  if (!data) return;
+
+  const scenarioLabels = {
+    1: 'Все гладко',
+    2: 'Затримка ПД',
+    3: 'Затримка ПД + простій',
+    4: 'Затримка розвантаження',
+    5: 'Зрив рейсу',
+    6: 'Затримка розмитнення',
+    7: 'Розмитнення + простої',
+    8: 'Помилка в документах EXW',
+  };
+
+  const typeLabels = {
+    pd_proactive: 'Запитав про ПД проактивно',
+    pd_forwarded: 'Переслав ПД перевізнику',
+    pd_not_forwarded: 'Не переслав ПД',
+    informed_carrier_about_cancel: 'Повідомив перевізника про скасування',
+    informed_client_about_simple: 'Повідомив замовника про простій',
+    simple_avoided: 'Відмовив у простоях',
+    simple_compromise: 'Знизив суму простоїв',
+    simple_paid_self: 'Взяв простій на себе',
+    simple_paid_by_client: 'Замовник покрив простій',
+    cert_submitted_exw_ok: 'Правильна довідка EXW',
+    cert_submitted_exw_missing: 'Пропустив EXW у довідці',
+    cert_resubmitted_exw_ok: 'Виправив EXW у довідці',
+    cert_repeated_error_exw: 'Повторна помилка EXW',
+    cert_submitted_ok: 'Довідка надіслана',
+  };
+
+  const metrics = analysis?.metrics || {};
+  const metricLabels = {
+    tactfulness: '🤝 Тактовність',
+    confidence: '💪 Впевненість',
+    initiative: '⚡ Ініціатива',
+    creativity: '💡 Креатив',
+    discipline: '📐 Дисципліна',
+    result: '🎯 Результат',
+  };
+
+  // Шкала балу
+  const scoreColor = data.total_score >= 10 ? '#5d8' : data.total_score >= 0 ? 'var(--acc)' : '#e66';
+  const profitColor = data.profit.net >= 1000 ? '#5d8' : data.profit.net >= 0 ? 'var(--acc)' : '#e66';
+
+  const html = `
+    <div style="margin-bottom:24px">
+      <h2 style="font-size:22px;margin-bottom:6px;color:var(--t1)">Резюме вашої роботи</h2>
+      <div style="font-size:13px;color:var(--t3)">Оцінка ваших дій по всіх рейсах сесії</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px">
+      <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;padding:18px">
+        <div style="font-size:12px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Загальний бал</div>
+        <div style="font-size:32px;font-weight:700;font-family:var(--mono);color:${scoreColor}">${data.total_score >= 0 ? '+' : ''}${data.total_score}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:4px">${data.total_points} дій оцінено</div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;padding:18px">
+        <div style="font-size:12px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Маржа</div>
+        <div style="font-size:32px;font-weight:700;font-family:var(--mono);color:${profitColor}">€${Math.round(data.profit.net).toLocaleString('uk-UA').replace(/,/g,' ')}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:4px">
+          Дохід €${Math.round(data.profit.revenue)} − перевізник €${Math.round(data.profit.carrier_paid)} − простої €${Math.round(data.profit.simples_paid_self)}
+        </div>
+      </div>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;padding:20px;margin-bottom:24px">
+      <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--t1);text-transform:uppercase;letter-spacing:.5px">📊 Оцінка 6 параметрів</h3>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${Object.keys(metricLabels).map(k => {
+          const v = metrics[k] || 0;
+          const color = v >= 70 ? '#5d8' : v >= 40 ? 'var(--acc)' : '#e66';
+          return `
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+                <span style="font-size:12px;color:var(--t1)">${metricLabels[k]}</span>
+                <span style="font-size:12px;font-weight:600;font-family:var(--mono);color:${color}">${v}/100</span>
+              </div>
+              <div style="background:var(--bg3);border-radius:6px;height:7px;overflow:hidden">
+                <div style="background:${color};height:100%;width:${v}%;transition:width .3s"></div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    ${data.by_letter.length > 0 ? `
+      <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;padding:20px;margin-bottom:24px">
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--t1);text-transform:uppercase;letter-spacing:.5px">📋 Розбивка по рейсах</h3>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          ${data.by_letter.map(L => {
+            const scenarioLabel = L.scenario_id ? scenarioLabels[L.scenario_id] : 'Невідомий сценарій';
+            const lc = L.score >= 0 ? '#5d8' : '#e66';
+            return `
+              <div style="background:var(--bg3);border-radius:8px;padding:12px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:14px">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;color:var(--t1);margin-bottom:3px;font-weight:500">${escapeHtml(L.letter_subject || '')}</div>
+                  <div style="font-size:11px;color:var(--t3)">Сценарій: ${escapeHtml(scenarioLabel)} · ${L.points.length} дій</div>
+                </div>
+                <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:${lc};flex-shrink:0">${L.score >= 0 ? '+' : ''}${L.score}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:12px;padding:20px">
+      <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--t1);text-transform:uppercase;letter-spacing:.5px">📝 Деталізація дій</h3>
+      ${data.points.length === 0 ? `
+        <div style="font-size:13px;color:var(--t3);text-align:center;padding:20px">Поки що немає оцінених дій. Виконуйте рейси — оцінки з'являться тут.</div>
+      ` : `
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${data.points.map(p => {
+            const ic = p.impact > 0 ? '#5d8' : p.impact < 0 ? '#e66' : 'var(--t3)';
+            const sign = p.impact > 0 ? '+' : '';
+            const dt = new Date(p.created_at);
+            const dtStr = dt.toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            return `
+              <div style="display:flex;gap:12px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--b1)">
+                <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${ic};min-width:36px;text-align:center">${sign}${p.impact}</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;color:var(--t1)">${escapeHtml(typeLabels[p.type] || p.type)}</div>
+                  ${p.letter_subject ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${escapeHtml(p.letter_subject)}</div>` : ''}
+                </div>
+                <div style="font-size:10px;color:var(--t3);font-family:var(--mono);flex-shrink:0">${dtStr}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `}
+    </div>
+  `;
+
+  document.getElementById('resume-content').innerHTML = html;
+}
+
 function renderExchange(){
   ['carriers','chats','orders','orders2','docs','exchange'].forEach(unlock);
   document.getElementById('tb-right').innerHTML=
@@ -7860,7 +8025,7 @@ window.addEventListener('load',()=>{
 
   loadSessionFromServer(token).then(()=>{
     // Unlock all navigation items
-    ['email','carriers','chats','orders','docs','exchange'].forEach(unlock);
+    ['email','carriers','chats','orders','docs','exchange','resume'].forEach(unlock);
     go('welcome');
     startAutosave(token);
   }).catch(e=>{
