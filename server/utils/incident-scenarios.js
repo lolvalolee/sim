@@ -191,7 +191,67 @@ const CLIENT_TEXTS = {
     'Сьогодні дата завантаження. Де авто? Чому ніхто не повідомляє?',
     'У нас вантаж стоїть. Авто буде? Розкажіть що з рейсом.',
   ],
+
+  // M — Реакція замовника на простій: відмова (для торгу №1)
+  simple_client_refuse: [
+    'Простій не з нашої вини. Не платимо.',
+    'Це не наша проблема — водій сам мав чекати. Простій не покриваємо.',
+    'Нам брокер сказав що ПД через день — це норма. Простій ні.',
+    'Перевірте з перевізником ще раз. У нас простоїв не передбачено.',
+  ],
+
+  // N — Реакція замовника на простій: часткова згода
+  simple_client_partial: [
+    'Гаразд, можемо €30/добу — але не більше. Це і так багато.',
+    'Половину покриємо — €25/добу максимум.',
+    'Поділимо навпіл — €25 ми, €25 ви. Так буде справедливо.',
+  ],
+
+  // O — Реакція замовника на простій: повна згода (рідко)
+  simple_client_agree: [
+    'Ок, простій оплатимо. Зафіксуйте суму.',
+    'Гаразд, наша провина — покриваємо.',
+    'Бачимо що ПД затрималась — простій візьмемо на себе.',
+  ],
+
+  // P — Замовник повідомляє про затримку розмитнення (R6, R7)
+  customs_will_delay: [
+    'Брокер каже сьогодні не встигне. Завтра з ранку.',
+    'Розмитнення відкладається — занадто завантажений термінал.',
+    'Брокер на лінії — каже до завтра. Без варіантів.',
+  ],
 };
+
+// ─── Перевізник — додаткові пули для торгу ────────────────────
+Object.assign(CARRIER_TEXTS, {
+  // Перевізник наполягає на простоях (раунд 2)
+  simple_demand_round2: [
+    'Колеги, ми вже доба стоїмо. Без оплати простою — їхати не можемо.',
+    'Простій вже накопичується. Якщо не вирішимо — пишемо претензію.',
+    '€50 — це мінімум, нижче не можемо. Простір без оплати не їде.',
+  ],
+
+  // Перевізник погоджується на менше (часткова згода зі сторони перевізника)
+  simple_demand_compromise: [
+    'Окей, €30/добу — мінімум, на менше не можемо.',
+    'Гаразд, €40 за добу — і поїхали.',
+    'Сходимось на €35. Меньше не зможемо.',
+  ],
+
+  // Перевізник погоджується везти без простою (рідко, якщо студент тисне)
+  simple_demand_dropped: [
+    'Гаразд, цього разу проїдемо без простою. Але наступного разу — ні.',
+    'Ок, з вашою фірмою працюємо вперше — пройдемо без простоїв.',
+    'Зрозумів. Цей рейс закриваємо без претензій.',
+  ],
+
+  // Перевізник наполягає (якщо студент пробує тиснути)
+  simple_demand_firm: [
+    'Без €50 — не їдемо. Це наша принципова позиція.',
+    'Простій або платимо, або машина стоїть. Інших варіантів немає.',
+    'Поставте себе на наше місце — водій теж людина. €50 і виходимо.',
+  ],
+});
 
 // ─── СЦЕНАРІЇ ─────────────────────────────────────────────────
 // Кожен сценарій = ланцюжок інцидентів з умовами і часом
@@ -278,12 +338,16 @@ const SIM_INTERVALS = {
 // Який пул текстів використати для типу інциденту
 function textPoolForType(type) {
   const map = {
-    // Перевізник
+    // Перевізник — базові
     'loaded_ok': CARRIER_TEXTS.loaded_ok,
     'at_border_clear': CARRIER_TEXTS.at_border_clear,
     'at_border_need_pd': CARRIER_TEXTS.at_border_need_pd,
     'carrier_waits_calm': CARRIER_TEXTS.waiting_calm,
     'carrier_simple_demand': CARRIER_TEXTS.simple_demand,
+    'carrier_simple_demand_round2': CARRIER_TEXTS.simple_demand_round2,
+    'carrier_simple_demand_compromise': CARRIER_TEXTS.simple_demand_compromise,
+    'carrier_simple_demand_dropped': CARRIER_TEXTS.simple_demand_dropped,
+    'carrier_simple_demand_firm': CARRIER_TEXTS.simple_demand_firm,
     'carrier_customs_delay': CARRIER_TEXTS.customs_delay,
     'carrier_customs_simple_demand': CARRIER_TEXTS.customs_simple_demand,
     'at_unloading_wait': CARRIER_TEXTS.at_unloading_wait,
@@ -298,6 +362,7 @@ function textPoolForType(type) {
     'client_pd_tomorrow': CLIENT_TEXTS.pd_tomorrow,
     'client_pd_sent': CLIENT_TEXTS.pd_sent,
     'client_customs_delay': CLIENT_TEXTS.customs_delay_client,
+    'client_customs_will_delay': CLIENT_TEXTS.customs_will_delay,
     'client_threat_fine': CLIENT_TEXTS.threat_fine,
     'client_no_fine_actually': CLIENT_TEXTS.no_fine_actually,
     'client_ask_certificate': CLIENT_TEXTS.ask_certificate,
@@ -305,6 +370,9 @@ function textPoolForType(type) {
     'client_docs_ok_after_fix': CLIENT_TEXTS.docs_ok_after_fix,
     'client_delivery_confirmed': CLIENT_TEXTS.delivery_confirmed,
     'client_where_is_truck': CLIENT_TEXTS.where_is_truck,
+    'client_simple_refuse': CLIENT_TEXTS.simple_client_refuse,
+    'client_simple_partial': CLIENT_TEXTS.simple_client_partial,
+    'client_simple_agree': CLIENT_TEXTS.simple_client_agree,
   };
   return map[type] || [];
 }

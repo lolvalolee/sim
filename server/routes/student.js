@@ -392,9 +392,9 @@ router.post('/orders/:letterId', STU, (req, res) => {
            carrier_plate||null, carrier_driver||null);
   }
 
-  // Update profit
-  const orders = db.prepare('SELECT client_freight, carrier_freight FROM order_progress WHERE session_id=?').all(session.id);
-  const profit = orders.reduce((sum, o) => sum + ((o.client_freight||0) - (o.carrier_freight||0)), 0);
+  // Update profit (з урахуванням простоїв оплачених студентом)
+  const orders = db.prepare('SELECT client_freight, carrier_freight, simple_paid_by_student FROM order_progress WHERE session_id=?').all(session.id);
+  const profit = orders.reduce((sum, o) => sum + ((o.client_freight||0) - (o.carrier_freight||0) - (o.simple_paid_by_student||0)), 0);
   db.prepare('UPDATE sessions SET profit=? WHERE id=?').run(profit, session.id);
 
   res.json({ ok: true, profit });
@@ -1611,5 +1611,81 @@ router.post('/applications/:id/send-to-carrier', STU, (req, res) => {
 // Хук — при підтвердженні угоди з перевізником ПЛАНУЄМО followups
 // Це викликається з confirm-carrier endpoint. Знаходимо його і додаємо виклик.
 // (зроблено нижче через wrapping middleware)
+
+// ── ТОРГ ПРОСТОЯМИ ──────────────────────────────────────────
+// Студент клікає кнопку у модалці "Простої" або у чаті з перевізником
+
+// GET /api/student/orders/:letterId/simple-status
+// Перевіряє чи є активний інцидент простою для рейсу
+router.get('/orders/:letterId/simple-status', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const incident = incidentScheduler.findActiveSimpleIncident({
+    sessionId: session.id,
+    letterId: req.params.letterId,
+  });
+  if (!incident) return res.json({ active: false });
+  res.json({
+    active: true,
+    incident_id: incident.id,
+    type: incident.type,
+    round: incident.negotiation_round || 0,
+    demand_amount: incident.demand_amount || 50,
+    client_decision: incident.client_decision,
+    should_open_modal: incidentScheduler.shouldAutoOpenSimpleModal({
+      sessionId: session.id,
+      letterId: req.params.letterId,
+    }),
+  });
+});
+
+// POST /api/student/orders/:letterId/simple-negotiate-carrier
+// Студент тисне на перевізника: try_drop (відмовити) або try_lower (зменшити)
+router.post('/orders/:letterId/simple-negotiate-carrier', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { action } = req.body;
+  if (!['try_drop', 'try_lower'].includes(action)) {
+    return res.status(400).json({ error: 'invalid_action' });
+  }
+  const result = incidentScheduler.studentNegotiateCarrier({
+    sessionId: session.id,
+    letterId: req.params.letterId,
+    action,
+  });
+  res.json(result);
+});
+
+// POST /api/student/orders/:letterId/simple-negotiate-client
+// Студент звертається до замовника з проханням оплатити простій
+router.post('/orders/:letterId/simple-negotiate-client', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { amount } = req.body;
+  const result = incidentScheduler.studentNegotiateClient({
+    sessionId: session.id,
+    letterId: req.params.letterId,
+    amount: parseFloat(amount) || 50,
+  });
+  res.json(result);
+});
+
+// POST /api/student/orders/:letterId/simple-resolve
+// Студент приймає рішення: student_pays / client_pays / carrier_dropped
+router.post('/orders/:letterId/simple-resolve', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { decision, amount } = req.body;
+  if (!['student_pays', 'client_pays', 'carrier_dropped'].includes(decision)) {
+    return res.status(400).json({ error: 'invalid_decision' });
+  }
+  const result = incidentScheduler.studentResolveSimple({
+    sessionId: session.id,
+    letterId: req.params.letterId,
+    decision,
+    amount: parseFloat(amount) || 0,
+  });
+  res.json(result);
+});
 
 module.exports = router;

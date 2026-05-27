@@ -392,6 +392,209 @@ function addResumePoint({ sessionId, studentId, letterId, applicationId, type, i
   `).run(id, sessionId, studentId, letterId || null, applicationId || null, type, impact, JSON.stringify(context || {}));
 }
 
+// ────────────────────────────────────────────────────────────
+// ТОРГ ПРОСТОЯМИ
+// ────────────────────────────────────────────────────────────
+
+// Знаходимо активний інцидент простою для рейсу студента
+function findActiveSimpleIncident({ sessionId, letterId }) {
+  return db.prepare(`
+    SELECT * FROM incidents
+    WHERE session_id=? AND letter_id=? AND state='triggered'
+    AND type IN ('carrier_simple_demand','carrier_customs_simple_demand',
+                 'carrier_simple_demand_round2','carrier_simple_demand_firm','carrier_simple_demand_compromise')
+    ORDER BY scheduled_at DESC
+    LIMIT 1
+  `).get(sessionId, letterId);
+}
+
+// Студент пробує домовитись з перевізником про менший простій
+// Викликається при натисканні кнопки у модалці
+function studentNegotiateCarrier({ sessionId, letterId, action, payload }) {
+  const incident = findActiveSimpleIncident({ sessionId, letterId });
+  if (!incident) return { ok: false, error: 'no_active_simple' };
+
+  const round = (incident.negotiation_round || 0) + 1;
+  let newType = null;
+  let resumeImpact = 0;
+  let resumeType = null;
+
+  if (action === 'try_drop') {
+    // Спробувати відмовити в простоях повністю (тиснути)
+    // 50% — перевізник погоджується, 50% — наполягає
+    const success = Math.random() < 0.5;
+    newType = success ? 'carrier_simple_demand_dropped' : 'carrier_simple_demand_firm';
+    if (success) {
+      resumeType = 'simple_avoided';
+      resumeImpact = 2;
+    }
+  } else if (action === 'try_lower') {
+    // Спробувати скинути ціну
+    // 70% — перевізник зменшує
+    const success = Math.random() < 0.7;
+    newType = success ? 'carrier_simple_demand_compromise' : 'carrier_simple_demand_round2';
+    if (success) {
+      resumeType = 'simple_compromise';
+      resumeImpact = 1;
+    }
+  }
+
+  if (!newType) return { ok: false, error: 'unknown_action' };
+
+  // Створюємо НОВИЙ інцидент-відповідь від перевізника (триггериться відразу)
+  const newId = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id,
+                            type, state, scheduled_at, payload_json, negotiation_round)
+    VALUES (?,?,?,?,?,?,?,'pending',?,?,?)
+  `).run(newId, incident.session_id, incident.student_id, incident.letter_id, incident.application_id,
+         incident.scenario_id, newType, now,
+         JSON.stringify({ ...JSON.parse(incident.payload_json || '{}'), parent_incident: incident.id }),
+         round);
+
+  // Записуємо resume_point якщо потрібно
+  if (resumeType) {
+    addResumePoint({
+      sessionId: incident.session_id,
+      studentId: incident.student_id,
+      letterId: incident.letter_id,
+      applicationId: incident.application_id,
+      type: resumeType,
+      impact: resumeImpact,
+      context: { round, action },
+    });
+  }
+
+  // Виконуємо одразу — щоб студент побачив відповідь негайно
+  const newInc = db.prepare(`SELECT * FROM incidents WHERE id=?`).get(newId);
+  fireIncident(newInc);
+
+  // Оновлюємо session.version
+  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(now, incident.session_id);
+
+  return { ok: true, round, new_type: newType };
+}
+
+// Студент пробує домовитись з замовником про оплату простоїв
+function studentNegotiateClient({ sessionId, letterId, amount }) {
+  const incident = findActiveSimpleIncident({ sessionId, letterId });
+  if (!incident) return { ok: false, error: 'no_active_simple' };
+
+  // 60% — замовник відмовляється повністю
+  // 30% — часткова згода
+  // 10% — повна згода
+  const roll = Math.random();
+  let clientType, clientDecision;
+  if (roll < 0.6) {
+    clientType = 'client_simple_refuse';
+    clientDecision = 'refused';
+  } else if (roll < 0.9) {
+    clientType = 'client_simple_partial';
+    clientDecision = 'partial';
+  } else {
+    clientType = 'client_simple_agree';
+    clientDecision = 'agreed';
+  }
+
+  // Створюємо інцидент-відповідь від замовника
+  const newId = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id,
+                            type, state, scheduled_at, payload_json, client_decision)
+    VALUES (?,?,?,?,?,?,?,'pending',?,?,?)
+  `).run(newId, incident.session_id, incident.student_id, incident.letter_id, incident.application_id,
+         incident.scenario_id, clientType, now,
+         JSON.stringify({ parent_incident: incident.id, requested: amount }),
+         clientDecision);
+
+  // Оновлюємо вихідний інцидент
+  db.prepare(`UPDATE incidents SET client_decision=? WHERE id=?`).run(clientDecision, incident.id);
+
+  // Виконуємо одразу
+  const newInc = db.prepare(`SELECT * FROM incidents WHERE id=?`).get(newId);
+  fireIncident(newInc);
+
+  // Resume point
+  addResumePoint({
+    sessionId: incident.session_id,
+    studentId: incident.student_id,
+    letterId: incident.letter_id,
+    applicationId: incident.application_id,
+    type: 'informed_client_about_simple',
+    impact: 1,
+    context: { decision: clientDecision, amount },
+  });
+
+  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(now, incident.session_id);
+
+  return { ok: true, client_decision: clientDecision, client_type: clientType };
+}
+
+// Студент приймає рішення у модалці "Простої"
+function studentResolveSimple({ sessionId, letterId, decision, amount }) {
+  // decision: 'student_pays', 'client_pays', 'carrier_dropped'
+  const incident = findActiveSimpleIncident({ sessionId, letterId });
+  if (!incident) return { ok: false, error: 'no_active_simple' };
+
+  const op = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+    .get(sessionId, letterId);
+
+  let resumeImpact = 0;
+  let resumeType = '';
+  const finalAmount = amount || incident.demand_amount || 50;
+
+  if (decision === 'student_pays') {
+    // Студент платить простій сам — зменшується маржа
+    if (op) {
+      db.prepare(`UPDATE order_progress SET simple_paid_by_student = COALESCE(simple_paid_by_student,0) + ? WHERE id=?`)
+        .run(finalAmount, op.id);
+    }
+    resumeType = 'simple_paid_self';
+    resumeImpact = -1;
+  } else if (decision === 'client_pays') {
+    if (op) {
+      db.prepare(`UPDATE order_progress SET simple_paid_by_client = COALESCE(simple_paid_by_client,0) + ? WHERE id=?`)
+        .run(finalAmount, op.id);
+    }
+    resumeType = 'simple_paid_by_client';
+    resumeImpact = 2;
+  } else if (decision === 'carrier_dropped') {
+    resumeType = 'simple_avoided';
+    resumeImpact = 2;
+  }
+
+  // Закриваємо інцидент
+  db.prepare(`UPDATE incidents SET state='resolved', student_decision=?, margin_delta=?, fired_at=datetime('now') WHERE id=?`)
+    .run(decision, decision === 'student_pays' ? -finalAmount : 0, incident.id);
+
+  if (resumeType) {
+    addResumePoint({
+      sessionId,
+      studentId: incident.student_id,
+      letterId,
+      applicationId: incident.application_id,
+      type: resumeType,
+      impact: resumeImpact,
+      context: { decision, amount: finalAmount },
+    });
+  }
+
+  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), sessionId);
+
+  return { ok: true, decision, amount: finalAmount };
+}
+
+// Перевірка чи потрібна автомодалка простоїв
+// (2+ безуспішних раундів негоціації)
+function shouldAutoOpenSimpleModal({ sessionId, letterId }) {
+  const incident = findActiveSimpleIncident({ sessionId, letterId });
+  if (!incident) return false;
+  // 2 невдалі раунди = модалка
+  return (incident.negotiation_round || 0) >= 2;
+}
+
 module.exports = {
   scheduleInitialIncidents,
   scheduleReactiveIncidentsCarrierRefused,
@@ -400,5 +603,10 @@ module.exports = {
   startCron,
   stopCron,
   addResumePoint,
+  findActiveSimpleIncident,
+  studentNegotiateCarrier,
+  studentNegotiateClient,
+  studentResolveSimple,
+  shouldAutoOpenSimpleModal,
   SIM_HOUR_MS_REAL,
 };
