@@ -1383,7 +1383,7 @@ router.get('/clients', STU, (req, res) => {
 
   const placeholders = letterIds.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT DISTINCT c.id, c.company, c.person, c.country
+    SELECT DISTINCT c.id, c.company, c.person
     FROM clients c
     INNER JOIN letters l ON l.client_id = c.id
     WHERE l.id IN (${placeholders})
