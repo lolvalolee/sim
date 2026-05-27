@@ -251,6 +251,13 @@ Object.assign(CARRIER_TEXTS, {
     'Простій або платимо, або машина стоїть. Інших варіантів немає.',
     'Поставте себе на наше місце — водій теж людина. €50 і виходимо.',
   ],
+
+  // Перевізник запитує де заявка/адреса (студент не повідомив про скасування)
+  carrier_asks_where_address: [
+    'Колеги, добрий день. Сьогодні дата завантаження — куди їхати? Адреса не прийшла.',
+    'Завтра завантажуємось, де адреса заявки? Не отримав від вас.',
+    'Не зрозуміло — ви на нас плануєте? Не маю на руках адреси завантаження.',
+  ],
 });
 
 // ─── СЦЕНАРІЇ ─────────────────────────────────────────────────
@@ -348,6 +355,7 @@ function textPoolForType(type) {
     'carrier_simple_demand_compromise': CARRIER_TEXTS.simple_demand_compromise,
     'carrier_simple_demand_dropped': CARRIER_TEXTS.simple_demand_dropped,
     'carrier_simple_demand_firm': CARRIER_TEXTS.simple_demand_firm,
+    'carrier_asks_where_address': CARRIER_TEXTS.carrier_asks_where_address,
     'carrier_customs_delay': CARRIER_TEXTS.customs_delay,
     'carrier_customs_simple_demand': CARRIER_TEXTS.customs_simple_demand,
     'at_unloading_wait': CARRIER_TEXTS.at_unloading_wait,

@@ -2482,6 +2482,28 @@ function openEmail(orderId){
     }).join('')}
     </div>`:'';
 
+  // Якщо у відповідях є слово про скасування — показуємо кнопку
+  // "Скасувати рейс і повідомити перевізника"
+  let cancelTripBtnHtml = '';
+  if (ord.carrierId && em.replies?.some(r => r.role === 'ai' && /скасу|не актуал|закрили|іншим експедитор|переноситься на іншу/i.test(r.text||''))) {
+    // Перевіряємо що ще не скасовано
+    if (!ord._tripCancelled) {
+      cancelTripBtnHtml = `
+        <div style="background:rgba(220,68,68,.08);border:1px solid rgba(220,68,68,.3);border-radius:10px;padding:14px;margin-top:14px">
+          <div style="font-size:13px;color:var(--t1);font-weight:600;margin-bottom:8px">⚠ Замовник скасовує рейс</div>
+          <div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.5">
+            Якщо ви прийняли скасування — обов'язково повідомте перевізника. Інакше водій поїде на адресу і виникне проблема.
+          </div>
+          <button onclick="cancelTripAndNotifyCarrier('${orderId}')" style="
+            background:#d44;border:none;border-radius:8px;
+            padding:10px 16px;cursor:pointer;color:#fff;
+            font-family:inherit;font-size:13px;font-weight:600
+          ">📤 Скасувати рейс і повідомити перевізника</button>
+        </div>
+      `;
+    }
+  }
+
   document.getElementById('email-detail').innerHTML=`
     <div class="email-scroll" id="escroll-${orderId}">
       <div class="email-subj-row">
@@ -2495,7 +2517,7 @@ function openEmail(orderId){
         <span class="em-l">Доставка:</span><span class="em-v">${ord.delivDate}</span>
       </div>
       <div class="email-body-wrap"><div class="email-body">${em.bodyText}</div></div>
-      ${missingHtml}${freightHtml}${threadHtml}
+      ${missingHtml}${freightHtml}${threadHtml}${cancelTripBtnHtml}
     </div>
     <div class="reply-box">
       <div class="email-confirm-bar">
@@ -3014,14 +3036,33 @@ async function sendChatMsg(cid,pfx){
   else renderChats();
   updateBadges();
   // Find order matching this carrier's directions
-  const ordCtx = S.orders.find(o=>!o.carrierId&&o.dirs.some(d=>c.dirs.includes(d))&&o.clientFreightAgreed);
+  // Спершу до угоди (carrierId не назначений), потім — рейс цього перевізника
+  let ordCtx = S.orders.find(o=>!o.carrierId&&o.dirs.some(d=>c.dirs.includes(d))&&o.clientFreightAgreed);
+  if (!ordCtx) {
+    ordCtx = S.orders.find(o => o.carrierId === cid);
+  }
+  // Збагачуємо контекст інформацією про поточний стан рейсу
+  let stateContext = null;
+  if (ordCtx && ordCtx.carrierId === cid && ordCtx.id) {
+    // Запитуємо стан рейсу з сервера
+    try {
+      const token = localStorage.getItem('docaa_token');
+      const r = await fetch(`/api/student/orders/${ordCtx.id}/trip-state`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (r.ok) {
+        stateContext = await r.json();
+      }
+    } catch(e) {}
+  }
   const sys=buildCarrierSys(c, ordCtx ? {
     route: ordCtx.dirs.join(' → '),
     cargo: ordCtx.vehicle,
     vehicle: ordCtx.vehicle,
     loadDate: ordCtx.loadDate,
     delivDate: ordCtx.delivDate,
-    weight: ordCtx.email?.weight||''
+    weight: ordCtx.email?.weight||'',
+    tripState: stateContext, // ← новий блок
   } : null);
   const hist=S.chats[cid].filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
   try{
@@ -3101,6 +3142,36 @@ function buildCarrierSys(c, ordContext){
 Кузов потрібен: ${ordContext.vehicle||''}
 ${dateNote}
 Дата доставки: ${ordContext.delivDate||'уточнюється'}`;
+
+    // Cross-context: поточний стан рейсу (тільки після угоди)
+    if (ordContext.tripState) {
+      const ts = ordContext.tripState;
+      const stateLabels = {
+        new: 'тільки погодили рейс',
+        agreed: 'погодили рейс, чекаємо документів',
+        sent_to_carrier: 'заявку отримав, виходимо в рейс',
+        loading_day: 'сьогодні дата завантаження',
+        loaded: 'вже завантажились, у дорозі',
+        in_transit: 'у дорозі',
+        at_border: 'на кордоні',
+        pd_requested: 'на кордоні, чекаю ПД від експедитора',
+        pd_sent: 'отримали ПД, проходимо кордон',
+        at_customs_dst: 'на терміналі розмитнення',
+        customs_problem: 'проблема з розмитненням',
+        simple_demand: 'вимагаю простій',
+        at_unloading: 'на розвантаженні',
+        unloaded: 'розвантажились',
+        closed: 'рейс виконано, чекаю оригінали',
+        cancelled_by_client: 'замовник скасував рейс',
+      };
+      const stateLabel = stateLabels[ts.state] || ts.state;
+      let stateLines = [`\nПОТОЧНИЙ СТАН РЕЙСУ (важливо!):`];
+      stateLines.push(`Стан: ${stateLabel}`);
+      if (ts.simple_demand_active) stateLines.push(`Я вимагаю простій €${ts.simple_demand_amount}/добу. Це важлива розмова.`);
+      if (ts.cancelled) stateLines.push(`УВАГА: замовник скасував рейс. Якщо експедитор повідомив — прийми спокійно. Якщо не повідомив — спитай де адреса завантаження.`);
+      orderBlock += stateLines.join('\n');
+      orderBlock += `\n\nВідповідай ВИХОДЯЧИ зі стану. Не починай заново про погодження ціни — це вже давно зроблено.`;
+    }
   }
 
   return `Ти — ${c.person||'менеджер'}, компанія "${c.name}". ${langNote}
@@ -8435,6 +8506,32 @@ async function simpleResolve(letterId, decision, amount) {
       notify(data.error || 'Помилка', 'err');
     }
   } catch(e) { notify('Помилка з\'єднання', 'err'); }
+}
+
+// Скасування рейсу: студент повідомляє перевізника що замовник скасував
+async function cancelTripAndNotifyCarrier(letterId) {
+  const ord = S.orders?.find(o => o.id === letterId);
+  if (!ord) return;
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const r = await fetch(`/api/student/orders/${letterId}/cancel-trip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    });
+    const data = await r.json();
+    if (data.ok) {
+      ord._tripCancelled = true;
+      notify('Перевізника повідомлено про скасування ✓', 'ok');
+      // Перевантажуємо чати щоб з'явилось наше повідомлення
+      try { if (typeof reloadCarrierChats === 'function') await reloadCarrierChats(); } catch(e) {}
+      // Перевідкрити лист щоб кнопка зникла
+      openEmail(letterId);
+    } else {
+      notify(data.error || 'Помилка', 'err');
+    }
+  } catch(e) {
+    notify('Помилка з\'єднання', 'err');
+  }
 }
 
 </script>

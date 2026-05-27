@@ -291,6 +291,26 @@ function fireIncident(incident) {
 
   // Позначаємо інцидент як виконаний
   db.prepare(`UPDATE incidents SET state='triggered', fired_at=? WHERE id=?`).run(nowIso, incident.id);
+
+  // Реактивне планування для R5 — якщо замовник скасував, плануємо
+  // інцидент "де заявка?" від перевізника на день завантаження
+  if (incident.type === 'client_cancel_order') {
+    const op = db.prepare(`SELECT carrier_id FROM order_progress WHERE session_id=? AND letter_id=?`)
+      .get(incident.session_id, incident.letter_id);
+    if (op?.carrier_id) {
+      const chat = db.prepare(`SELECT id FROM carrier_chats WHERE session_id=? AND carrier_id=?`)
+        .get(incident.session_id, op.carrier_id);
+      if (chat) {
+        scheduleReactiveIfNotInformed({
+          sessionId: incident.session_id,
+          studentId: incident.student_id,
+          letterId: incident.letter_id,
+          scenarioId: incident.scenario_id,
+          carrierChatId: chat.id,
+        });
+      }
+    }
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -731,9 +751,89 @@ function scheduleClientDocsOkAfterFix({ sessionId, studentId, letterId }) {
     'client_docs_ok_after_fix', scheduledAt, JSON.stringify({}));
 }
 
+// ────────────────────────────────────────────────────────────
+// СКАСУВАННЯ РЕЙСУ (R5 — зрив)
+// ────────────────────────────────────────────────────────────
+
+// Студент натиснув кнопку "Скасувати рейс і повідомити перевізника" у пошті
+function studentCancelTrip({ sessionId, studentId, letterId }) {
+  // Знайти перевізника з угодою для цього рейсу
+  const op = db.prepare(`
+    SELECT carrier_id FROM order_progress WHERE session_id=? AND letter_id=?
+  `).get(sessionId, letterId);
+  const carrierId = op?.carrier_id;
+  if (!carrierId) {
+    return { ok: false, error: 'no_carrier' };
+  }
+
+  // Знайти чат з цим перевізником
+  const chat = db.prepare(`
+    SELECT * FROM carrier_chats WHERE session_id=? AND carrier_id=?
+  `).get(sessionId, carrierId);
+
+  const cancelTexts = [
+    'Замовник щойно скасував вантаж. На жаль, рейс не відбудеться.',
+    'Перепрошуємо — замовник скасував. Виходимо з рейсу.',
+    'Маємо скасувати — замовник зняв замовлення.',
+  ];
+  const text = cancelTexts[Math.floor(Math.random() * cancelTexts.length)];
+  const nowIso = new Date().toISOString();
+
+  if (chat) {
+    const msgs = JSON.parse(chat.messages || '[]');
+    msgs.push({
+      role: 'student',
+      text,
+      time: new Date().toLocaleTimeString('uk', { hour: '2-digit', minute: '2-digit' }),
+      ts: nowIso,
+      isSystem: true,
+    });
+    db.prepare('UPDATE carrier_chats SET messages=?, updated_at=? WHERE id=?')
+      .run(JSON.stringify(msgs), nowIso, chat.id);
+  }
+
+  // Скасовуємо ВСІ ЩЕ НЕВИКОНАНІ інциденти для цього рейсу
+  const result = db.prepare(`
+    UPDATE incidents SET state='cancelled', fired_at=?
+    WHERE session_id=? AND letter_id=? AND state='pending'
+  `).run(nowIso, sessionId, letterId);
+
+  // Update order_progress state
+  db.prepare(`UPDATE order_progress SET state='cancelled_by_client' WHERE session_id=? AND letter_id=?`)
+    .run(sessionId, letterId);
+
+  // Resume point +2 — студент діяв правильно
+  addResumePoint({
+    sessionId, studentId, letterId,
+    type: 'informed_carrier_about_cancel',
+    impact: 2,
+    context: { cancelled_incidents: result.changes },
+  });
+
+  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(nowIso, sessionId);
+
+  return { ok: true, message: 'Перевізника повідомлено', cancelled_incidents: result.changes };
+}
+
+// При спрацюванні client_cancel_order — створюємо реактивний інцидент:
+// "якщо студент не повідомив перевізника за 6 год сим — перевізник пише 'де заявка'"
+function scheduleReactiveIfNotInformed({ sessionId, studentId, letterId, scenarioId, carrierChatId, loadDateIso }) {
+  // Через 6 год сим — інцидент від перевізника "де адреса?"
+  const id = uuidv4();
+  const scheduledAt = nowPlus(simHoursToMs(6));
+  db.prepare(`
+    INSERT INTO incidents (id, session_id, student_id, letter_id, scenario_id, type, state, scheduled_at, payload_json)
+    VALUES (?,?,?,?,?,?,'pending',?,?)
+  `).run(id, sessionId, studentId, letterId, scenarioId || null,
+    'carrier_asks_where_address', scheduledAt,
+    JSON.stringify({ carrier_chat_id: carrierChatId, reactive: true }));
+  console.log(`[incident-sched] Reactive: 'де заявка?' заплановано для R5`);
+}
+
 module.exports = {
   scheduleInitialIncidents,
   scheduleReactiveIncidentsCarrierRefused,
+  scheduleReactiveIfNotInformed,
   cancelReactiveIncidents,
   runDueIncidents,
   startCron,
@@ -745,5 +845,6 @@ module.exports = {
   studentResolveSimple,
   shouldAutoOpenSimpleModal,
   handleCertificateSubmission,
+  studentCancelTrip,
   SIM_HOUR_MS_REAL,
 };

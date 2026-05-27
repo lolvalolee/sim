@@ -1717,4 +1717,56 @@ router.post('/orders/:letterId/submit-certificate', STU, (req, res) => {
   res.json(result);
 });
 
+// GET /api/student/orders/:letterId/trip-state
+// Повертає поточний стан рейсу (для cross-context в AI промптах)
+router.get('/orders/:letterId/trip-state', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const op = db.prepare(`
+    SELECT state, loaded_at, at_border_at, at_customs_at, delivered_at,
+           pd_requested_at, pd_sent_at, simple_paid_by_student, simple_paid_by_client
+    FROM order_progress WHERE session_id=? AND letter_id=?
+  `).get(session.id, req.params.letterId);
+
+  if (!op) return res.json({ state: 'new' });
+
+  // Чи є активний інцидент простою?
+  const simple = db.prepare(`
+    SELECT type, demand_amount, negotiation_round, client_decision
+    FROM incidents
+    WHERE session_id=? AND letter_id=? AND state='triggered'
+    AND type IN ('carrier_simple_demand','carrier_customs_simple_demand',
+                 'carrier_simple_demand_round2','carrier_simple_demand_firm')
+    ORDER BY scheduled_at DESC LIMIT 1
+  `).get(session.id, req.params.letterId);
+
+  res.json({
+    state: op.state || 'new',
+    loaded_at: op.loaded_at,
+    at_border_at: op.at_border_at,
+    at_customs_at: op.at_customs_at,
+    delivered_at: op.delivered_at,
+    cancelled: op.state === 'cancelled_by_client',
+    simple_demand_active: !!simple,
+    simple_demand_amount: simple?.demand_amount || 0,
+    simple_paid_by_student: op.simple_paid_by_student || 0,
+  });
+});
+
+// POST /api/student/orders/:letterId/cancel-trip
+// Студент повідомляє перевізника що замовник скасував рейс
+// (викликається з пошти коли студент бачить лист про скасування)
+router.post('/orders/:letterId/cancel-trip', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const result = incidentScheduler.studentCancelTrip({
+    sessionId: session.id,
+    studentId: req.user.id,
+    letterId: req.params.letterId,
+  });
+  res.json(result);
+});
+
 module.exports = router;
