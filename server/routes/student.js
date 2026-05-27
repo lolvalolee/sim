@@ -5,8 +5,80 @@ const fetch = require('node-fetch');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db');
 const followupScheduler = require('../utils/followup-scheduler');
+const incidentScheduler = require('../utils/incident-scheduler');
+const incidentScenarios = require('../utils/incident-scenarios');
 
 const STU = requireAuth(['student']);
+
+// ── Призначення сценаріїв (1-8) для 8 листів сесії ──────────────
+// Викликається при кожному GET /session — але реально щось робить
+// тільки коли scenario_id ще не призначені (одноразово на сесію/призначення).
+function assignScenariosIfNeeded(letterIds) {
+  if (!letterIds || letterIds.length === 0) return;
+
+  const letters = letterIds
+    .map(lid => db.prepare('SELECT id, dirs, client_id, scenario_id FROM letters WHERE id=?').get(lid))
+    .filter(Boolean);
+
+  // Якщо хоча б у одного вже є scenario_id — нічого не робимо
+  if (letters.some(l => l.scenario_id != null)) return;
+
+  // Перевіряємо чи це 8 листів (як очікується). Якщо не 8 — все одно роздаємо.
+  // Сценарії 1-8 у випадковому порядку.
+  const scenarios = [1, 2, 3, 4, 5, 6, 7, 8];
+  // Fisher-Yates shuffle
+  for (let i = scenarios.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [scenarios[i], scenarios[j]] = [scenarios[j], scenarios[i]];
+  }
+
+  // Якщо листів менше або більше ніж 8 — обрізаємо/повторюємо
+  const assignments = [];
+  for (let i = 0; i < letters.length; i++) {
+    assignments.push(scenarios[i % scenarios.length]);
+  }
+
+  // Сценарії 6 і 7 (проблема на розмитненні) — тільки для імпорту в UA
+  // Імпорт = "dirs" містить НЕ-UA країну для завантаження + UA для розвантаження
+  // АБО (простіше): є митний перехід у маршруті (dirs.length >= 2)
+  // Якщо лист "не імпорт" — поміняємо місцями з листом який імпорт
+  const isImportLetter = (letter) => {
+    try {
+      const dirs = JSON.parse(letter.dirs || '[]');
+      if (!Array.isArray(dirs) || dirs.length < 2) return false;
+      // Імпорт: останній dir = UA, перший — НЕ UA
+      const last = dirs[dirs.length - 1];
+      const first = dirs[0];
+      return last === 'UA' && first !== 'UA';
+    } catch (e) { return false; }
+  };
+
+  // Шукаємо позиції з сценаріями 6 і 7 — якщо лист там НЕ імпорт, міняємо
+  for (let scen of [6, 7]) {
+    const pos = assignments.indexOf(scen);
+    if (pos < 0) continue;
+    if (isImportLetter(letters[pos])) continue; // вже все ок
+
+    // Знайти лист який імпорт і у якого зараз сценарій НЕ 6/7
+    let swapPos = -1;
+    for (let i = 0; i < letters.length; i++) {
+      if (i === pos) continue;
+      if (assignments[i] === 6 || assignments[i] === 7) continue;
+      if (isImportLetter(letters[i])) { swapPos = i; break; }
+    }
+    if (swapPos >= 0) {
+      [assignments[pos], assignments[swapPos]] = [assignments[swapPos], assignments[pos]];
+    }
+    // Якщо нікого імпортного — лишаємо як є (хай буде на не-імпорті)
+  }
+
+  // Зберігаємо
+  const updateStmt = db.prepare('UPDATE letters SET scenario_id=? WHERE id=?');
+  for (let i = 0; i < letters.length; i++) {
+    updateStmt.run(assignments[i], letters[i].id);
+  }
+  console.log(`[scenarios] Призначено сценарії: ${letters.map((l, i) => `${l.id.slice(0,8)}=R${assignments[i]}`).join(', ')}`);
+}
 
 // ── GET SESSION (or create new) ───────────────────────────────
 router.get('/session', STU, (req, res) => {
@@ -59,6 +131,10 @@ router.get('/session', STU, (req, res) => {
   // Load assignment letters
   const assignment = db.prepare('SELECT * FROM assignments WHERE id=?').get(session.assignment_id);
   const letterIds = JSON.parse(assignment?.letter_ids || '[]');
+
+  // Призначаємо scenario_id для листів цієї сесії якщо ще не призначені
+  assignScenariosIfNeeded(letterIds);
+
   const letters = letterIds
     .map(lid => db.prepare('SELECT * FROM letters WHERE id=?').get(lid))
     .filter(Boolean)
@@ -109,12 +185,18 @@ router.get('/session', STU, (req, res) => {
 // GET /api/student/session/version — легкий polling для перевірки версії
 // Не повертає всі дані — тільки версію і статус
 router.get('/session/version', STU, (req, res) => {
-  const session = db.prepare('SELECT version, status FROM sessions WHERE student_id=?').get(req.user.id);
+  const session = db.prepare('SELECT id, version, status FROM sessions WHERE student_id=?').get(req.user.id);
   if (!session) return res.json({ exists: false });
+
+  // Швидкий запуск інцидентів для цієї сесії (миттєвість при polling)
+  try { incidentScheduler.runDueIncidents(session.id); } catch (e) {}
+
+  // Перечитуємо version бо runDueIncidents міг його змінити
+  const fresh = db.prepare('SELECT version, status FROM sessions WHERE id=?').get(session.id);
   res.json({
     exists: true,
-    version: session.version || '',
-    status: session.status,
+    version: fresh.version || '',
+    status: fresh.status,
   });
 });
 
@@ -250,6 +332,9 @@ router.patch('/chats/:carrierId/read', STU, (req, res) => {
 router.get('/chats/unread-summary', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
+
+  // Швидкий запуск інцидентів для цієї сесії (миттєвість)
+  try { incidentScheduler.runDueIncidents(session.id); } catch (e) {}
 
   const chats = db.prepare('SELECT carrier_id, messages, updated_at FROM carrier_chats WHERE session_id=?')
     .all(session.id);
@@ -863,6 +948,35 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
       // (можна додати окремо в POST /applications, але поки що тільки тут)
     } catch (e) {
       console.error('scheduleFollowups error:', e.message);
+    }
+
+    // Плануємо інциденти рейсу — ланцюжок подій від завантаження до доставки
+    try {
+      const chatForCarrier = db.prepare('SELECT id FROM carrier_chats WHERE session_id=? AND carrier_id=?')
+        .get(session.id, carrierId);
+      const letterScenario = db.prepare('SELECT scenario_id FROM letters WHERE id=?').get(letterId);
+      // Перевіряємо чи вже не плановано інциденти для цього letter+carrier
+      const alreadyPlanned = db.prepare(`
+        SELECT COUNT(*) as cnt FROM incidents
+        WHERE session_id=? AND letter_id=? AND state IN ('pending','triggered')
+      `).get(session.id, letterId);
+      if (alreadyPlanned.cnt === 0 && chatForCarrier && letterScenario) {
+        // Конвертуємо date з формату DD.MM.YYYY в ISO
+        let loadDateIso = null;
+        const m = (date || '').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+        if (m) loadDateIso = `${m[3]}-${m[2]}-${m[1]}T09:00:00.000Z`;
+        incidentScheduler.scheduleInitialIncidents({
+          sessionId: session.id,
+          studentId: req.user.id,
+          letterId,
+          applicationId: null, // ще нема заявки в момент підтвердження
+          scenarioId: letterScenario.scenario_id,
+          carrierChatId: chatForCarrier.id,
+          loadDateIso,
+        });
+      }
+    } catch (e) {
+      console.error('scheduleInitialIncidents error:', e.message);
     }
   }
 
