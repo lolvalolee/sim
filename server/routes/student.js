@@ -17,13 +17,24 @@ function assignScenariosIfNeeded(letterIds) {
   if (!letterIds || letterIds.length === 0) return;
 
   const letters = letterIds
-    .map(lid => db.prepare('SELECT id, dirs, client_id, scenario_id FROM letters WHERE id=?').get(lid))
+    .map(lid => db.prepare('SELECT id, dirs, client_id, scenario_id, appear_day FROM letters WHERE id=?').get(lid))
     .filter(Boolean);
 
-  // Якщо хоча б у одного вже є scenario_id — нічого не робимо
-  if (letters.some(l => l.scenario_id != null)) return;
+  // Чи вже призначені сценарії і хвилі?
+  const scenariosDone = letters.every(l => l.scenario_id != null);
+  // Хвилі вважаємо призначеними лише якщо є хоч один лист з appear_day > 1
+  // (бо коректний розподіл 4+2+2 завжди дає листи на день 2 і 3)
+  const wavesDone = letters.some(l => (l.appear_day || 1) > 1);
 
-  // Перевіряємо чи це 8 листів (як очікується). Якщо не 8 — все одно роздаємо.
+  // Якщо і сценарії, і хвилі вже є — нічого не робимо
+  if (scenariosDone && wavesDone) return;
+
+  // Якщо сценарії вже є але хвилі НІ — призначаємо лише хвилі (скидання групи)
+  if (scenariosDone && !wavesDone) {
+    assignAppearDays(letters);
+    return;
+  }
+
   // Сценарії 1-8 у випадковому порядку.
   const scenarios = [1, 2, 3, 4, 5, 6, 7, 8];
   // Fisher-Yates shuffle
@@ -78,14 +89,21 @@ function assignScenariosIfNeeded(letterIds) {
     updateStmt.run(assignments[i], letters[i].id);
   }
 
-  // Призначаємо appear_day — хвилі листів 4+2+2
-  // День 1: перші 4 листи, День 2: наступні 2, День 3: останні 2
-  // (для кількості листів != 8 — пропорційно: ~50% / 25% / 25%)
+  // Призначаємо хвилі появи листів
+  assignAppearDays(letters);
+
+  console.log(`[scenarios] Призначено сценарії: ${letters.map((l, i) => `${l.id.slice(0,8)}=R${assignments[i]}`).join(', ')}`);
+}
+
+// Призначення appear_day — хвилі листів 4+2+2
+// День 1: перші 4, День 2: +2, День 3: +2
+// (для кількості != 8 — пропорційно ~50/25/25)
+function assignAppearDays(letters) {
   const updDay = db.prepare('UPDATE letters SET appear_day=? WHERE id=?');
   const n = letters.length;
   let waves;
   if (n === 8) {
-    waves = [4, 2, 2]; // стандарт
+    waves = [4, 2, 2];
   } else {
     const d1 = Math.ceil(n * 0.5);
     const d2 = Math.ceil((n - d1) / 2);
@@ -101,7 +119,6 @@ function assignScenariosIfNeeded(letterIds) {
       }
     }
   }
-  console.log(`[scenarios] Призначено сценарії: ${letters.map((l, i) => `${l.id.slice(0,8)}=R${assignments[i]}`).join(', ')}`);
   console.log(`[scenarios] Хвилі листів (appear_day): ${waves.join('+')}`);
 }
 
