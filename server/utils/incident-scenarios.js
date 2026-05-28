@@ -258,6 +258,23 @@ Object.assign(CARRIER_TEXTS, {
     'Завтра завантажуємось, де адреса заявки? Не отримав від вас.',
     'Не зрозуміло — ви на нас плануєте? Не маю на руках адреси завантаження.',
   ],
+
+  // Реактивне нагадування: студент не переслав ПД
+  carrier_pd_reminder: [
+    'Колеги, ну де ПД? Стоїмо на кордоні, втрачаємо час.',
+    'Досі без ПД. Машина простоює, це гроші. Прискорте будь ласка.',
+    'Нагадую — без ПД не пройдемо. Чекаємо вже довго.',
+  ],
+});
+
+// Тексти-нагадування від замовника (реактивні)
+Object.assign(CLIENT_TEXTS, {
+  // R8 — студент не виправив довідку
+  client_docs_reminder: [
+    'Нагадую — чекаю виправлену довідку з рядком про навантажувальні роботи (EXW). Без неї не розмитнимо.',
+    'Довідку так і не переоформили? Розмитнення стоїть через це.',
+    'Колеги, де виправлена довідка? Термінал чекає.',
+  ],
 });
 
 // ─── СЦЕНАРІЇ ─────────────────────────────────────────────────
@@ -356,6 +373,8 @@ function textPoolForType(type) {
     'carrier_simple_demand_dropped': CARRIER_TEXTS.simple_demand_dropped,
     'carrier_simple_demand_firm': CARRIER_TEXTS.simple_demand_firm,
     'carrier_asks_where_address': CARRIER_TEXTS.carrier_asks_where_address,
+    'carrier_pd_reminder': CARRIER_TEXTS.carrier_pd_reminder,
+    'client_docs_reminder': CLIENT_TEXTS.client_docs_reminder,
     'carrier_customs_delay': CARRIER_TEXTS.customs_delay,
     'carrier_customs_simple_demand': CARRIER_TEXTS.customs_simple_demand,
     'at_unloading_wait': CARRIER_TEXTS.at_unloading_wait,

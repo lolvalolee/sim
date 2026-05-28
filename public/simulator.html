@@ -2689,6 +2689,16 @@ async function sendEmailReply(orderId){
   em.replies.push({role:'student',text:txt}); ta.value='';
   em.replies.push({role:'ai',text:'',loading:true});
   openEmail(orderId);
+  // Cross-context: підвантажуємо стан рейсу щоб замовник знав що відбувається
+  if (ord && ord.carrierId) {
+    try {
+      const token = localStorage.getItem('docaa_token');
+      const r = await fetch(`/api/student/orders/${orderId}/trip-state`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (r.ok) ord._tripState = await r.json();
+    } catch(e) {}
+  }
   const sys=buildClientSys(em,ord);
   const hist=em.replies.filter(r=>!r.loading).map(r=>({role:r.role==='student'?'user':'assistant',content:r.text}));
   try{
@@ -2740,6 +2750,31 @@ function simNowForPrompt(){
   const m = S.simMin != null ? S.simMin : 0;
   const simDate = addDays(S.startDate, day-1);
   return `\nПОТОЧНИЙ ЧАС СИМУЛЯЦІЇ: День ${day}, ${simDate}, ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}. Робочий день 9:00-21:00. Враховуй час: вранці бадьоро, ввечері втомлено, пізно — можеш сказати що завтра продовжимо.`;
+}
+
+// Блок стану рейсу для AI (cross-context) — спільний для замовника і перевізника
+function tripStateForPrompt(ts, who){
+  if(!ts || !ts.state || ts.state==='new') return '';
+  const labels = {
+    loaded:'машина завантажилась, у дорозі',
+    at_border:'машина на кордоні',
+    pd_requested:'машина на кордоні, потрібна ПД (проформа-декларація)',
+    pd_sent:'ПД надіслано, проходять кордон',
+    at_customs_dst:'машина на терміналі розмитнення',
+    at_unloading:'машина на розвантаженні',
+    unloaded:'вантаж розвантажено',
+    closed:'рейс завершено',
+    cancelled_by_client:'рейс скасовано',
+  };
+  const label = labels[ts.state] || ts.state;
+  let lines = [`\nПОТОЧНИЙ СТАН ЦЬОГО РЕЙСУ (ти це знаєш): ${label}.`];
+  if(ts.simple_demand_active){
+    if(who==='client') lines.push(`Експедитор може запитати чи покриєш простій €${ts.simple_demand_amount}/добу. Це твоя машина стоїть — реагуй за характером (можеш відмовити, частково погодитись, рідко повністю).`);
+    else lines.push(`Ти вимагаєш простій €${ts.simple_demand_amount}/добу.`);
+  }
+  if(ts.cancelled && who==='carrier') lines.push(`Замовник скасував. Якщо експедитор повідомив — прийми спокійно.`);
+  lines.push(`Відповідай виходячи зі стану рейсу. Не починай заново про ціну — все вже погоджено.`);
+  return lines.join('\n');
 }
 
 function buildClientSys(em, ord){
@@ -2868,7 +2903,7 @@ ${hiddenBlock}${taskBlock}${dealStateBlock}
 ТОН:
 Відповідь 2-4 речення. Діловий стиль українською. Як живий менеджер у Viber/email.
 НЕ повторюй вже відповідних питань. НЕ суперечь собі.
-НЕ виходь з ролі. НЕ кажи що ти AI.${simNowForPrompt()}`;
+НЕ виходь з ролі. НЕ кажи що ти AI.${simNowForPrompt()}${tripStateForPrompt(ord._tripState,'client')}`;
 }
 
 function renderCarriers(){

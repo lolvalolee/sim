@@ -324,6 +324,57 @@ function fireIncident(incident) {
       }
     }
   }
+
+  // Реактивне нагадування ПД: перевізник попросив ПД → якщо студент
+  // не переслав за 4 сим-год → перевізник нагадує з тиском.
+  // Нагадування скасується коли настане стан pd_sent (updateOrderState).
+  if (incident.type === 'at_border_need_pd') {
+    const payload = (() => { try { return JSON.parse(incident.payload_json||'{}'); } catch(e){ return {}; } })();
+    scheduleReminder({
+      sessionId: incident.session_id,
+      studentId: incident.student_id,
+      letterId: incident.letter_id,
+      scenarioId: incident.scenario_id,
+      type: 'carrier_pd_reminder',
+      delayHours: 4,
+      payload: { carrier_chat_id: payload.carrier_chat_id, reactive: true },
+    });
+  }
+
+  // Реактивне нагадування про документи: замовник вказав помилку EXW →
+  // якщо студент не виправив за 4 сим-год → нагадування.
+  // Скасується коли студент надішле виправлену довідку (handleCertificateSubmission).
+  if (incident.type === 'client_docs_error_exw') {
+    scheduleReminder({
+      sessionId: incident.session_id,
+      studentId: incident.student_id,
+      letterId: incident.letter_id,
+      scenarioId: incident.scenario_id,
+      type: 'client_docs_reminder',
+      delayHours: 4,
+      payload: { reactive: true },
+    });
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// Реактивне нагадування — планує інцидент-нагадування через delayHours
+// ────────────────────────────────────────────────────────────
+function scheduleReminder({ sessionId, studentId, letterId, scenarioId, type, delayHours, payload }) {
+  // Перевіряємо що такого нагадування ще не заплановано
+  const existing = db.prepare(`
+    SELECT COUNT(*) as cnt FROM incidents
+    WHERE session_id=? AND letter_id=? AND type=? AND state='pending'
+  `).get(sessionId, letterId, type);
+  if (existing.cnt > 0) return;
+
+  const id = uuidv4();
+  const scheduledAt = nowPlus(simHoursToMs(delayHours));
+  db.prepare(`
+    INSERT INTO incidents (id, session_id, student_id, letter_id, scenario_id, type, state, scheduled_at, payload_json)
+    VALUES (?,?,?,?,?,?,'pending',?,?)
+  `).run(id, sessionId, studentId, letterId, scenarioId || null, type, scheduledAt, JSON.stringify(payload || {}));
+  console.log(`[incident-sched] Reactive reminder '${type}' через ${delayHours} сим-год`);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -354,6 +405,15 @@ function updateOrderState(incident) {
       .run(map.state, new Date().toISOString(), op.id);
   } else {
     db.prepare(`UPDATE order_progress SET state=? WHERE id=?`).run(map.state, op.id);
+  }
+
+  // Коли ПД надіслано — скасовуємо реактивне нагадування про ПД
+  if (incident.type === 'client_pd_sent') {
+    const r = db.prepare(`
+      UPDATE incidents SET state='cancelled', fired_at=datetime('now')
+      WHERE session_id=? AND letter_id=? AND type='carrier_pd_reminder' AND state='pending'
+    `).run(incident.session_id, incident.letter_id);
+    if (r.changes > 0) console.log(`[incident-sched] Скасовано ПД-нагадування (студент переслав ПД)`);
   }
 }
 
@@ -696,6 +756,11 @@ function handleCertificateSubmission({ sessionId, studentId, letterId, notes, is
           db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`)
             .run(now, pendingError.id);
         }
+        // Скасовуємо реактивне нагадування про документи
+        db.prepare(`
+          UPDATE incidents SET state='cancelled', fired_at=?
+          WHERE session_id=? AND letter_id=? AND type='client_docs_reminder' AND state='pending'
+        `).run(now, sessionId, letterId);
         // Створюємо інцидент "ок"
         scheduleClientDocsOkAfterFix({ sessionId, studentId, letterId });
         return { ok: true, status: 'fixed', message: 'Довідка прийнята' };
