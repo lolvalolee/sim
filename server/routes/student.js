@@ -72,12 +72,37 @@ function assignScenariosIfNeeded(letterIds) {
     // Якщо нікого імпортного — лишаємо як є (хай буде на не-імпорті)
   }
 
-  // Зберігаємо
+  // Зберігаємо сценарії
   const updateStmt = db.prepare('UPDATE letters SET scenario_id=? WHERE id=?');
   for (let i = 0; i < letters.length; i++) {
     updateStmt.run(assignments[i], letters[i].id);
   }
+
+  // Призначаємо appear_day — хвилі листів 4+2+2
+  // День 1: перші 4 листи, День 2: наступні 2, День 3: останні 2
+  // (для кількості листів != 8 — пропорційно: ~50% / 25% / 25%)
+  const updDay = db.prepare('UPDATE letters SET appear_day=? WHERE id=?');
+  const n = letters.length;
+  let waves;
+  if (n === 8) {
+    waves = [4, 2, 2]; // стандарт
+  } else {
+    const d1 = Math.ceil(n * 0.5);
+    const d2 = Math.ceil((n - d1) / 2);
+    const d3 = n - d1 - d2;
+    waves = [d1, d2, d3];
+  }
+  let idx = 0;
+  for (let day = 1; day <= waves.length; day++) {
+    for (let k = 0; k < waves[day - 1]; k++) {
+      if (idx < letters.length) {
+        updDay.run(day, letters[idx].id);
+        idx++;
+      }
+    }
+  }
   console.log(`[scenarios] Призначено сценарії: ${letters.map((l, i) => `${l.id.slice(0,8)}=R${assignments[i]}`).join(', ')}`);
+  console.log(`[scenarios] Хвилі листів (appear_day): ${waves.join('+')}`);
 }
 
 // ── GET SESSION (or create new) ───────────────────────────────

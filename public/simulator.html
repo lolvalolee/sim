@@ -1559,6 +1559,7 @@ body {
       <span id="timer-day">День 1</span>
       <span id="timer-clock" style="font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13px">09:00</span>
       <span id="timer-date"></span>
+      <button id="pause-btn" onclick="toggleManualPause()" title="Пауза/Продовжити" style="background:transparent;border:1px solid var(--b2);color:var(--t2);cursor:pointer;border-radius:5px;width:24px;height:24px;font-size:11px;display:inline-flex;align-items:center;justify-content:center;margin-left:4px">⏸</button>
       <div id="timer-dot"></div>
     </div>
   </aside>
@@ -1605,7 +1606,7 @@ const CFG = {
   dayDuration: 120,     // хвилин реального часу = 1 день симуляції
   dayStartHour: 9,      // сим-день починається о 9:00
   dayEndHour: 21,       // сим-день закінчується о 21:00 (12 сим-годин)
-  inactivityThreshold: 60, // секунд
+  inactivityThreshold: 300, // секунд (5 хв автопаузи)
   profanityBlock: true,
   currency: '€',
   startDate: null,      // встановлюється при старті
@@ -2091,8 +2092,13 @@ function tickTimer(){
   const totalMin=S.timerMs/60000;
   const prevDay=S.timerDay;
   S.timerDay=Math.floor(totalMin/CFG.dayDuration)+1;
-  // Якщо день симуляції змінився — скидаємо обраний день у календарі (щоб бачити курс актуального дня)
-  if(prevDay !== S.timerDay) CAL_SELECTED_DAY_IDX = null;
+  // Якщо день симуляції змінився
+  if(prevDay !== S.timerDay && S.timerDay > prevDay) {
+    CAL_SELECTED_DAY_IDX = null;
+    onNewSimDay(S.timerDay);
+    if(S.module==='email') renderEmailList();
+    updateBadges();
+  }
 
   // Обчислюємо симуляційну годину (9:00–21:00 за CFG.dayDuration хв реального часу)
   const minInDay = totalMin % CFG.dayDuration;            // 0..120 хв реал у межах дня
@@ -2113,22 +2119,84 @@ function tickTimer(){
   if(el_clock) el_clock.textContent=`${String(simHour).padStart(2,'0')}:${String(simMin).padStart(2,'0')}`;
   checkEvents();
   updateRatesDisplay();
+  checkAutoComplete();
+}
+
+// Авто-завершення: коли всі рейси закриті (done/cancelled) і всі листи з'явились
+let _autoCompleteShown = false;
+function checkAutoComplete(){
+  if(_autoCompleteShown) return;
+  if(!S.orders || S.orders.length===0) return;
+  // Усі листи мають вже з'явитись (минув останній день хвилі)
+  const maxAppearDay = Math.max(...S.emails.map(e=>e.appearDay||1), 1);
+  if(S.timerDay < maxAppearDay) return;
+  // Чи студент взагалі почав роботу (є хоч одна угода/заявка)?
+  const anyEngaged = S.orders.some(o=>o.carrierId || o.clientFreightAgreed || o.status==='done');
+  if(!anyEngaged) return;
+  // Усі рейси з угодами закриті?
+  const activeOrders = S.orders.filter(o=>o.carrierId || o.clientFreightAgreed);
+  if(activeOrders.length===0) return;
+  const allClosed = activeOrders.every(o=>o.status==='done' || o.status==='cancelled');
+  if(allClosed){
+    _autoCompleteShown = true;
+    showSimCompleteModal();
+  }
+}
+
+function showSimCompleteModal(){
+  document.getElementById('simdone-modal')?.remove();
+  const ov=document.createElement('div');
+  ov.id='simdone-modal';
+  ov.style.cssText=`position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10002;display:flex;align-items:center;justify-content:center;padding:20px`;
+  ov.innerHTML=`
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:14px;max-width:400px;width:100%;text-align:center;padding:32px 24px">
+      <div style="font-size:44px;margin-bottom:12px">🏁</div>
+      <div style="font-size:21px;font-weight:700;color:var(--t1);margin-bottom:8px">Симуляцію завершено!</div>
+      <div style="font-size:13px;color:var(--t3);margin-bottom:20px;line-height:1.5">Усі рейси закрито. Подивіться своє резюме — оцінку роботи по всіх параметрах.</div>
+      <button onclick="document.getElementById('simdone-modal').remove();go('resume')" style="
+        background:var(--acc);border:none;border-radius:8px;width:100%;padding:12px;
+        cursor:pointer;color:#000;font-family:inherit;font-size:14px;font-weight:600;margin-bottom:8px
+      ">📊 Переглянути резюме</button>
+      <button onclick="document.getElementById('simdone-modal').remove()" style="
+        background:transparent;border:1px solid var(--b2);border-radius:8px;width:100%;padding:10px;
+        cursor:pointer;color:var(--t3);font-family:inherit;font-size:13px
+      ">Залишитись</button>
+    </div>
+  `;
+  document.body.appendChild(ov);
 }
 function pauseTimer(){
   S.paused=true;
   document.getElementById('timer-dot')?.classList.add('paused');
+  updatePauseBtn();
 }
 function resumeTimer(){
   S.paused=false; S.lastTick=Date.now();
+  S.manualPause=false;
   document.getElementById('timer-dot')?.classList.remove('paused');
+  updatePauseBtn();
   resetInactivity();
+}
+// Ручна пауза — знімається тільки кнопкою
+function toggleManualPause(){
+  if(S.paused){
+    resumeTimer();
+  } else {
+    S.manualPause=true;
+    pauseTimer();
+  }
+}
+function updatePauseBtn(){
+  const btn=document.getElementById('pause-btn');
+  if(btn) btn.textContent = S.paused ? '▶' : '⏸';
 }
 function resetInactivity(){
   clearTimeout(S.inactivityTimer);
-  S.inactivityTimer=setTimeout(pauseTimer, CFG.inactivityThreshold*1000);
+  S.inactivityTimer=setTimeout(()=>{ if(!S.manualPause) pauseTimer(); }, CFG.inactivityThreshold*1000);
 }
-document.addEventListener('mousemove',()=>{if(S.paused)resumeTimer();resetInactivity();});
-document.addEventListener('keydown',()=>{if(S.paused)resumeTimer();resetInactivity();});
+// Авто-відновлення при дії — тільки якщо це НЕ ручна пауза
+document.addEventListener('mousemove',()=>{if(S.paused&&!S.manualPause)resumeTimer();resetInactivity();});
+document.addEventListener('keydown',()=>{if(S.paused&&!S.manualPause)resumeTimer();resetInactivity();});
 
 // ================================================================
 // EVENT SYSTEM
@@ -2210,10 +2278,11 @@ function go(mod){
 function unlock(id){document.getElementById('n-'+id)?.classList.remove('locked');}
 
 function updateBadges(){
-  const unread=S.emails.filter(e=>e.unread).length;
+  const visibleEmails=(S.emails||[]).filter(e=>(e.appearDay||1)<=(S.timerDay||1));
+  const unread=visibleEmails.filter(e=>e.unread).length;
   const eb=document.getElementById('badge-email');
   if(eb){
-    const total=S.emails?S.emails.length:0;
+    const total=visibleEmails.length;
     eb.textContent=unread||total;
     eb.style.display=(unread||total)?'':'none';
   }
@@ -2357,10 +2426,21 @@ function selectCalDay(simDayIdx){
   updateCalendar();
 }
 
+// Гарантуємо що курс для дня існує — якщо ні, генеруємо дрейфом [-0.30..+0.40]
+function ensureRateForDay(dayIdx){
+  if(!S.rates) S.rates = DEFAULT_RATES.slice();
+  while(S.rates.length <= dayIdx){
+    const last = S.rates[S.rates.length-1] || 41.50;
+    const drift = -0.30 + Math.random()*0.70; // [-0.30 .. +0.40]
+    S.rates.push(Math.round((last + drift)*100)/100);
+  }
+  return S.rates[dayIdx];
+}
+
 function showCalRate(simDayIdx, isToday){
   const box=document.getElementById('sb-cal-rate');
   if(!box) return;
-  if(simDayIdx===null || simDayIdx<0 || simDayIdx>4 || !S.rates){
+  if(simDayIdx===null || simDayIdx<0 || !S.rates){
     box.className='sb-cal-rate-box empty';
     box.textContent='Клікніть на день симуляції';
     return;
@@ -2368,7 +2448,7 @@ function showCalRate(simDayIdx, isToday){
   const startD=parseStartDateUA(S.startDate);
   const d=new Date(startD); d.setDate(startD.getDate()+simDayIdx);
   const dateStr=`${d.getDate()} ${UA_MONTHS[d.getMonth()]}`;
-  const rate=S.rates[simDayIdx];
+  const rate=ensureRateForDay(simDayIdx);
   const todayMark=isToday?' · сьогодні':'';
   box.className='sb-cal-rate-box';
   box.innerHTML=`<div class="sb-cal-rate-date">${dateStr}${todayMark} · курс EUR/UAH</div>`+
@@ -2441,7 +2521,9 @@ function efF(t,btn){
 function renderEmailList(filter){
   const el=document.getElementById('email-list'); if(!el) return;
   const f=filter||document.querySelector('.flt.on')?.getAttribute('data-f')||'all';
-  const list=f==='all'?S.emails:S.emails.filter(e=>e.type===f);
+  // Показуємо лише листи день появи яких вже настав (хвилі 4+2+2)
+  const visible=S.emails.filter(e=>(e.appearDay||1)<=(S.timerDay||1));
+  const list=f==='all'?visible:visible.filter(e=>e.type===f);
   el.innerHTML=list.map(e=>{
     const ord=S.orders.find(o=>o.id===e.orderId);
     const tags=[
@@ -2651,6 +2733,15 @@ async function saveChatToServer(carrierId){
   }).catch(()=>{});
 }
 
+// Поточний симуляційний час для AI промптів
+function simNowForPrompt(){
+  const day = S.timerDay || 1;
+  const h = S.simHour != null ? S.simHour : 9;
+  const m = S.simMin != null ? S.simMin : 0;
+  const simDate = addDays(S.startDate, day-1);
+  return `\nПОТОЧНИЙ ЧАС СИМУЛЯЦІЇ: День ${day}, ${simDate}, ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}. Робочий день 9:00-21:00. Враховуй час: вранці бадьоро, ввечері втомлено, пізно — можеш сказати що завтра продовжимо.`;
+}
+
 function buildClientSys(em, ord){
   // Рівень складності 1 (default) — всі замовники українською, рівень 2 — країною
   // Поки що завжди українською (груповий difficulty=1)
@@ -2777,7 +2868,7 @@ ${hiddenBlock}${taskBlock}${dealStateBlock}
 ТОН:
 Відповідь 2-4 речення. Діловий стиль українською. Як живий менеджер у Viber/email.
 НЕ повторюй вже відповідних питань. НЕ суперечь собі.
-НЕ виходь з ролі. НЕ кажи що ти AI.`;
+НЕ виходь з ролі. НЕ кажи що ти AI.${simNowForPrompt()}`;
 }
 
 function renderCarriers(){
@@ -3213,7 +3304,7 @@ ${willRefuse ? `ЗАРАЗ: "${noAvail[Math.floor(Math.random()*noAvail.length)]
 6. Коли домовились — кажи: "Домовились. Фрахт €[сума]. Водій [ПІБ], авто [номер]/[причіп]"
 7. НЕ виходь з ролі. НЕ кажи що ти AI.
 
-ВАЖЛИВО про стиль: пиши коротко, по-діловому, як у реальних переписках перевізників — 1-3 короткі речення. Не пиши формальних листів-простирадл.`;
+ВАЖЛИВО про стиль: пиши коротко, по-діловому, як у реальних переписках перевізників — 1-3 короткі речення. Не пиши формальних листів-простирадл.${simNowForPrompt()}`;
 }
 
 function confirmCarrier(cid){
@@ -8175,6 +8266,7 @@ async function loadSessionFromServer(token){
       willCancel: false,
       incoterms: letter.incoterms||'',
       scenario: letter.scenario||'agree',
+      appearDay: letter.appear_day || 1,
       email: {
         from: letter.from_name,
         company: letter.company,
@@ -8200,6 +8292,7 @@ async function loadSessionFromServer(token){
       bodyText: o.email?.bodyText||o.email?.body||'',
       incoterms: o.incoterms||'',
       scenario: o.scenario||'agree',
+      appearDay: o.appearDay || 1,
       unread: !thread||thread.messages.length===0,
       replies: thread?thread.messages:[],
     };
@@ -8711,6 +8804,60 @@ async function cancelTripAndNotifyCarrier(letterId) {
   } catch(e) {
     notify('Помилка з\'єднання', 'err');
   }
+}
+
+// ─── МОДАЛКА НОВОГО ДНЯ (Деплой 19b) ────────────────────────
+function onNewSimDay(dayNum) {
+  // Перевіряємо чи студент вимкнув показ
+  if (localStorage.getItem('docaa_hide_newday') === '1') return;
+  showNewDayModal(dayNum);
+}
+
+function showNewDayModal(dayNum) {
+  document.getElementById('newday-modal')?.remove();
+  const simDate = addDays(S.startDate, dayNum - 1);
+  // Курс цього дня
+  let rateStr = '';
+  if (S.rates && S.rates[dayNum - 1]) {
+    rateStr = `Курс EUR/UAH сьогодні: <strong style="color:var(--acc)">${Number(S.rates[dayNum-1]).toFixed(2)} ₴</strong>`;
+  }
+  // Чи є нові листи цього дня
+  const newLetters = (S.emails || []).filter(e => (e.appearDay || 1) === dayNum).length;
+  const lettersStr = newLetters > 0
+    ? `<div style="font-size:13px;color:var(--t1);margin-top:10px">📬 Нових запитів: <strong>${newLetters}</strong></div>`
+    : '';
+
+  const ov = document.createElement('div');
+  ov.id = 'newday-modal';
+  ov.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px`;
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  ov.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:14px;max-width:380px;width:100%;overflow:hidden;text-align:center">
+      <div style="padding:28px 24px 20px">
+        <div style="font-size:40px;margin-bottom:10px">🌅</div>
+        <div style="font-size:20px;font-weight:700;color:var(--t1);margin-bottom:4px">Новий день — День ${dayNum}</div>
+        <div style="font-size:13px;color:var(--t3);font-family:var(--mono)">${simDate}</div>
+        ${rateStr ? `<div style="font-size:13px;color:var(--t2);margin-top:14px">${rateStr}</div>` : ''}
+        ${lettersStr}
+      </div>
+      <div style="padding:0 24px 20px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t3);justify-content:center;margin-bottom:14px;cursor:pointer">
+          <input type="checkbox" id="newday-hide" style="cursor:pointer"> більше не показувати
+        </label>
+        <button onclick="closeNewDayModal()" style="
+          background:var(--acc);border:none;border-radius:8px;width:100%;
+          padding:11px;cursor:pointer;color:#000;font-family:inherit;font-size:14px;font-weight:600
+        ">Продовжити роботу</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ov);
+}
+
+function closeNewDayModal() {
+  const hide = document.getElementById('newday-hide')?.checked;
+  if (hide) localStorage.setItem('docaa_hide_newday', '1');
+  document.getElementById('newday-modal')?.remove();
 }
 
 </script>
