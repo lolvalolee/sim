@@ -2969,6 +2969,7 @@ function resetCarF(){
 function renderCarrierList(){
   const{dir,type,q}=S.carrierFilter;
   const filt=S.carriers.filter(c=>{
+    if(c._fromExchange) return false; // біржові не показуються у довіднику
     if(dir!=='all'&&!c.dirs.includes(dir)) return false;
     if(type!=='all'&&!c.types.some(t=>t===type||t.split(' ')[0]===type.split(' ')[0])) return false;
     if(q&&!c.name.toLowerCase().includes(q)&&!c.person.toLowerCase().includes(q)) return false;
@@ -2976,7 +2977,8 @@ function renderCarrierList(){
   });
   const el=document.getElementById('carriers-list');
   const cnt=document.getElementById('car-count');
-  if(cnt) cnt.textContent='Знайдено: '+filt.length+' з '+S.carriers.length+' перевізників';
+  const baseCount=S.carriers.filter(c=>!c._fromExchange).length;
+  if(cnt) cnt.textContent='Знайдено: '+filt.length+' з '+baseCount+' перевізників';
   if(!el) return;
   const dlcls={none:'ds-none',talk:'ds-talk',ok:'ds-ok',no:'ds-no'};
   const dlbl={none:'',talk:'Переговори',ok:'✓ Угода',no:'Відмова'};
@@ -6973,6 +6975,8 @@ async function renderResume(){
     cert_resubmitted_exw_ok: 'Виправив EXW у довідці',
     cert_repeated_error_exw: 'Повторна помилка EXW',
     cert_submitted_ok: 'Довідка надіслана',
+    used_exchange: 'Скористався біржею',
+    compared_sources: 'Порівняв базу і біржу',
   };
 
   const metrics = analysis?.metrics || {};
@@ -7247,54 +7251,101 @@ function saveCargoBoardToServer(){
   });
 }
 
-// AI carrier initiates chat from exchange board
-function scheduleCarrierFromExchange(cargoIdx){
+// AI biржові перевізники відгукуються на пост (підбір на сервері)
+async function scheduleCarrierFromExchange(cargoIdx){
   const cargo=S.cargoBoard?.[cargoIdx]; if(!cargo) return;
-  // Pick 1-3 matching carriers (excluding those already in chat to avoid disrupting active conversations)
-  const matching=S.carriers.filter(c=>{
-    const typeMatch=c.types?.some(t=>
-      t===cargo.vehicle_type||
-      t.toLowerCase().includes(cargo.vehicle_type.toLowerCase().split(' ')[0].toLowerCase())
-    );
-    // Exclude carriers with existing chat history
-    const alreadyTalking = S.chats[c.id]?.some(m=>!m.loading);
-    return typeMatch && (c.availability||0.6)>0.4 && !alreadyTalking;
+  const token=localStorage.getItem('docaa_token');
+  // Знаходимо letter_id якщо цей вантаж пов'язаний з рейсом (за маршрутом)
+  let letterId = null;
+  const matchOrd = S.orders?.find(o => {
+    const r = (o.dirs||[]).join(' ').toLowerCase();
+    return cargo.route && r && cargo.route.toLowerCase().includes((o.dirs?.[0]||'').toLowerCase());
   });
-  if(!matching.length) return;
-  // Shuffle and pick 1-2
-  const shuffled=[...matching].sort(()=>Math.random()-0.5);
-  const picks=shuffled.slice(0,1+Math.floor(Math.random()*2)); // 1-2 carriers
-  // Schedule responses: 15-40 min real time = 900-2400 seconds
-  picks.forEach((carrier,i)=>{
-    const delayMs=(900+Math.random()*1500+i*600)*1000; // stagger
-    setTimeout(()=>{
-      if(S.cargoBoard?.[cargoIdx]?.status!=='active') return;
-      initCarrierFromExchange(carrier,cargo,cargoIdx);
-    }, delayMs);
-  });
+  if (matchOrd) letterId = matchOrd.id;
+
+  try {
+    const resp = await fetch('/api/student/exchange/post', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({
+        route: cargo.route,
+        vehicle_type: cargo.vehicle_type,
+        weight: cargo.weight,
+        volume: cargo.volume,
+        load_date: cargo.load_date,
+        notes: cargo.notes,
+        letter_id: letterId,
+      }),
+    });
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(!data.responders || data.responders.length===0) return;
+
+    // Зберігаємо біржових перевізників у S.carriers (щоб чат працював)
+    // але позначаємо їх fromExchange — у пошуку вони не з'являться (рендер бере active базу окремо)
+    data.responders.forEach(r => {
+      if(!S.carriers.find(c=>c.id===r.carrier_id)){
+        S.carriers.push({
+          id:r.carrier_id, name:r.name, person:r.person, phone:r.phone||'',
+          dirs: typeof r.dirs==='string'?JSON.parse(r.dirs):r.dirs,
+          types: typeof r.vehicle_types==='string'?JSON.parse(r.vehicle_types):r.vehicle_types,
+          personality:r.personality, availability:0.7,
+          _fromExchange:true,
+        });
+      }
+    });
+
+    // Хвилі: wave 1 одразу (з затримкою 15-40 сим-хв), wave 2 пізніше
+    data.responders.forEach(r => {
+      const baseDelay = r.wave===1 ? (15+Math.random()*25) : (40+Math.random()*50); // сим-хв
+      const realMs = simMinToRealMs(baseDelay);
+      setTimeout(()=>{
+        if(S.cargoBoard?.[cargoIdx]?.status!=='active') return;
+        initExchangeResponder(r, cargo);
+      }, realMs);
+    });
+  } catch(e){}
 }
 
-async function initCarrierFromExchange(carrier, cargo, cargoIdx){
-  if(!S.chats[carrier.id]) S.chats[carrier.id]=[];
-  // Only initialize deal status if there's no existing relationship
-  if(!S.deals[carrier.id] || S.deals[carrier.id]==='none') S.deals[carrier.id]='talk';
-  S.contactedCarriers.add(carrier.id);
-  // Build opening message from carrier
-  const sys=buildCarrierSys(carrier,{
-    route:cargo.route, cargo:cargo.vehicle_type,
-    vehicle:cargo.vehicle_type,
-    loadDate:cargo.load_date||'уточнюється',
-    delivDate:''
+// Переводимо сим-хвилини у реальні мс (день=120хв реал, 12 сим-год)
+function simMinToRealMs(simMin){
+  // 1 сим-год = 10 хв реал → 1 сим-хв = 10/60 хв реал
+  return Math.round(simMin * (10/60) * 60 * 1000);
+}
+
+async function initExchangeResponder(responder, cargo){
+  const cid = responder.carrier_id;
+  if(!S.chats[cid]) S.chats[cid]=[];
+  if(!S.deals[cid] || S.deals[cid]==='none') S.deals[cid]='talk';
+  S.contactedCarriers.add(cid);
+
+  const carrier = S.carriers.find(c=>c.id===cid) || {name:responder.name, person:responder.person};
+  const sys = buildCarrierSys(carrier, {
+    route: cargo.route, cargo: cargo.vehicle_type,
+    vehicle: cargo.vehicle_type,
+    loadDate: cargo.load_date||'уточнюється', delivDate:'',
   });
-  const prompt=`Ти бачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?' '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. Напиши перше коротке повідомлення — пропонуєш своє авто або запитуєш деталі. Стиль як у реальних переговорах: дуже коротко.`;
+
+  // Роль: дає ціну або питає деталі
+  let prompt;
+  if(responder.gives_price && responder.start_price>0){
+    const readyNote = responder.readiness==='ready'
+      ? 'Ти готовий взяти вантаж, налаштований позитивно.'
+      : 'Ти зацікавився, але ще придивляєшся.';
+    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. ${readyNote} Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і одразу назви свою ціну ${responder.start_price} EUR. Дуже коротко, як у Viber.`;
+  } else {
+    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}. Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і запитай деталі (точна адреса / вага / коли вантажити / яка ціна). Ціну поки НЕ називай. Дуже коротко, як у Viber.`;
+  }
+
   try{
     const data=await callClaude(sys,[{role:'user',content:prompt}]);
     const text=typeof data==='string'?data:(data.content?.[0]?.text||'');
-    S.chats[carrier.id].push({role:'carrier',text,time:nowTime(),fromExchange:true});
+    S.chats[cid].push({role:'carrier',text,time:nowTime(),fromExchange:true,read:false});
     updateBadges();
-    notify('📦 '+carrier.name+' пропонує транспорт по вашому вантажу','warn');
+    notify('📦 '+responder.name+' відгукнувся на ваш вантаж','warn');
+    if(typeof playClientSound==='function') playClientSound();
     if(S.module==='chats') renderChats();
-    saveChatToServer(carrier.id);
+    if(typeof saveChatToServer==='function') saveChatToServer(cid);
   }catch(e){}
 }
 

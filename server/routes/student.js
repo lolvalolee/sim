@@ -949,6 +949,35 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     });
   }
 
+  // Resume: поєднання джерел (база + біржа).
+  // Якщо студент вів переговори і з довідниковим, і з біржовим перевізником
+  // у цій сесії — +бал за порівняння джерел (одноразово).
+  if (isApprove) {
+    try {
+      const already = db.prepare(`
+        SELECT COUNT(*) c FROM resume_points
+        WHERE session_id=? AND type='compared_sources'
+      `).get(session.id).c;
+      if (already === 0) {
+        // Чи є чати і з біржовим, і з довідниковим?
+        const chats = db.prepare(`
+          SELECT cc.carrier_id, COALESCE(c.for_exchange,0) AS fe
+          FROM carrier_chats cc JOIN carriers c ON c.id = cc.carrier_id
+          WHERE cc.session_id=?
+        `).all(session.id);
+        const hasExchange = chats.some(x => x.fe === 1);
+        const hasDirectory = chats.some(x => x.fe === 0);
+        if (hasExchange && hasDirectory) {
+          incidentScheduler.addResumePoint({
+            sessionId: session.id, studentId: req.user.id, letterId,
+            type: 'compared_sources', impact: 2,
+            context: { note: 'вів переговори і з базою, і з біржею' },
+          });
+        }
+      }
+    } catch(e) { console.error('compared_sources resume:', e.message); }
+  }
+
   // Якщо approve — плануємо followup-тригери "де заявка"
   // Тільки якщо є activна заявка для цього letter
   if (isApprove) {
@@ -1901,7 +1930,9 @@ router.get('/resume/analysis', STU, async (req, res) => {
   const initiative = Math.max(0, Math.min(100,
     40 +
     (typeCounts['pd_proactive'] || 0) * 20 +
-    (typeCounts['pd_forwarded'] || 0) * 10 -
+    (typeCounts['pd_forwarded'] || 0) * 10 +
+    (typeCounts['compared_sources'] || 0) * 15 +
+    (typeCounts['used_exchange'] || 0) * 5 -
     (typeCounts['pd_not_forwarded'] || 0) * 15
   ));
 
@@ -1942,6 +1973,110 @@ router.get('/resume/analysis', STU, async (req, res) => {
     margin,
     type_counts: typeCounts,
   });
+});
+
+// ── БІРЖА ВАНТАЖІВ (Деплой 21) ──────────────────────────────
+// POST /api/student/exchange/post — студент розміщує вантаж на біржі.
+// Сервер підбирає 1-4 біржових перевізники (for_exchange=1) за напрямком/типом,
+// призначає ролі (ціна/питання) і ціни, повертає клієнту для показу відгуків.
+router.post('/exchange/post', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const { route, vehicle_type, weight, volume, load_date, notes, letter_id } = req.body;
+  if (!route) return res.status(400).json({ error: 'route_required' });
+
+  // Зберігаємо пост у cargo_board
+  const cargoId = uuidv4();
+  try {
+    db.prepare(`
+      INSERT INTO cargo_board (id, session_id, student_id, route, vehicle_type, weight, volume, load_date, notes, status)
+      VALUES (?,?,?,?,?,?,?,?,?,'active')
+    `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '');
+  } catch (e) {
+    console.error('cargo_board insert:', e.message);
+  }
+
+  // Визначаємо напрямки рейсу для підбору (з letter якщо є, інакше з route-тексту)
+  let dirsNeeded = [];
+  if (letter_id) {
+    const letter = db.prepare('SELECT dirs FROM letters WHERE id=?').get(letter_id);
+    if (letter) { try { dirsNeeded = JSON.parse(letter.dirs || '[]'); } catch(e){} }
+  }
+
+  // Підбираємо біржових перевізників (for_exchange=1)
+  const exchangeCarriers = db.prepare(`
+    SELECT id, name, person, phone, dirs, vehicle_types, reliability, availability, personality, nationality
+    FROM carriers WHERE active=1 AND COALESCE(for_exchange,0)=1
+  `).all();
+
+  // Фільтр за напрямком (хоча б одна спільна країна) і типом ТЗ
+  const vt = (vehicle_type || 'Тент').toLowerCase().split(' ')[0];
+  const matching = exchangeCarriers.filter(c => {
+    let cdirs = []; try { cdirs = JSON.parse(c.dirs || '[]'); } catch(e){}
+    let ctypes = []; try { ctypes = JSON.parse(c.vehicle_types || '[]'); } catch(e){}
+    // Напрямок: якщо знаємо dirsNeeded — хоч одна спільна; інакше пропускаємо фільтр
+    const dirOk = dirsNeeded.length === 0 || dirsNeeded.some(d => cdirs.includes(d));
+    // Тип ТЗ: хоч один збігається
+    const typeOk = ctypes.some(t => t.toLowerCase().includes(vt) || vt.includes(t.toLowerCase()));
+    return dirOk && typeOk;
+  });
+
+  if (matching.length === 0) {
+    return res.json({ ok: true, cargo_id: cargoId, responders: [] });
+  }
+
+  // Перемішуємо і беремо 1-4
+  const shuffled = matching.sort(() => Math.random() - 0.5);
+  const count = Math.min(shuffled.length, 1 + Math.floor(Math.random() * 4)); // 1-4
+  const picks = shuffled.slice(0, count);
+
+  // Орієнтир ціни — з листа (середній фрахт) якщо є
+  let baseFreight = 0;
+  if (letter_id) {
+    const l = db.prepare('SELECT freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(letter_id);
+    if (l) baseFreight = l.freight_amount || ((l.carrier_range_min + l.carrier_range_max) / 2) || 0;
+  }
+
+  // Призначаємо ролі і ціни
+  // Перші 2 (parity) → дають ціну, решта → питають деталі
+  const responders = picks.map((c, i) => {
+    const givesPrice = i < 2; // перші 2 дають ціну, решта питають
+    // Розкид ціни від personality: tough/aggressive дорожче, local/flaky дешевше
+    let priceOffset = 0;
+    const pers = c.personality || 'local';
+    if (['tough','aggressive','pushy','bargainer'].includes(pers)) priceOffset = 50 + Math.random()*150; // дорожчі
+    else if (['local','flaky','unreliable'].includes(pers)) priceOffset = -(50 + Math.random()*200); // дешевші
+    else priceOffset = -100 + Math.random()*200; // середні
+    const startPrice = baseFreight > 0 ? Math.round(baseFreight + priceOffset) : 0;
+    // Зацікавленість: ~3 "цікавляться", ~2 "готові погодитись" — рандомно
+    const readiness = Math.random() < 0.4 ? 'ready' : 'interested';
+    return {
+      carrier_id: c.id,
+      name: c.name,
+      person: c.person,
+      phone: c.phone,
+      dirs: c.dirs,
+      vehicle_types: c.vehicle_types,
+      personality: pers,
+      gives_price: givesPrice,
+      start_price: startPrice,
+      readiness,
+      wave: i < 2 ? 1 : 2, // перша хвиля 1-2, друга решта
+    };
+  });
+
+  // Resume point: студент скористався біржею
+  try {
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id,
+      letterId: letter_id || null,
+      type: 'used_exchange', impact: 0,
+      context: { route, responders: responders.length },
+    });
+  } catch(e){}
+
+  res.json({ ok: true, cargo_id: cargoId, responders });
 });
 
 module.exports = router;
