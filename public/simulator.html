@@ -1556,7 +1556,8 @@ body {
     </nav>
 
     <div id="sb-timer">
-      <span id="timer-day">День 1/5</span>
+      <span id="timer-day">День 1</span>
+      <span id="timer-clock" style="font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13px">09:00</span>
       <span id="timer-date"></span>
       <div id="timer-dot"></div>
     </div>
@@ -1601,7 +1602,9 @@ body {
 const CFG = {
   targetProfit: 1000,
   totalDays: 5,
-  dayDuration: 36,      // хвилин реального часу = 1 день
+  dayDuration: 120,     // хвилин реального часу = 1 день симуляції
+  dayStartHour: 9,      // сим-день починається о 9:00
+  dayEndHour: 21,       // сим-день закінчується о 21:00 (12 сим-годин)
   inactivityThreshold: 60, // секунд
   profanityBlock: true,
   currency: '€',
@@ -2087,16 +2090,27 @@ function tickTimer(){
   const now=Date.now(); S.timerMs+=now-S.lastTick; S.lastTick=now;
   const totalMin=S.timerMs/60000;
   const prevDay=S.timerDay;
-  S.timerDay=Math.min(5,Math.floor(totalMin/CFG.dayDuration)+1);
+  S.timerDay=Math.floor(totalMin/CFG.dayDuration)+1;
   // Якщо день симуляції змінився — скидаємо обраний день у календарі (щоб бачити курс актуального дня)
   if(prevDay !== S.timerDay) CAL_SELECTED_DAY_IDX = null;
-  const mins=Math.floor(totalMin%CFG.dayDuration);
-  const secs=Math.floor(S.timerMs/1000)%60;
+
+  // Обчислюємо симуляційну годину (9:00–21:00 за CFG.dayDuration хв реального часу)
+  const minInDay = totalMin % CFG.dayDuration;            // 0..120 хв реал у межах дня
+  const dayFrac = minInDay / CFG.dayDuration;             // 0..1 частка дня
+  const simSpanHours = CFG.dayEndHour - CFG.dayStartHour; // 12 сим-год
+  const simHourFloat = CFG.dayStartHour + dayFrac * simSpanHours;
+  const simHour = Math.floor(simHourFloat);
+  const simMin = Math.floor((simHourFloat - simHour) * 60);
+  S.simHour = simHour;
+  S.simMin = simMin;
+
   const simDate=addDays(S.startDate, S.timerDay-1);
   const el_day=document.getElementById('timer-day');
   const el_date=document.getElementById('timer-date');
-  if(el_day) el_day.textContent=`День ${S.timerDay}/5`;
+  const el_clock=document.getElementById('timer-clock');
+  if(el_day) el_day.textContent=`День ${S.timerDay}`;
   if(el_date) el_date.textContent=simDate;
+  if(el_clock) el_clock.textContent=`${String(simHour).padStart(2,'0')}:${String(simMin).padStart(2,'0')}`;
   checkEvents();
   updateRatesDisplay();
 }

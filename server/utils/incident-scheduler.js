@@ -23,12 +23,23 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const scenariosLib = require('./incident-scenarios');
 
-// Один сим-час: за замовч. 1.5 хв реального
-// (Збігається з SIM_HOUR_MS у simulator.html)
-const SIM_HOUR_MS_REAL = 1.5 * 60 * 1000;
+// Один сим-час = 10 хв реального (день 120хв = 12 сим-год 9:00-21:00)
+// Збігається з CFG.dayDuration=120 у simulator.html
+const SIM_HOUR_MS_REAL = 10 * 60 * 1000;
+
+// Швидкість фури — км за робочий день (12 сим-год)
+const KM_PER_DAY = 650;
+const SIM_WORK_HOURS = 12;
 
 function simHoursToMs(hours) {
   return Math.round(hours * SIM_HOUR_MS_REAL);
+}
+
+// Переводимо відстань (км) у робочі сим-години їзди
+// dist=650км → 12 сим-год (рівно робочий день)
+function kmToSimHours(km) {
+  if (!km || km <= 0) return 1; // мінімум 1 сим-год
+  return (km / KM_PER_DAY) * SIM_WORK_HOURS;
 }
 
 // Допоміжне: now+ms у вигляді ISO
@@ -39,16 +50,19 @@ function nowPlus(ms) {
 // ────────────────────────────────────────────────────────────
 // Планування початкових інцидентів при підтвердженні угоди
 // ────────────────────────────────────────────────────────────
-function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationId, scenarioId, carrierChatId, loadDateIso }) {
+function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationId, scenarioId, carrierChatId, loadDateIso, distToBorder, distAfterBorder }) {
   if (!sessionId || !studentId || !letterId) {
     console.warn('[incident-sched] scheduleInitialIncidents: missing params');
     return;
   }
   const scenario = scenarioId || 1;
 
+  // Інтервали на основі реальних відстаней (з ODS Симулятор_1_1)
+  // Якщо відстані не задані — фолбек на старі фіксовані значення
+  const hoursToBorder = distToBorder ? kmToSimHours(distToBorder) : 24;
+  const hoursAfterBorder = distAfterBorder ? kmToSimHours(distAfterBorder) : 24;
+
   // Базовий час відліку — або дата завантаження (loadDateIso), або зараз
-  // Для простоти: рахуємо від моменту підтвердження (зараз).
-  // Час до loading_started = (loadDateIso - now), якщо є, або 0
   let loadingStartedAt;
   if (loadDateIso) {
     try {
@@ -83,20 +97,19 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
   // 1) "Завантажились, виїжаємо" — через 2 год сим від loadingStartedAt
   const loaded = add('loaded_ok', loadingStartedAt, inc.loading_started_to_loaded, { carrier_chat_id: carrierChatId });
 
-  // 2) Після завантаження — через 24 год сим — "на кордоні"
-  // Тип залежить від сценарію
+  // 2) Після завантаження — ЧЕРЕЗ ВІДСТАНЬ ДО КОРДОНУ — "на кордоні"
   let atBorderType = 'at_border_clear'; // R1, R6, R8 — гладке
   if ([2, 3, 5, 7].includes(scenario)) atBorderType = 'at_border_need_pd'; // R2,R3 ПД; R5,R7 теж з ПД
   if ([4].includes(scenario)) atBorderType = 'at_border_clear'; // R4 — гладко, проблема буде на розвантаженні
   if ([6].includes(scenario)) atBorderType = 'at_border_clear'; // R6 — гладко, проблема на терміналі
 
-  const atBorder = add(atBorderType, loaded.scheduledAt, inc.loaded_to_at_border, {
+  const atBorder = add(atBorderType, loaded.scheduledAt, hoursToBorder, {
     carrier_chat_id: carrierChatId,
     next_step: 'arrived_terminal',
   });
 
-  // 3) Після кордону — через 24 год сим — "прибули на термінал" (з запитом довідки)
-  const atTerminal = add('at_terminal', atBorder.scheduledAt, inc.at_border_to_arrived_terminal, {
+  // 3) Після кордону — ЧЕРЕЗ ВІДСТАНЬ ПІСЛЯ КОРДОНУ — "прибули на термінал"
+  const atTerminal = add('at_terminal', atBorder.scheduledAt, hoursAfterBorder, {
     carrier_chat_id: carrierChatId,
   });
 

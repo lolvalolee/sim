@@ -954,7 +954,7 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     try {
       const chatForCarrier = db.prepare('SELECT id FROM carrier_chats WHERE session_id=? AND carrier_id=?')
         .get(session.id, carrierId);
-      const letterScenario = db.prepare('SELECT scenario_id FROM letters WHERE id=?').get(letterId);
+      const letterScenario = db.prepare('SELECT scenario_id, dist_to_border, dist_after_border, border_name FROM letters WHERE id=?').get(letterId);
       // Перевіряємо чи вже не плановано інциденти для цього letter+carrier
       const alreadyPlanned = db.prepare(`
         SELECT COUNT(*) as cnt FROM incidents
@@ -973,6 +973,8 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
           scenarioId: letterScenario.scenario_id,
           carrierChatId: chatForCarrier.id,
           loadDateIso,
+          distToBorder: letterScenario.dist_to_border,
+          distAfterBorder: letterScenario.dist_after_border,
         });
       }
     } catch (e) {
