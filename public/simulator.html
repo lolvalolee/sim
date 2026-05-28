@@ -2169,15 +2169,17 @@ function pauseTimer(){
   S.paused=true;
   document.getElementById('timer-dot')?.classList.add('paused');
   updatePauseBtn();
+  showPauseOverlay();
 }
 function resumeTimer(){
   S.paused=false; S.lastTick=Date.now();
   S.manualPause=false;
   document.getElementById('timer-dot')?.classList.remove('paused');
   updatePauseBtn();
+  hidePauseOverlay();
   resetInactivity();
 }
-// Ручна пауза — знімається тільки кнопкою
+// Ручна пауза — знімається тільки кнопкою/оверлеєм
 function toggleManualPause(){
   if(S.paused){
     resumeTimer();
@@ -2190,13 +2192,35 @@ function updatePauseBtn(){
   const btn=document.getElementById('pause-btn');
   if(btn) btn.textContent = S.paused ? '▶' : '⏸';
 }
+// Оверлей-заглушка під час паузи — блокує весь інтерфейс
+function showPauseOverlay(){
+  if(document.getElementById('pause-overlay')) return;
+  const ov=document.createElement('div');
+  ov.id='pause-overlay';
+  ov.style.cssText=`position:fixed;inset:0;background:rgba(10,10,10,.82);z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;backdrop-filter:blur(4px);cursor:pointer`;
+  ov.innerHTML=`
+    <div style="text-align:center;user-select:none">
+      <div style="font-size:54px;margin-bottom:14px">⏸</div>
+      <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px">Симуляцію призупинено</div>
+      <div style="font-size:14px;color:#aaa;margin-bottom:24px">Час, перевізники й замовники зупинені</div>
+      <button id="pause-resume-btn" style="background:var(--acc,#FFBE63);border:none;border-radius:10px;padding:13px 32px;cursor:pointer;color:#000;font-family:inherit;font-size:15px;font-weight:600">▶ Продовжити роботу</button>
+    </div>
+  `;
+  // Клік будь-де по оверлею або по кнопці — продовжити
+  ov.onclick=()=>resumeTimer();
+  document.body.appendChild(ov);
+}
+function hidePauseOverlay(){
+  document.getElementById('pause-overlay')?.remove();
+}
 function resetInactivity(){
   clearTimeout(S.inactivityTimer);
-  S.inactivityTimer=setTimeout(()=>{ if(!S.manualPause) pauseTimer(); }, CFG.inactivityThreshold*1000);
+  S.inactivityTimer=setTimeout(()=>{ pauseTimer(); }, CFG.inactivityThreshold*1000);
 }
-// Авто-відновлення при дії — тільки якщо це НЕ ручна пауза
-document.addEventListener('mousemove',()=>{if(S.paused&&!S.manualPause)resumeTimer();resetInactivity();});
-document.addEventListener('keydown',()=>{if(S.paused&&!S.manualPause)resumeTimer();resetInactivity();});
+// Активність скидає таймер неактивності. Якщо стоїть пауза — НЕ знімаємо
+// автоматично (тепер пауза завжди потребує кліку на оверлей "Продовжити").
+document.addEventListener('mousemove',()=>{ if(!S.paused) resetInactivity(); });
+document.addEventListener('keydown',()=>{ if(!S.paused) resetInactivity(); });
 
 // ================================================================
 // EVENT SYSTEM
@@ -8252,6 +8276,91 @@ async function saveOrderToServer(orderId){
   }).catch(()=>{});
 }
 
+// ─── ГЕНЕРАТОР ВСТУПНОГО ЛИСТА ЗАМОВНИКА (Деплой 22) ─────────
+// Рандомний вступний шаблон + дані вантажу.
+// Дані з letter.missing ПРИХОВУЮТЬСЯ — студент має зрозуміти з контексту
+// або уточнити у замовника (правило з Початок_розмови_замовника.pdf).
+const CLIENT_INTROS = [
+  // {intro}, питає ціну?, питає авто/коли?
+  c => `Добрий день. Маю таке завантаження з ${c.fromCountry}. Можете допомогти з транспортом?`,
+  c => `Добрий день. Направляю вам завантаження. Подивіться чи зможете таке забрати і за скільки.`,
+  c => `Добрий день. Потрібна допомога в організації транспорту з ${c.fromCountry}.`,
+  c => `Добрий день. Скільки може коштувати доставка такого вантажу? І на коли можуть бути вільні авто у вас?`,
+  c => `Добрий день. Планується завантаження з ${c.fromCountry}. Всі дані нижче. Подивіться, будь ласка, що зможете зробити і якнайшвидше відпишіть.`,
+  c => `Добрий день. Маємо нове замовлення. Повідомте про наявність транспорту з ціною.`,
+  c => `Добрий день. Терміново потрібний транспорт з ${c.fromCountry}. Ціну готові обговорювати. Головне вчасно забрати і доставити.`,
+  c => `Добрий день. Скажіть, ви працюєте по конкретних країнах чи по цілій Європі? Бо ми маємо завантаження саме з ${c.fromCountry}. Скажіть чи це для вас реально.`,
+  c => `Добрий день. Які можете надати пропозиції по маршруту нижче? Буду вдячний за швидку відповідь.`,
+  // кілька своїх варіантів
+  c => `Вітаю. Зʼявився вантаж, треба прорахувати. Гляньте деталі й скажіть вашу ставку.`,
+  c => `Доброго дня. Є завантаження, цікавить ваша ціна та коли можете подати авто.`,
+  c => `Добрий день. Працюємо далі? Маю для вас рейс, дивіться дані.`,
+];
+
+const COUNTRY_NAMES = {
+  UA:'України', PL:'Польщі', DE:'Німеччини', FR:'Франції', IT:'Італії', ES:'Іспанії',
+  NL:'Нідерландів', BE:'Бельгії', CZ:'Чехії', SK:'Словаччини', HU:'Угорщини', RO:'Румунії',
+  AT:'Австрії', CH:'Швейцарії', GB:'Великобританії', NO:'Норвегії', SE:'Швеції', DK:'Данії',
+  FI:'Фінляндії', PT:'Португалії', BA:'Боснії', RS:'Сербії', BG:'Болгарії', LT:'Литви',
+  LV:'Латвії', EE:'Естонії', GR:'Греції', TR:'Туреччини', SI:'Словенії', HR:'Хорватії',
+};
+
+function composeClientLetter(letter){
+  try{
+    const dirs = typeof letter.dirs==='string'?JSON.parse(letter.dirs):(letter.dirs||[]);
+    const fromCode = dirs[0]||'';
+    const fromCountry = COUNTRY_NAMES[fromCode] || 'Європи';
+
+    // Парсимо маршрут із subject ("...: A — B")
+    let route = '';
+    const ms = (letter.subject||'').match(/:\s*(.+)$/);
+    if (ms) route = ms[1].trim();
+
+    // Що приховано (студент має зрозуміти/спитати)
+    let missing = [];
+    try { missing = typeof letter.missing==='string'?JSON.parse(letter.missing):(letter.missing||[]); } catch(e){}
+    const hideWeight = missing.some(m=>/вага|розмір|габарит|тоннаж/i.test(m));
+    const hideVehicle = missing.some(m=>/тип|транспорт|тз|причеп|кузов|авто/i.test(m));
+    const hideCargo = missing.some(m=>/вантаж|товар|назв/i.test(m));
+
+    // Вибираємо рандомний вступ (детерміновано за id листа — щоб не мінявся між заходами)
+    const seed = (letter.id||'').split('').reduce((a,ch)=>a+ch.charCodeAt(0),0);
+    const intro = CLIENT_INTROS[seed % CLIENT_INTROS.length]({fromCountry});
+
+    // Збираємо рядки даних — приховані пропускаємо
+    const lines = [intro, ''];
+    if (route) lines.push(`Маршрут: ${route}`);
+
+    // Вантаж/товар
+    if (!hideCargo) {
+      // Витягуємо опис вантажу з оригінального body якщо є
+      const bm = (letter.body||'').match(/Вантаж:\s*([^\n]+)/);
+      if (bm) lines.push(`Вантаж: ${bm[1].trim()}`);
+    }
+    // Вага — тільки якщо не прихована і є в оригіналі
+    if (!hideWeight) {
+      const wm = (letter.body||'').match(/(?:Вага|Тоннаж)[:\s]*([^\n,]+)/i);
+      if (wm) lines.push(`Вага: ${wm[1].trim()}`);
+    }
+    // Тип ТЗ — тільки якщо не прихований
+    if (!hideVehicle && letter.vehicle) {
+      lines.push(`Тип ТЗ: ${letter.vehicle}`);
+    }
+    // Умови поставки (incoterms) — завжди показуємо якщо є
+    if (letter.incoterms) lines.push(`Умови поставки: ${letter.incoterms}`);
+    // Дати завантаження/доставки
+    lines.push('');
+    lines.push(`Завантаження: {loadDate}`);
+    lines.push(`Бажана доставка: {delivDate}`);
+    lines.push('');
+    lines.push(`З повагою,\n${letter.from_name||''}${letter.company?'\n'+letter.company:''}`);
+
+    return lines.join('\n');
+  }catch(e){
+    return letter.body || '';
+  }
+}
+
 async function loadSessionFromServer(token){
   const res=await fetch('/api/student/session',{
     headers:{'Authorization':'Bearer '+token}
@@ -8301,6 +8410,9 @@ async function loadSessionFromServer(token){
   // Build orders from server letters
   S.orders=data.letters.map(letter=>{
     const op=data.order_progress.find(o=>o.letter_id===letter.id)||{};
+    // Генеруємо вступний текст листа замовника (рандомний шаблон),
+    // приховуючи дані які студент має зрозуміти сам або уточнити (letter.missing)
+    const composedBody = composeClientLetter(letter);
     return {
       id: letter.id,
       dirs: letter.dirs,
@@ -8360,7 +8472,7 @@ async function loadSessionFromServer(token){
         country: letter.country,
         subject: letter.subject,
         time: '09:00',
-        bodyText: letter.body
+        bodyText: (composedBody || letter.body || '')
           .replace('{loadDate}', addDays(S.startDate, letter.load_day_offset||4))
           .replace('{delivDate}', addDays(S.startDate, letter.deliv_day_offset||8)),
         missing: letter.missing||[],
