@@ -7001,6 +7001,15 @@ async function renderResume(){
     cert_submitted_ok: 'Довідка надіслана',
     used_exchange: 'Скористався біржею',
     compared_sources: 'Порівняв базу і біржу',
+    spravka_correct: 'Довідка правильна',
+    spravka_errors: 'Помилки в довідці',
+    spravka_for_export: 'Довідка для експорту (не потрібна)',
+    rakhunok_passed_first: 'Рахунок — з першої спроби',
+    rakhunok_passed_second: 'Рахунок — з другої спроби',
+    rakhunok_failed: 'Рахунок — не виправив',
+    akt_passed_first: 'Акт — з першої спроби',
+    akt_passed_second: 'Акт — з другої спроби',
+    akt_failed: 'Акт — не виправив',
   };
 
   const metrics = analysis?.metrics || {};
@@ -7819,172 +7828,741 @@ td{padding:7px 10px;border:1px solid #ccc;vertical-align:top}
 }
 
 // ── ДОВІДКА ───────────────────────────────────────────────────
-function generateSpravka(idx){
+// ─── ДОВІДКА (Деплой 23) ──────────────────────────────────────
+// Студент вводить курси і суми, система перевіряє розбивку (±10% на рядки,
+// сума трьох рядків точно = фрахт у грн), надсилає замовнику.
+async function generateSpravka(idx){
   const o=(S.savedOrders||[])[idx]; if(!o) return;
-  const rate=getRate(o);
-  // Find contract number from letter
-  const em=S.emails.find(e=>e.company===o.client_name||e.from===o.client_name);
-  const contract=em?.contract||'№ ІФ/001 від 01.01.2024р.';
+  // Перевіряємо що угоди закриті: маємо фрахт замовника і перевізника
+  if(!o.freight_client || !o.freight_carrier){
+    notify('Спершу маємо мати погоджений фрахт замовника і перевізника','err');
+    return;
+  }
+  // Підвантажуємо контекст з сервера (реквізити, кордон, відстані)
+  const token = localStorage.getItem('docaa_token');
+  let ctx = null;
+  try {
+    const r = await fetch(`/api/student/orders/${o.letterId||o.id}/doc-context`, {
+      headers: {'Authorization': 'Bearer ' + token}
+    });
+    if (r.ok) ctx = await r.json();
+  } catch(e){}
+  if (!ctx) { notify('Не вдалось завантажити дані рейсу', 'err'); return; }
+
+  const feeEur = (o.freight_client - o.freight_carrier).toFixed(2);
+  const isImport = ctx.is_import;
 
   const mo=document.createElement('div');
   mo.className='modal-ov';
   mo.onclick=e=>{if(e.target===mo)mo.remove();};
-  mo.innerHTML=`<div class="modal-box" style="max-width:420px">
+  mo.innerHTML=`<div class="modal-box" style="max-width:560px;max-height:90vh;overflow-y:auto">
     <div class="modal-title">Довідка про транспортні витрати</div>
-    <p style="font-size:12px;color:var(--t3);margin-bottom:14px">Фрахт замовника: €${o.freight_client} × ${rate} грн = <strong>${Math.round(o.freight_client*rate).toLocaleString('uk-UA')} грн</strong></p>
+    ${!isImport ? `<div style="background:rgba(220,68,68,.1);border:1px solid rgba(220,68,68,.3);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--t2)">⚠ Це рейс з України (експорт). Довідка тут не потрібна — її роблять для розмитнення в Україні.</div>` : ''}
+
+    <div style="background:var(--bg3);border-radius:8px;padding:12px;margin-bottom:14px">
+      <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Фрахти і курси</div>
+
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">Фрахт замовника</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div style="background:var(--bg2);padding:8px 10px;border-radius:6px;font-family:var(--mono);min-width:90px;text-align:center">€${o.freight_client}</div>
+          <span style="color:var(--t3)">×</span>
+          <input id="sp-rate-fr" type="number" step="0.01" class="form-input" placeholder="курс" style="width:90px" value="">
+          <span style="color:var(--t3)">=</span>
+          <span id="sp-out-fr" style="font-family:var(--mono);color:var(--acc);font-weight:600">—</span>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">Фрахт перевізника</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div style="background:var(--bg2);padding:8px 10px;border-radius:6px;font-family:var(--mono);min-width:90px;text-align:center">€${o.freight_carrier}</div>
+          <span style="color:var(--t3)">×</span>
+          <input id="sp-rate-c" type="number" step="0.01" class="form-input" placeholder="курс" style="width:90px" value="">
+          <span style="color:var(--t3)">=</span>
+          <span id="sp-out-c" style="font-family:var(--mono);color:var(--t2);font-weight:600">—</span>
+        </div>
+      </div>
+
+      <div style="font-size:11px;color:var(--t3);padding-top:6px;border-top:1px solid var(--b2)">
+        Експедиторська винагорода: <strong style="color:var(--acc)">€${feeEur}</strong> (різниця)
+      </div>
+    </div>
+
     <div class="form-group">
       <label class="form-label">До кордону (грн) *</label>
-      <input id="sp-before" type="number" class="form-input" placeholder="напр. 127600">
+      <input id="sp-before" type="number" class="form-input" placeholder="0">
     </div>
     <div class="form-group">
-      <label class="form-label">Після кордону (грн)</label>
-      <input id="sp-after" type="number" class="form-input" placeholder="напр. 73750">
+      <label class="form-label">Після кордону (грн) *</label>
+      <input id="sp-after" type="number" class="form-input" placeholder="0">
     </div>
     <div class="form-group">
-      <label class="form-label">Експедиторська винагорода (грн)</label>
+      <label class="form-label">Експедиторська винагорода (грн) *</label>
       <input id="sp-fee" type="number" class="form-input" placeholder="0">
     </div>
     <div class="form-group">
       <label class="form-label">Додаткова інформація</label>
-      <textarea id="sp-notes" placeholder="напр. для EXW обов'язково додайте текст про навантажувальні роботи" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:50px"></textarea>
+      <textarea id="sp-notes" placeholder="${ctx.incoterms && ctx.incoterms.toUpperCase().includes('EXW') ? 'УВАГА — умови EXW: додайте рядок про навантажувальні роботи' : ''}" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:50px"></textarea>
     </div>
     <div style="display:flex;gap:8px">
-      <button class="btn primary" style="flex:1" onclick="doGenerateSpravka(${idx},'${contract}',${rate})">Згенерувати</button>
+      <button class="btn primary" style="flex:1" onclick="submitSpravka(${idx})">Зберегти і надіслати замовнику</button>
       <button class="btn" onclick="this.closest('.modal-ov').remove()">Скасувати</button>
     </div>
   </div>`;
   document.body.appendChild(mo);
+
+  // Збереження контексту і живий перерахунок
+  mo._ctx = ctx;
+  const updateOut = () => {
+    const rFr = parseFloat(document.getElementById('sp-rate-fr')?.value) || 0;
+    const rC = parseFloat(document.getElementById('sp-rate-c')?.value) || 0;
+    if (rFr > 0) {
+      document.getElementById('sp-out-fr').textContent = (o.freight_client * rFr).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,' ') + ' ₴';
+    }
+    if (rC > 0) {
+      document.getElementById('sp-out-c').textContent = (o.freight_carrier * rC).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,' ') + ' ₴';
+    }
+  };
+  document.getElementById('sp-rate-fr').addEventListener('input', updateOut);
+  document.getElementById('sp-rate-c').addEventListener('input', updateOut);
 }
 
-function doGenerateSpravka(idx, contract, rate){
+async function submitSpravka(idx){
   const o=(S.savedOrders||[])[idx]; if(!o) return;
-  const before=parseFloat(document.getElementById('sp-before')?.value)||0;
-  const after=parseFloat(document.getElementById('sp-after')?.value)||0;
-  const fee=parseFloat(document.getElementById('sp-fee')?.value)||0;
-  const notes=document.getElementById('sp-notes')?.value||'';
-  if(!before){notify('Вкажіть суму до кордону','err');return;}
-  const totalUAH=Math.round(o.freight_client*rate);
-  const today=new Date().toLocaleDateString('uk-UA');
-  // Find letter for contract
-  const em=S.emails.find(e=>e.company===o.client_name||e.from===o.client_name);
-  const ord=S.orders.find(x=>x.clientFreightAgreed===o.freight_client);
-  // Parse route cities
-  const fromCity=o.load_address.split(',').slice(-2).join(',').trim();
-  const toCity=o.unload_address.split(',').slice(-2).join(',').trim();
+  const mo = document.querySelector('.modal-ov');
+  const ctx = mo?._ctx;
+
+  const before = parseFloat(document.getElementById('sp-before')?.value) || 0;
+  const after = parseFloat(document.getElementById('sp-after')?.value) || 0;
+  const fee = parseFloat(document.getElementById('sp-fee')?.value) || 0;
+  const rateFr = parseFloat(document.getElementById('sp-rate-fr')?.value) || 0;
+  const rateC = parseFloat(document.getElementById('sp-rate-c')?.value) || 0;
+  const notes = document.getElementById('sp-notes')?.value || '';
+
+  if (!before || !after || !fee || !rateFr || !rateC) {
+    notify('Заповніть усі поля (курси і розбивку)', 'err'); return;
+  }
+
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const r = await fetch(`/api/student/orders/${o.letterId||o.id}/submit-spravka`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({
+        before, after, fee, rate_freight: rateFr, rate_carrier: rateC,
+        freight_eur: o.freight_client, carrier_freight_eur: o.freight_carrier,
+        notes,
+      }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      // Зберегли — генеруємо HTML і надсилаємо замовнику
+      o.spravka = { before, after, fee, totalUAH: Math.round(o.freight_client*rateFr), rate: rateFr, notes, ctx };
+      mo?.remove();
+      notify('Довідка прийнята і збережена ✓', 'ok');
+      renderSpravkaDoc(idx, ctx, { before, after, fee, rateFr, notes });
+    } else {
+      // Помилки — показуємо
+      const errBox = document.createElement('div');
+      errBox.style.cssText='background:rgba(220,68,68,.1);border:1px solid rgba(220,68,68,.3);border-radius:8px;padding:10px 12px;margin-top:10px;font-size:12px;color:#e66';
+      errBox.innerHTML = '<strong>Знайдено помилки:</strong><ul style="margin:6px 0 0 16px">' +
+        data.errors.map(e=>`<li>${e}</li>`).join('') + '</ul>';
+      const old = mo.querySelector('._spravka_errors');
+      if (old) old.remove();
+      errBox.className = '_spravka_errors';
+      mo.querySelector('.modal-box').appendChild(errBox);
+    }
+  } catch(e) { notify('Помилка з\'єднання', 'err'); }
+}
+
+function renderSpravkaDoc(idx, ctx, vals){
+  const o=(S.savedOrders||[])[idx]; if(!o) return;
+  const totalUAH = vals.before + vals.after + vals.fee;
+  const today = formatSimDate();
+  const fromCity = (o.load_address||'').split(',').slice(-2).join(',').trim();
+  const toCity = (o.unload_address||'').split(',').slice(-2).join(',').trim();
+  const border = ctx.border_name || 'Краківець';
+  const contract = ctx.client?.contract || '№ 001 від 01.01.2018р.';
 
   const html_doc=`<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8">
 <title>Довідка</title>
 <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;line-height:1.6;color:#000;padding:24px}.header{text-align:right;margin-bottom:20px}.logo{font-size:20px;font-weight:900;color:#000}.logo span{color:#FFBE63}.addr{font-size:11px;color:#555;margin-top:2px}.to{margin-bottom:16px;font-size:12px}.title{text-align:center;font-size:14px;font-weight:700;margin:16px 0 14px}.body-text{line-height:1.8;margin-bottom:16px}.footer{display:flex;justify-content:space-between;margin-top:24px;border-top:1px solid #ccc;padding-top:10px}.sig{font-size:11px;color:#555}</style></head><body>
-<div class="header">
-  <div class="logo">D<span>o</span>caa</div>
-  <div class="addr">${DOCAA_DETAILS.addr}</div>
-</div>
-<div class="to">Вих. № ${o.number} від ${today}<br><br>Митні органи України</div>
+<div class="header"><div class="logo">D<span>o</span>caa</div><div class="addr">${DOCAA_DETAILS.addr}</div></div>
+<div class="to">Вих. № ${o.number||idx+1} від ${today}<br><br>Митні органи України</div>
 <div class="title">Довідка про транспортні витрати</div>
 <div class="body-text">
-  Даним повідомляємо суму витрат при перевезенні вантажу по маршруту ${fromCity} — ${toCity} згідно договору ${contract} автомобілем держ. № ${o.plate_truck} / ${o.plate_trailer}<br><br>
+  Даним повідомляємо суму витрат при перевезенні вантажу по маршруту ${fromCity} — ${toCity} згідно договору ${contract} автомобілем держ. № ${o.plate_truck||''} / ${o.plate_trailer||''}<br><br>
   Транспортно-експедиторські витрати становлять ${totalUAH.toLocaleString('uk-UA')},00 (${numToWords(totalUAH)} гривень 00 копійок);<br><br>
-  - Транспортно-експедиторські витрати по маршруту: ${fromCity} — пп. ${o.border||'Краківець'} становлять ${before.toLocaleString('uk-UA')},00 (${numToWords(before)} гривень 00 копійок);<br>
-  - Транспортно-експедиторські витрати по маршруту: пп. ${o.border||'Краківець'} — ${toCity} становлять ${after.toLocaleString('uk-UA')},00 (${numToWords(after)} гривень 00 копійок);<br>
-  ${fee?`<br>Експедиторська винагорода: ${fee.toLocaleString('uk-UA')},00 грн;<br>`:''}
+  - Транспортно-експедиторські витрати по маршруту: ${fromCity} — пп. ${border} становлять ${vals.before.toLocaleString('uk-UA')},00 (${numToWords(vals.before)} гривень 00 копійок);<br>
+  - Транспортно-експедиторські витрати по маршруту: пп. ${border} — ${toCity} становлять ${vals.after.toLocaleString('uk-UA')},00 (${numToWords(vals.after)} гривень 00 копійок);<br>
+  <br>Експедиторська винагорода: ${vals.fee.toLocaleString('uk-UA')},00 грн;<br>
   <br>Страхування вантажу не проводилось.
-  ${notes?`<br><br>${notes}`:''}
+  ${vals.notes?`<br><br>${vals.notes}`:''}
 </div>
-<div class="footer">
-  <div class="sig">_________________ ${DOCAA_DETAILS.name}</div>
-</div>
+<div class="footer"><div class="sig">_________________ ${DOCAA_DETAILS.name}</div></div>
 </body></html>`;
 
-  // Save spravka data to order
-  (S.savedOrders||[])[idx].spravka={before,after,fee,totalUAH,rate,notes};
-  document.querySelector('.modal-ov')?.remove();
-  previewAndSend(html_doc,`Довідка про транспортні витрати — ${o.client_name}`,idx,'spravka');
+  previewAndSend(html_doc, `Довідка про транспортні витрати — ${o.client_name}`, idx, 'spravka');
+}
+
+// Поточна сим-дата у форматі ДД.ММ.РРРР для документів
+function formatSimDate(){
+  const day = (S.timerDay||1) - 1;
+  const startStr = S.startDate || '';
+  const d = parseStartDateUA(startStr);
+  if (!d || isNaN(d)) return new Date().toLocaleDateString('uk-UA');
+  d.setDate(d.getDate() + day);
+  return ('0'+d.getDate()).slice(-2)+'.'+('0'+(d.getMonth()+1)).slice(-2)+'.'+d.getFullYear();
+}
+
+function doGenerateSpravka(idx, contract, rate){
+  // Лишаємо для зворотної сумісності — викликає нову версію
+  generateSpravka(idx);
 }
 
 // ── РАХУНОК ───────────────────────────────────────────────────
-function generateRakhunok(idx){
-  const o=(S.savedOrders||[])[idx]; if(!o) return;
-  const sp=o.spravka||{};
-  if(!sp.before){notify('Спочатку згенеруйте довідку','warn');generateSpravka(idx);return;}
-  const rate=sp.rate||getRate(o);
-  const num=String(parseInt(o.number)||idx+1).padStart(4,'0');
-  const today=new Date().toLocaleDateString('uk-UA');
-  const totalUAH=sp.totalUAH||Math.round(o.freight_client*rate);
-  const fromCity=o.load_address.split(',').slice(-2).join(',').trim();
-  const toCity=o.unload_address.split(',').slice(-2).join(',').trim();
+// ─── РАХУНОК / АКТ З ПРОПУСКАМИ (Деплой 23) ───────────────────
+// Студент бачить готовий документ з 1-2 рандомними пропусками
+// (поле є, значення немає — клікабельне). Має знайти і дозаповнити.
+// Дві спроби: перша →+2, друга→0, третя нема →-2 (система сама виправляє).
 
-  const html_doc=`<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8">
-<title>Рахунок №${num}</title>
-<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;line-height:1.6;color:#000;padding:24px}.header{text-align:center;margin-bottom:20px}.logo{font-size:22px;font-weight:900;color:#000}.logo span{color:#FFBE63}.title{font-size:14px;font-weight:700;margin:8px 0}.subtitle{font-size:12px;color:#555}.parties{display:flex;gap:20px;margin-bottom:16px;font-size:11px}.party{flex:1;border:1px solid #ddd;padding:8px 10px;border-radius:4px}table{width:100%;border-collapse:collapse;margin-bottom:12px}th{background:#f5f5f5;text-align:left;padding:7px 10px;border:1px solid #ccc;font-weight:600}td{padding:7px 10px;border:1px solid #ccc}.total{text-align:right;font-weight:700;margin-bottom:12px}.words{border:1px solid #ddd;padding:8px 10px;border-radius:4px;margin-bottom:16px;font-size:11px}.details{font-size:10px;color:#555;margin-bottom:16px}.footer{display:flex;justify-content:space-between;border-top:1px solid #ccc;padding-top:10px}</style></head><body>
-<div class="header">
-  <div class="logo">D<span>o</span>caa</div>
-  <div class="title">Рахунок № ${num} від ${today}</div>
-</div>
-<div class="parties">
-  <div class="party"><strong>Одержувач:</strong><br>${DOCAA_DETAILS.name}<br>р/р ${DOCAA_DETAILS.iban}<br>${DOCAA_DETAILS.bank}<br>ЄДРПО ${DOCAA_DETAILS.ipn}<br>${DOCAA_DETAILS.tax}</div>
-  <div class="party"><strong>Платник:</strong><br>${o.client_name}</div>
-</div>
-<table>
-  <tr><th>№</th><th>Назва</th><th>Од.</th><th>К-сть</th><th>Ціна, грн</th><th>Сума, грн</th></tr>
-  <tr><td>1</td><td>Транспортні послуги по маршруту: ${fromCity} — пп. ${o.border||'Краківець'}</td><td>посл.</td><td>1</td><td>${sp.before.toLocaleString('uk-UA')},00</td><td>${sp.before.toLocaleString('uk-UA')},00</td></tr>
-  <tr><td>2</td><td>Транспортні послуги по маршруту: пп. ${o.border||'Краківець'} — ${toCity}</td><td>посл.</td><td>1</td><td>${sp.after.toLocaleString('uk-UA')},00</td><td>${sp.after.toLocaleString('uk-UA')},00</td></tr>
-  ${sp.fee?`<tr><td>3</td><td>Експедиторська винагорода</td><td>посл.</td><td>1</td><td>${sp.fee.toLocaleString('uk-UA')},00</td><td>${sp.fee.toLocaleString('uk-UA')},00</td></tr>`:''}
-</table>
-<div class="total">Номер автомобіля № ${o.plate_truck}/${o.plate_trailer}<br>Підсумок: ${totalUAH.toLocaleString('uk-UA')},00 грн</div>
-<div class="words">Без ПДВ<br>Всього до оплати: ${totalUAH.toLocaleString('uk-UA')},00 (${numToWords(totalUAH)} гривень 00 копійок)</div>
-<div class="footer">
-  <span>_________________ ${DOCAA_DETAILS.name}</span>
-</div>
-</body></html>`;
+// Пул можливих пропусків (4 безпечні поля які студент може знайти)
+const DOC_GAP_POOL = ['truck_plate','trailer_plate','border','doc_date'];
 
-  previewAndSend(html_doc,`Рахунок №${num} — ${o.client_name}`,idx,'rakhunok');
+// Випадковий вибір 1-2 пропусків
+function pickGaps(seed){
+  // Детерміновано від seed (orderId+docType) — щоб не мінялось між заходами
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h*31 + seed.charCodeAt(i)) | 0;
+  const count = 1 + (Math.abs(h) % 2); // 1 або 2
+  const pool = [...DOC_GAP_POOL];
+  // Перемішуємо детерміновано
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.abs(h * (i+7)) % (i+1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  // Tягач і причіп — як пара (якщо випав один, інший теж випадає)
+  let picked = pool.slice(0, count);
+  if (picked.includes('truck_plate') && !picked.includes('trailer_plate') && count < 4) picked.push('trailer_plate');
+  if (picked.includes('trailer_plate') && !picked.includes('truck_plate') && count < 4) picked.push('truck_plate');
+  return picked;
 }
 
-// ── АКТ ───────────────────────────────────────────────────────
-function generateAkt(idx){
-  const o=(S.savedOrders||[])[idx]; if(!o) return;
-  const sp=o.spravka||{};
-  if(!sp.before){notify('Спочатку згенеруйте довідку','warn');generateSpravka(idx);return;}
-  const num=String(parseInt(o.number)||idx+1).padStart(4,'0');
-  const today=new Date().toLocaleDateString('uk-UA');
-  const totalUAH=sp.totalUAH||Math.round(o.freight_client*(sp.rate||getRate(o)));
-  const em=S.emails.find(e=>e.company===o.client_name||e.from===o.client_name);
-  const contract=em?.contract||'№ ІФ/001 від 01.01.2024р.';
-  const fromCity=o.load_address.split(',').slice(-2).join(',').trim();
-  const toCity=o.unload_address.split(',').slice(-2).join(',').trim();
-
-  const html_doc=`<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8">
-<title>Акт №${num}</title>
-<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;line-height:1.6;color:#000;padding:24px}.header{text-align:center;margin-bottom:6px}.logo{font-size:20px;font-weight:900}.logo span{color:#FFBE63}.parties-top{display:flex;justify-content:space-between;margin-bottom:14px;font-size:11px}.title{text-align:center;font-size:14px;font-weight:700;margin:10px 0 4px}.subtitle{text-align:center;font-size:12px;margin-bottom:14px;color:#555}.intro{margin-bottom:14px;line-height:1.8}table{width:100%;border-collapse:collapse;margin-bottom:12px}th{background:#f5f5f5;padding:7px 10px;border:1px solid #ccc;text-align:left;font-weight:600}td{padding:7px 10px;border:1px solid #ccc}.total{margin-bottom:12px;font-weight:700;text-align:right}.words{border:1px solid #ddd;padding:8px;border-radius:4px;margin-bottom:16px;font-size:11px}.footer{display:flex;gap:30px;margin-top:20px}.sig-block{flex:1;border-top:1px solid #999;padding-top:8px;font-size:11px}</style></head><body>
-<div class="parties-top">
-  <div>${DOCAA_DETAILS.name}<br>___________________<br>Стефанюк Л.М.</div>
-  <div style="text-align:right">${o.client_name}<br>___________________</div>
-</div>
-<div class="title">АКТ № ${num}</div>
-<div class="subtitle">здачі-приймання робіт (надання послуг)</div>
-<div class="subtitle">місце складання м. Івано-Франківськ &nbsp;&nbsp;&nbsp; ${today}</div>
-<div class="intro">
-  ${o.client_name} (Замовник) з однієї сторони, та ${DOCAA_DETAILS.name} (Експедитор) з іншої сторони склали цей акт про те, що транспортно-експедиторські послуги по перевезенню вантажу виконані в повному обсязі, і сторони один до одного претензій не мають.<br><br>
-  Номер автомобіля ${o.plate_truck} / ${o.plate_trailer}<br>
-  Договір транспортного експедирування ${contract}<br>
-  Перевізник ${o.carrier_name}
-</div>
-<table>
-  <tr><th>№</th><th>Назва</th><th>Од.</th><th>К-сть</th><th>Ціна, грн</th><th>Сума, грн</th></tr>
-  <tr><td>1</td><td>Транспортні послуги по маршруту: ${fromCity} — пп. ${o.border||'Краківець'}</td><td>посл.</td><td>1</td><td>${sp.before.toLocaleString('uk-UA')},00</td><td>${sp.before.toLocaleString('uk-UA')},00</td></tr>
-  <tr><td>2</td><td>Транспортні послуги по маршруту: пп. ${o.border||'Краківець'} — ${toCity}</td><td>посл.</td><td>1</td><td>${sp.after.toLocaleString('uk-UA')},00</td><td>${sp.after.toLocaleString('uk-UA')},00</td></tr>
-  ${sp.fee?`<tr><td>3</td><td>Експедиторська винагорода</td><td>посл.</td><td>1</td><td>${sp.fee.toLocaleString('uk-UA')},00</td><td>${sp.fee.toLocaleString('uk-UA')},00</td></tr>`:''}
-</table>
-<div class="total">Підсумок: ${totalUAH.toLocaleString('uk-UA')},00 грн &nbsp;|&nbsp; Без ПДВ</div>
-<div class="words">Всього до оплати: ${totalUAH.toLocaleString('uk-UA')},00 (${numToWords(totalUAH)} гривень 00 копійок)</div>
-<div class="footer">
-  <div class="sig-block"><strong>Від виконавця*</strong><br><br>_________________ ${DOCAA_DETAILS.name}<br><small>*відповідальний за здійснення господарської операції і правильність її оформлення</small></div>
-  <div class="sig-block"><strong>Від замовника</strong><br><br>_________________ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
-</div>
-</body></html>`;
-
-  previewAndSend(html_doc,`Акт №${num} — ${o.client_name}`,idx,'akt');
+// Гарантуємо що між рахунком і актом одного рейсу пропуски різні
+function pickGapsRakhunokAkt(orderId){
+  const r = pickGaps(orderId+'_rakhunok');
+  let a = pickGaps(orderId+'_akt');
+  // Якщо повний збіг — зсуваємо для акта на інший
+  if (a.length===r.length && a.every(x=>r.includes(x))) {
+    a = pickGaps(orderId+'_akt_alt');
+  }
+  return { rakhunok: r, akt: a };
 }
+
+// Універсальна генерація документа (рахунок або акт)
+async function generateDocWithGaps(idx, docType){
+  const o = (S.savedOrders||[])[idx]; if(!o) return;
+  if(!o.spravka){ notify('Спочатку згенеруйте довідку — рахунок і акт залежать від неї','warn'); return; }
+
+  // Підвантажуємо контекст
+  const token = localStorage.getItem('docaa_token');
+  let ctx = null;
+  try {
+    const r = await fetch(`/api/student/orders/${o.letterId||o.id}/doc-context`, {
+      headers: {'Authorization':'Bearer '+token}
+    });
+    if (r.ok) ctx = await r.json();
+  } catch(e){}
+  if (!ctx) { notify('Не вдалось завантажити дані рейсу','err'); return; }
+
+  const gapsAll = pickGapsRakhunokAkt(o.letterId||o.id);
+  const gaps = docType==='rakhunok' ? gapsAll.rakhunok : gapsAll.akt;
+
+  // Очікувані значення (для перевірки)
+  const expected = {
+    truck_plate: o.plate_truck || ctx.carrier?.plate_truck || '',
+    trailer_plate: o.plate_trailer || ctx.carrier?.plate_trailer || '',
+    border: ctx.border_name || '',
+    doc_date: formatSimDate(),
+  };
+
+  // Будуємо HTML — для пропущених полів робимо клікабельні span
+  const num = String(parseInt(o.number)||idx+1).padStart(4,'0');
+  const totalUAH = o.spravka.before + o.spravka.after + o.spravka.fee;
+  const fromCity = (o.load_address||'').split(',').slice(-2).join(',').trim();
+  const toCity = (o.unload_address||'').split(',').slice(-2).join(',').trim();
+  const contract = ctx.client?.contract || '№ 001 від 01.01.2018р.';
+  const border = ctx.border_name || 'Краківець';
+
+  // Хелпер: повертає або значення, або клікабельний gap
+  const gap = (field, value) => {
+    if (gaps.includes(field)) {
+      return `<span class="doc-gap" data-field="${field}" onclick="docGapClick(this)" title="Клікніть щоб вписати"></span>`;
+    }
+    return value || '';
+  };
+
+  let docHtml = '';
+  if (docType === 'rakhunok') {
+    docHtml = renderRakhunokHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, gap, expected });
+  } else {
+    docHtml = renderAktHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, contract, gap, expected });
+  }
+
+  // Показуємо модалку з документом + завданням
+  showDocCheckModal(idx, docType, docHtml, gaps, expected, ctx);
+}
+
+// HTML рахунку (як у мокапі rakhunok-v3)
+function renderRakhunokHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, gap, expected }) {
+  return `
+<div class="doc-page">
+  <div class="doc-head">
+    <div class="doc-logo">D<span>o</span>caa</div>
+    <div class="doc-top-info">
+      <div class="doc-name">${DOCAA_DETAILS.name}</div>
+      <div>${DOCAA_DETAILS.addr}</div>
+    </div>
+  </div>
+  <div class="doc-title">Рахунок № ${num} від ${gap('doc_date', expected.doc_date)}</div>
+  <div class="doc-parties">
+    <div><span class="lbl">Одержувач:</span> ${DOCAA_DETAILS.name}</div>
+    <div>р/р ${DOCAA_DETAILS.iban}</div>
+    <div>${DOCAA_DETAILS.bank}</div>
+    <div>ІПН ${DOCAA_DETAILS.ipn}</div>
+  </div>
+  <div class="doc-payer"><span class="lbl">Платник:</span> ${ctx.client.name||o.client_name}</div>
+  <table class="doc-table">
+    <tr>
+      <th class="c" style="width:32px">№</th>
+      <th>Назва</th>
+      <th class="c" style="width:55px">Од. вим.</th>
+      <th class="c" style="width:50px">К-сть</th>
+      <th class="r" style="width:85px">Ціна, грн.</th>
+      <th class="r" style="width:90px">Сума, грн.</th>
+    </tr>
+    <tr>
+      <td class="c">1</td>
+      <td>Транспортні послуги по маршруту: ${fromCity} — пп. ${border}</td>
+      <td class="c">послуга</td><td class="c">1</td>
+      <td class="r">${o.spravka.before.toLocaleString('uk-UA')},00</td>
+      <td class="r">${o.spravka.before.toLocaleString('uk-UA')},00</td>
+    </tr>
+    <tr>
+      <td class="c">2</td>
+      <td>Транспортні послуги по маршруту: пп. ${gap('border', border)} — ${toCity}</td>
+      <td class="c">послуга</td><td class="c">1</td>
+      <td class="r">${o.spravka.after.toLocaleString('uk-UA')},00</td>
+      <td class="r">${o.spravka.after.toLocaleString('uk-UA')},00</td>
+    </tr>
+    <tr>
+      <td class="c">3</td>
+      <td>Експедиторська винагорода</td>
+      <td class="c">послуга</td><td class="c">1</td>
+      <td class="r">${o.spravka.fee.toLocaleString('uk-UA')},00</td>
+      <td class="r">${o.spravka.fee.toLocaleString('uk-UA')},00</td>
+    </tr>
+  </table>
+  <table class="doc-foot">
+    <tr>
+      <td rowspan="2" class="car-no">Номер автомобіля № ${gap('truck_plate', expected.truck_plate)} / ${gap('trailer_plate', expected.trailer_plate)}</td>
+      <td class="lbl-cell">Підсумок</td>
+      <td class="sum-cell">${totalUAH.toLocaleString('uk-UA')},00</td>
+    </tr>
+    <tr>
+      <td class="lbl-cell">Без ПДВ</td>
+      <td>&nbsp;</td>
+    </tr>
+  </table>
+  <div class="doc-total">
+    <span class="t-lbl">Всього до оплати</span>
+    <strong>${totalUAH.toLocaleString('uk-UA')},00</strong>
+    (${numToWords(totalUAH)} гривень 00 копійок)
+  </div>
+  <div class="doc-sig">
+    <span class="sig-line"></span>
+    <span>${DOCAA_DETAILS.name.replace(/^ФО-?П\s*/,'')}</span>
+  </div>
+</div>`;
+}
+
+// HTML акту
+function renderAktHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, contract, gap, expected }) {
+  const clientName = ctx.client.name || o.client_name;
+  const clientDirector = ctx.client.director || 'Директор';
+  return `
+<div class="doc-page">
+  <div class="doc-head">
+    <div class="doc-logo">D<span>o</span>caa</div>
+    <div class="doc-top-info"></div>
+  </div>
+  <div class="doc-top-sigs">
+    <div class="ts-col">
+      <strong>${DOCAA_DETAILS.name}</strong>
+      <div class="ts-line"></div>
+      <div>${DOCAA_DETAILS.name.replace(/^ФО-?П\s*/,'')}</div>
+    </div>
+    <div class="ts-col">
+      <strong>Директор</strong><br>${clientName}
+      <div class="ts-line"></div>
+      <div>${clientDirector}</div>
+    </div>
+  </div>
+  <div class="doc-title-c">
+    АКТ № ${num}<br>
+    <span class="sub">здачі прийняття робіт (надання послуг)</span>
+  </div>
+  <div class="doc-meta-row">
+    <div>місце складання м. Івано-Франківськ</div>
+    <div>${gap('doc_date', expected.doc_date)}</div>
+  </div>
+  <div class="doc-preamble">
+    ${clientName} (Замовник) в особі ${clientDirector} з однієї сторони, та ${DOCAA_DETAILS.name} (Експедитор) з іншої сторони склали цей акт про те, що транспортно-експедиторські послуги по перевезенню вантажу виконані в повному обсязі, і сторони один до одного претензій не мають.
+  </div>
+  <div class="doc-info">
+    <div>Номер автомобіля ${gap('truck_plate', expected.truck_plate)} / ${gap('trailer_plate', expected.trailer_plate)}</div>
+    <div>Договір транспортного експедирування ${contract}</div>
+  </div>
+  <table class="doc-table">
+    <tr>
+      <th class="c" style="width:32px">№</th>
+      <th>Назва</th>
+      <th class="c" style="width:55px">Од. вим.</th>
+      <th class="c" style="width:50px">К-сть</th>
+      <th class="r" style="width:85px">Ціна, грн.</th>
+      <th class="r" style="width:90px">Сума, грн.</th>
+    </tr>
+    <tr>
+      <td class="c">1</td>
+      <td>Транспортні послуги по маршруту: ${fromCity} — пп. ${border}</td>
+      <td class="c">послуга</td><td class="c">1</td>
+      <td class="r">${o.spravka.before.toLocaleString('uk-UA')},00</td>
+      <td class="r">${o.spravka.before.toLocaleString('uk-UA')},00</td>
+    </tr>
+    <tr>
+      <td class="c">2</td>
+      <td>Транспортні послуги по маршруту: пп. ${gap('border', border)} — ${toCity}</td>
+      <td class="c">послуга</td><td class="c">1</td>
+      <td class="r">${o.spravka.after.toLocaleString('uk-UA')},00</td>
+      <td class="r">${o.spravka.after.toLocaleString('uk-UA')},00</td>
+    </tr>
+    <tr>
+      <td class="c">3</td>
+      <td>Експедиторська винагорода</td>
+      <td class="c">послуга</td><td class="c">1</td>
+      <td class="r">${o.spravka.fee.toLocaleString('uk-UA')},00</td>
+      <td class="r">${o.spravka.fee.toLocaleString('uk-UA')},00</td>
+    </tr>
+  </table>
+  <div class="doc-summary">
+    <div class="ds-row"><span class="ds-lbl">Підсумок</span><span>${totalUAH.toLocaleString('uk-UA')},00</span></div>
+    <div class="ds-row"><span class="ds-lbl">Без ПДВ</span><span></span></div>
+    <div class="ds-row"><span class="ds-lbl">Всього до оплати</span><span>${totalUAH.toLocaleString('uk-UA')},00 (${numToWords(totalUAH)} гривень 00 копійок)</span></div>
+  </div>
+  <div class="doc-signatures">
+    <div class="ds-col">
+      <div>Від виконавця*</div>
+      <div class="ds-line"></div>
+      <div>${DOCAA_DETAILS.name.replace(/^ФО-?П\s*/,'')}</div>
+      <div class="ds-role">*Відповідальний за здійснення господарської операції</div>
+    </div>
+    <div class="ds-col">
+      <div>Від замовника</div>
+      <div class="ds-line"></div>
+      <div>директор</div>
+      <div>${clientDirector}</div>
+    </div>
+  </div>
+  <div class="doc-requisites">
+    <div class="dr-col">
+      <strong>${DOCAA_DETAILS.name}</strong>
+      ${DOCAA_DETAILS.addr}<br>
+      ${DOCAA_DETAILS.iban}<br>
+      ${DOCAA_DETAILS.bank}<br>
+      ІПН ${DOCAA_DETAILS.ipn}<br>
+      ${DOCAA_DETAILS.tax}
+    </div>
+    <div class="dr-col">
+      <strong>${clientName}</strong>
+      ${ctx.client.address||''}<br>
+      ${ctx.client.iban||''}<br>
+      ${ctx.client.bank||''}<br>
+      ${ctx.client.edrpou?'ЄДРПОУ '+ctx.client.edrpou:''}
+    </div>
+  </div>
+</div>`;
+}
+
+// Стан перевірки документа (зберігаємо в S)
+function showDocCheckModal(idx, docType, docHtml, gaps, expected, ctx) {
+  S._docCheck = { idx, docType, gaps, expected, ctx, attempt: 1, filled: {} };
+
+  const mo = document.createElement('div');
+  mo.className = 'modal-ov';
+  mo.id = 'doc-check-modal';
+  mo.innerHTML = `
+    <div class="modal-box" style="max-width:860px;max-height:90vh;overflow-y:auto;padding:0">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--b2);display:flex;justify-content:space-between;align-items:center;background:var(--bg2)">
+        <div>
+          <div style="font-size:15px;font-weight:600;color:var(--t1)">Перевірте ${docType==='rakhunok'?'рахунок':'акт'}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:2px">Знайдіть пропущені дані і дозаповніть. Клікніть на порожнє поле щоб ввести.</div>
+        </div>
+        <button class="btn" onclick="closeDocCheckModal()">✕</button>
+      </div>
+      <div id="doc-check-body" style="padding:24px;background:#fff;color:#000">
+        ${docHtml}
+      </div>
+      <div id="doc-check-status" style="padding:10px 20px;font-size:12px;color:var(--t3);background:var(--bg2);border-top:1px solid var(--b2)"></div>
+      <div style="padding:14px 20px;display:flex;gap:10px;justify-content:flex-end;background:var(--bg2);border-top:1px solid var(--b2)">
+        <button class="btn" onclick="closeDocCheckModal()">Скасувати</button>
+        <button class="btn primary" onclick="submitDocCheck()">Зберегти і надіслати</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(mo);
+}
+
+function closeDocCheckModal(){
+  document.getElementById('doc-check-modal')?.remove();
+  S._docCheck = null;
+}
+
+// Клік на пропущений span — показує input
+function docGapClick(span) {
+  if (span.querySelector('input')) return; // вже відкрито
+  const field = span.dataset.field;
+  const current = S._docCheck?.filled?.[field] || '';
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.value = current;
+  inp.className = 'doc-gap-input';
+  inp.onblur = () => {
+    const val = inp.value.trim();
+    span.textContent = val;
+    if (val && S._docCheck) {
+      S._docCheck.filled[field] = val;
+      span.classList.add('filled');
+    }
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+  };
+  span.innerHTML = '';
+  span.appendChild(inp);
+  inp.focus();
+}
+
+// Подача документа на перевірку
+async function submitDocCheck(){
+  const dc = S._docCheck;
+  if (!dc) return;
+
+  // Перевіряємо що всі gaps заповнені
+  const missing = dc.gaps.filter(g => !dc.filled[g] || !dc.filled[g].trim());
+  if (missing.length) {
+    document.getElementById('doc-check-status').innerHTML =
+      `<span style="color:#e66">⚠ Залишились порожні поля: ${missing.length}. Клікніть на них.</span>`;
+    return;
+  }
+
+  const o = (S.savedOrders||[])[dc.idx];
+  const token = localStorage.getItem('docaa_token');
+  const expected = {};
+  dc.gaps.forEach(g => { expected[g] = dc.expected[g]; });
+
+  try {
+    const r = await fetch(`/api/student/orders/${o.letterId||o.id}/submit-doc`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({
+        doc_type: dc.docType,
+        attempt: dc.attempt,
+        fields: dc.filled,
+        expected,
+      }),
+    });
+    const data = await r.json();
+
+    if (data.ok) {
+      notify(`${dc.docType==='rakhunok'?'Рахунок':'Акт'} прийнято ✓`, 'ok');
+      closeDocCheckModal();
+      // Зберігаємо і надсилаємо документ замовнику
+      sendDocToClient(dc.idx, dc.docType, dc.filled, dc.expected, dc.ctx);
+    } else if (data.give_up) {
+      // Друга спроба провалилась — показуємо правильні
+      const correctLines = Object.keys(data.correct).map(k=>{
+        const label = ({truck_plate:'Тягач',trailer_plate:'Причіп',border:'Кордон',doc_date:'Дата'})[k]||k;
+        return `<div>${label}: <strong style="color:#5d8">${data.correct[k]||'(порожньо)'}</strong> (ви ввели: ${dc.filled[k]||'?'})</div>`;
+      }).join('');
+      document.getElementById('doc-check-status').innerHTML = `
+        <div style="color:#e66;font-weight:600;margin-bottom:6px">Друга спроба не вдалась. Документ збережено з правильними даними:</div>
+        ${correctLines}
+      `;
+      setTimeout(()=>{
+        closeDocCheckModal();
+        // Заповнюємо правильними і відсилаємо
+        sendDocToClient(dc.idx, dc.docType, data.correct, dc.expected, dc.ctx);
+      }, 4000);
+    } else {
+      // Перша спроба — даємо другу
+      dc.attempt = 2;
+      const errLabels = data.errors.map(k=>({truck_plate:'Тягач',trailer_plate:'Причіп',border:'Кордон',doc_date:'Дата'})[k]||k);
+      document.getElementById('doc-check-status').innerHTML =
+        `<span style="color:#e66">⚠ Знайдено помилки у: ${errLabels.join(', ')}. Будьте уважнішими — лишилась 1 спроба.</span>`;
+    }
+  } catch(e) { notify('Помилка з\'єднання','err'); }
+}
+
+// Після успіху — генеруємо фінальний HTML без gaps і надсилаємо замовнику
+function sendDocToClient(idx, docType, filled, expectedAll, ctx) {
+  const o = (S.savedOrders||[])[idx]; if (!o) return;
+  // Об'єднуємо filled + expectedAll (для непропущених)
+  const all = Object.assign({}, expectedAll, filled);
+  // Перевикористаємо рендер з тим самим gap-хелпером, але вже з заповненими значеннями
+  const num = String(parseInt(o.number)||idx+1).padStart(4,'0');
+  const totalUAH = o.spravka.before + o.spravka.after + o.spravka.fee;
+  const fromCity = (o.load_address||'').split(',').slice(-2).join(',').trim();
+  const toCity = (o.unload_address||'').split(',').slice(-2).join(',').trim();
+  const contract = ctx.client?.contract || '№ 001 від 01.01.2018р.';
+  const border = all.border || ctx.border_name || 'Краківець';
+  // gap = звичайне значення
+  const gap = (field, value) => all[field] || value || '';
+  let docHtml;
+  if (docType === 'rakhunok') {
+    docHtml = renderRakhunokHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, gap, expected: all });
+  } else {
+    docHtml = renderAktHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, contract, gap, expected: all });
+  }
+  // Готуємо повний HTML з стилями
+  const full = wrapDocHtmlForSend(docHtml, docType, num);
+  // Зберігаємо у order
+  if (docType === 'rakhunok') o.rakhunok = { num, totalUAH, fields: all };
+  else o.akt = { num, totalUAH, fields: all };
+
+  const subject = docType==='rakhunok' ? `Рахунок №${num} — ${o.client_name}` : `Акт №${num} — ${o.client_name}`;
+  previewAndSend(full, subject, idx, docType);
+}
+
+function wrapDocHtmlForSend(inner, docType, num) {
+  return `<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><title>${docType==='rakhunok'?'Рахунок':'Акт'} №${num}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Times New Roman',serif;font-size:12px;line-height:1.5;color:#000;background:#fff;padding:32px}
+.doc-page{max-width:760px;margin:auto}
+.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:30px}
+.doc-logo{font-size:24px;font-weight:900;letter-spacing:2px;color:#000;line-height:1}
+.doc-logo span{color:#FFBE63}
+.doc-top-info{text-align:right;font-size:11px;line-height:1.6}
+.doc-top-info .doc-name{font-size:13px;font-weight:600;margin-bottom:3px}
+.doc-title{text-align:right;font-size:13px;font-weight:600;margin-bottom:18px}
+.doc-title-c{text-align:center;font-size:14px;font-weight:700;margin-bottom:10px}
+.doc-title-c .sub{font-size:12px;font-weight:400;font-style:italic}
+.doc-parties{text-align:right;font-size:11px;margin-bottom:6px;line-height:1.7}
+.doc-parties .lbl{color:#555}
+.doc-payer{text-align:right;font-size:11px;margin-bottom:18px;line-height:1.7}
+.doc-payer .lbl{color:#555}
+.doc-top-sigs{display:flex;justify-content:space-between;margin-bottom:30px;font-size:11px}
+.ts-col{flex:1;text-align:center}
+.ts-line{display:block;width:170px;border-top:1px solid #000;margin:14px auto 4px}
+.doc-meta-row{display:flex;justify-content:space-between;font-size:11px;margin-bottom:18px}
+.doc-preamble{font-size:11px;text-align:justify;margin-bottom:14px;line-height:1.6}
+.doc-info{font-size:11px;margin-bottom:18px;line-height:1.7}
+.doc-table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:11px}
+.doc-table th{background:#f5f5f5;padding:7px 8px;border:1px solid #999;font-weight:600;text-align:left}
+.doc-table th.c{text-align:center}
+.doc-table th.r{text-align:right}
+.doc-table td{padding:7px 8px;border:1px solid #999;vertical-align:top}
+.doc-table td.c{text-align:center}
+.doc-table td.r{text-align:right}
+.doc-foot{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:11px}
+.doc-foot td{padding:7px 8px}
+.doc-foot .car-no{vertical-align:top}
+.doc-foot .lbl-cell{color:#555;width:120px}
+.doc-foot .sum-cell{text-align:right;font-weight:600;width:120px}
+.doc-total{padding-top:10px;border-top:1px solid #999;margin-bottom:30px;font-size:11px}
+.doc-total .t-lbl{display:inline-block;width:130px}
+.doc-summary{margin-bottom:18px;font-size:11px}
+.doc-summary .ds-row{display:flex;border:1px solid #999;border-bottom:none;padding:7px 10px}
+.doc-summary .ds-row:last-child{border-bottom:1px solid #999}
+.doc-summary .ds-lbl{width:140px;font-weight:600;background:#f5f5f5;margin:-7px 10px -7px -10px;padding:7px 10px}
+.doc-signatures{display:flex;justify-content:space-between;gap:30px;font-size:11px;margin-top:30px}
+.ds-col{flex:1}
+.ds-line{display:block;width:160px;border-top:1px solid #000;margin:30px 0 4px}
+.ds-role{font-style:italic;color:#555;font-size:10px;margin-top:4px}
+.doc-requisites{display:flex;justify-content:space-between;gap:30px;margin-top:34px;font-size:10px;line-height:1.5}
+.dr-col{flex:1}
+.dr-col strong{display:block;font-weight:600;margin-bottom:3px}
+.doc-sig{text-align:right;margin-top:60px}
+.doc-sig .sig-line{display:inline-block;border-top:1px solid #000;width:170px;margin-right:6px;margin-bottom:4px}
+</style></head><body>${inner}</body></html>`;
+}
+
+// CSS для клікабельних пропусків у модалці перевірки (інжектуємо у head)
+(function injectDocStyles(){
+  if (document.getElementById('doc-gap-styles')) return;
+  const s = document.createElement('style');
+  s.id = 'doc-gap-styles';
+  s.textContent = `
+    /* Стилі для документа всередині модалки перевірки */
+    #doc-check-body{font-family:'Times New Roman',serif}
+    #doc-check-body .doc-page{max-width:760px;margin:auto}
+    #doc-check-body .doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:30px}
+    #doc-check-body .doc-logo{font-size:24px;font-weight:900;letter-spacing:2px;line-height:1}
+    #doc-check-body .doc-logo span{color:#FFBE63}
+    #doc-check-body .doc-top-info{text-align:right;font-size:11px;line-height:1.6}
+    #doc-check-body .doc-top-info .doc-name{font-size:13px;font-weight:600;margin-bottom:3px}
+    #doc-check-body .doc-title{text-align:right;font-size:13px;font-weight:600;margin-bottom:18px}
+    #doc-check-body .doc-title-c{text-align:center;font-size:14px;font-weight:700;margin-bottom:10px}
+    #doc-check-body .doc-title-c .sub{font-size:12px;font-weight:400;font-style:italic}
+    #doc-check-body .doc-parties{text-align:right;font-size:11px;margin-bottom:6px;line-height:1.7}
+    #doc-check-body .doc-parties .lbl{color:#555}
+    #doc-check-body .doc-payer{text-align:right;font-size:11px;margin-bottom:18px;line-height:1.7}
+    #doc-check-body .doc-payer .lbl{color:#555}
+    #doc-check-body .doc-top-sigs{display:flex;justify-content:space-between;margin-bottom:30px;font-size:11px}
+    #doc-check-body .ts-col{flex:1;text-align:center}
+    #doc-check-body .ts-line{display:block;width:170px;border-top:1px solid #000;margin:14px auto 4px}
+    #doc-check-body .doc-meta-row{display:flex;justify-content:space-between;font-size:11px;margin-bottom:18px}
+    #doc-check-body .doc-preamble{font-size:11px;text-align:justify;margin-bottom:14px;line-height:1.6}
+    #doc-check-body .doc-info{font-size:11px;margin-bottom:18px;line-height:1.7}
+    #doc-check-body .doc-table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:11px}
+    #doc-check-body .doc-table th{background:#f5f5f5;padding:7px 8px;border:1px solid #999;font-weight:600;text-align:left}
+    #doc-check-body .doc-table th.c{text-align:center}
+    #doc-check-body .doc-table th.r{text-align:right}
+    #doc-check-body .doc-table td{padding:7px 8px;border:1px solid #999;vertical-align:top}
+    #doc-check-body .doc-table td.c{text-align:center}
+    #doc-check-body .doc-table td.r{text-align:right}
+    #doc-check-body .doc-foot{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:11px}
+    #doc-check-body .doc-foot td{padding:7px 8px}
+    #doc-check-body .doc-foot .lbl-cell{color:#555;width:120px}
+    #doc-check-body .doc-foot .sum-cell{text-align:right;font-weight:600;width:120px}
+    #doc-check-body .doc-total{padding-top:10px;border-top:1px solid #999;margin-bottom:30px;font-size:11px}
+    #doc-check-body .doc-total .t-lbl{display:inline-block;width:130px}
+    #doc-check-body .doc-summary{margin-bottom:18px;font-size:11px}
+    #doc-check-body .doc-summary .ds-row{display:flex;border:1px solid #999;border-bottom:none;padding:7px 10px}
+    #doc-check-body .doc-summary .ds-row:last-child{border-bottom:1px solid #999}
+    #doc-check-body .doc-summary .ds-lbl{width:140px;font-weight:600;background:#f5f5f5;margin:-7px 10px -7px -10px;padding:7px 10px}
+    #doc-check-body .doc-signatures{display:flex;justify-content:space-between;gap:30px;font-size:11px;margin-top:30px}
+    #doc-check-body .ds-col{flex:1}
+    #doc-check-body .ds-line{display:block;width:160px;border-top:1px solid #000;margin:30px 0 4px}
+    #doc-check-body .ds-role{font-style:italic;color:#555;font-size:10px;margin-top:4px}
+    #doc-check-body .doc-requisites{display:flex;justify-content:space-between;gap:30px;margin-top:34px;font-size:10px;line-height:1.5}
+    #doc-check-body .dr-col{flex:1}
+    #doc-check-body .dr-col strong{display:block;font-weight:600;margin-bottom:3px}
+    #doc-check-body .doc-sig{text-align:right;margin-top:60px}
+    #doc-check-body .doc-sig .sig-line{display:inline-block;border-top:1px solid #000;width:170px;margin-right:6px;margin-bottom:4px}
+    /* Клікабельний пропуск */
+    #doc-check-body .doc-gap{display:inline-block;min-width:130px;background:rgba(255,190,99,.18);border:1px dashed #d4a851;border-radius:3px;padding:1px 8px;cursor:pointer;color:#000;text-align:left;transition:background .15s}
+    #doc-check-body .doc-gap:hover{background:rgba(255,190,99,.35)}
+    #doc-check-body .doc-gap.filled{background:rgba(93,216,170,.12);border-color:#5d8;border-style:solid}
+    #doc-check-body .doc-gap-input{width:140px;border:none;outline:none;background:transparent;font-family:inherit;font-size:inherit;color:inherit;padding:0}
+  `;
+  document.head.appendChild(s);
+})();
+
+// Старі точки входу — перенаправляємо на нову
+function generateRakhunok(idx){ return generateDocWithGaps(idx, 'rakhunok'); }
+function generateAkt(idx){ return generateDocWithGaps(idx, 'akt'); }
 
 // ── PREVIEW AND SEND ──────────────────────────────────────────
 function previewAndSend(docHtml, subject, orderIdx, docType){
@@ -8315,6 +8893,22 @@ function composeClientLetter(letter){
     let route = '';
     const ms = (letter.subject||'').match(/:\s*(.+)$/);
     if (ms) route = ms[1].trim();
+
+    // Гарантуємо коди країн у маршруті: "Місто — Місто" → "Місто (FROM) — Місто (TO)"
+    // Якщо коди вже є у тексті (напр. "Сараєво (BA)") — лишаємо як є.
+    if (route) {
+      const sep = route.includes('—') ? '—' : (route.includes('–') ? '–' : '-');
+      const segs = route.split(sep).map(s=>s.trim());
+      if (segs.length >= 2) {
+        const codes = [fromCode, dirs[dirs.length-1] || ''];
+        const withCodes = segs.map((seg, i) => {
+          if (/\([A-Z]{2}\)/.test(seg)) return seg; // вже має код
+          const code = i === 0 ? codes[0] : (i === segs.length-1 ? codes[1] : '');
+          return code ? `${seg} (${code})` : seg;
+        });
+        route = withCodes.join(' — ');
+      }
+    }
 
     // Що приховано (студент має зрозуміти/спитати)
     let missing = [];

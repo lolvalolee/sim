@@ -2096,4 +2096,272 @@ router.post('/exchange/post', STU, (req, res) => {
   res.json({ ok: true, cargo_id: cargoId, responders });
 });
 
+// ─── ДОКУМЕНТИ (Деплой 23) ────────────────────────────────────
+// Допоміжно: повна назва кордону зі скороченої (для перевірки введення)
+const BORDER_FULL_NAMES = {
+  'Ужгород': 'Ужгород',
+  'Ягодин': 'Ягодин',
+  'Шегині': 'Шегині',
+  'Краківець': 'Краківець',
+  'Рава-Руська': 'Рава-Руська',
+  'Порубне': 'Порубне',
+  'Дякове': 'Дякове',
+  'Чоп': 'Чоп',
+  'Грушів': 'Грушів',
+  'Угринів': 'Угринів',
+  'Устилуг': 'Устилуг',
+  'Рені': 'Рені',
+};
+
+// POST /api/student/orders/:letterId/submit-spravka
+// Студент створив довідку і надсилає замовнику. Сервер перевіряє:
+// - Це імпорт (в UA)? Якщо ні → resume −1 (зробив непотрібну)
+// - before + after + fee = freight_uah (точно)
+// - before ±10% від розрахованого
+// - after ±10% від розрахованого
+// - EXW: notes має містити навантажувальні роботи
+router.post('/orders/:letterId/submit-spravka', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const letterId = req.params.letterId;
+  const { before, after, fee, rate_freight, rate_carrier, notes, freight_eur, carrier_freight_eur } = req.body || {};
+
+  // Валідація
+  const beforeUAH = parseFloat(before) || 0;
+  const afterUAH = parseFloat(after) || 0;
+  const feeUAH = parseFloat(fee) || 0;
+  const rateFr = parseFloat(rate_freight) || 0;
+  const rateC = parseFloat(rate_carrier) || 0;
+  const freightEur = parseFloat(freight_eur) || 0;
+  const carrierEur = parseFloat(carrier_freight_eur) || 0;
+
+  if (!freightEur || !carrierEur || !rateFr || !rateC) {
+    return res.status(400).json({ error: 'missing_amounts', message: 'Заповніть усі суми та курси' });
+  }
+  if (beforeUAH <= 0 || afterUAH <= 0 || feeUAH <= 0) {
+    return res.status(400).json({ error: 'missing_rows', message: 'Заповніть розбивку (до кордону, після кордону, винагорода)' });
+  }
+
+  // Дані рейсу
+  const letter = db.prepare('SELECT id, dirs, dist_to_border, dist_after_border, scenario_id, body, incoterms FROM letters WHERE id=?').get(letterId);
+  if (!letter) return res.status(404).json({ error: 'letter_not_found' });
+  let dirs = []; try { dirs = JSON.parse(letter.dirs || '[]'); } catch(e){}
+  const isImport = dirs.length && dirs[dirs.length - 1] === 'UA';
+
+  // Розрахунки (як ми обговорили)
+  const freightUAH = freightEur * rateFr;
+  const expectedFeeUAH = (freightEur - carrierEur) * rateFr;
+  const totalKm = (letter.dist_to_border || 0) + (letter.dist_after_border || 0);
+  const sumWithoutFee = freightUAH - expectedFeeUAH;
+  const expectedPerKm = totalKm > 0 ? sumWithoutFee / totalKm : 0;
+  const expectedBefore = expectedPerKm * (letter.dist_to_border || 0);
+  const expectedAfter = freightUAH - expectedBefore - expectedFeeUAH;
+
+  // Перевірки
+  const enteredTotal = beforeUAH + afterUAH + feeUAH;
+  const totalDiff = Math.abs(enteredTotal - freightUAH);
+  const totalOk = totalDiff <= 1; // 1 грн допуск на округлення
+
+  const beforePercent = expectedBefore > 0 ? Math.abs(beforeUAH - expectedBefore) / expectedBefore * 100 : 0;
+  const afterPercent = expectedAfter > 0 ? Math.abs(afterUAH - expectedAfter) / expectedAfter * 100 : 0;
+  const beforeOk = beforePercent <= 10;
+  const afterOk = afterPercent <= 10;
+
+  // EXW
+  const isEXW = (letter.incoterms || '').toUpperCase().includes('EXW');
+  const exwOk = !isEXW || /навантаж|EXW|exw/i.test(notes || '');
+
+  const errors = [];
+  if (!totalOk) errors.push(`Сума рядків (${enteredTotal.toFixed(2)}) не дорівнює фрахту замовника в грн (${freightUAH.toFixed(2)})`);
+  if (!beforeOk) errors.push(`Сума до кордону відрізняється на ${beforePercent.toFixed(1)}% від очікуваної (понад 10%)`);
+  if (!afterOk) errors.push(`Сума після кордону відрізняється на ${afterPercent.toFixed(1)}% від очікуваної (понад 10%)`);
+  if (!exwOk) errors.push('Умови EXW — додайте у примітках рядок про навантажувальні роботи');
+
+  const ok = errors.length === 0;
+
+  // Зберігаємо у order_progress.spravka_json
+  const spravkaData = {
+    submitted_at: new Date().toISOString(),
+    before: beforeUAH, after: afterUAH, fee: feeUAH,
+    rate_freight: rateFr, rate_carrier: rateC,
+    freight_eur: freightEur, carrier_freight_eur: carrierEur,
+    notes: notes || '',
+    is_import: isImport,
+    is_exw: isEXW,
+    ok,
+    errors,
+    expected: { before: expectedBefore, after: expectedAfter, fee: expectedFeeUAH },
+  };
+  try {
+    db.prepare(`
+      INSERT INTO order_progress (id, session_id, letter_id, state, spravka_json)
+      VALUES (?,?,?,'closed',?)
+      ON CONFLICT(session_id, letter_id) DO UPDATE SET spravka_json=excluded.spravka_json
+    `).run(uuidv4(), session.id, letterId, JSON.stringify(spravkaData));
+  } catch(e) {
+    // Fallback якщо нема UNIQUE constraint
+    const existing = db.prepare('SELECT id FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
+    if (existing) db.prepare('UPDATE order_progress SET spravka_json=? WHERE id=?').run(JSON.stringify(spravkaData), existing.id);
+  }
+
+  // Resume
+  if (!isImport) {
+    // Зробив для експорту — мінус
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id, letterId,
+      type: 'spravka_for_export', impact: -1,
+      context: { note: 'Довідка для експорту не потрібна' },
+    });
+  } else if (ok) {
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id, letterId,
+      type: 'spravka_correct', impact: 2,
+      context: { note: 'Довідка правильна' },
+    });
+  } else {
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id, letterId,
+      type: 'spravka_errors', impact: -1,
+      context: { errors },
+    });
+  }
+
+  res.json({ ok, errors, expected_for_debug: spravkaData.expected });
+});
+
+// POST /api/student/orders/:letterId/submit-doc
+// Універсальний endpoint для рахунку і акту: перевіряємо що студент дозаповнив пропуски
+router.post('/orders/:letterId/submit-doc', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const letterId = req.params.letterId;
+  const { doc_type, attempt, fields, expected } = req.body || {};
+  // doc_type: 'rakhunok' | 'akt'
+  // attempt: 1 або 2
+  // fields: { truck_plate: '...', trailer_plate: '...', border: '...', doc_date: '...' }
+  // expected: { ... } — те що очікуємо (передає клієнт зі своїх даних)
+
+  if (!['rakhunok', 'akt'].includes(doc_type)) {
+    return res.status(400).json({ error: 'bad_doc_type' });
+  }
+
+  // Нормалізатор для порівняння
+  const norm = (s) => String(s || '').trim().replace(/\s+/g, '').toLowerCase();
+
+  const errors = [];
+  for (const key of Object.keys(expected || {})) {
+    const got = norm(fields?.[key]);
+    const exp = norm(expected[key]);
+    if (exp && got !== exp) {
+      errors.push(key);
+    }
+  }
+  const ok = errors.length === 0;
+
+  // Зберігаємо стан
+  const col = doc_type === 'rakhunok' ? 'rakhunok_json' : 'akt_json';
+  const data = {
+    submitted_at: new Date().toISOString(),
+    attempt: attempt || 1,
+    fields,
+    expected,
+    ok,
+    errors,
+  };
+  try {
+    const existing = db.prepare('SELECT id, ' + col + ' as cur FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
+    if (existing) {
+      db.prepare('UPDATE order_progress SET ' + col + '=? WHERE id=?').run(JSON.stringify(data), existing.id);
+    } else {
+      db.prepare(`INSERT INTO order_progress (id, session_id, letter_id, state, ${col}) VALUES (?,?,?,'closed',?)`)
+        .run(uuidv4(), session.id, letterId, JSON.stringify(data));
+    }
+  } catch(e) { console.error('submit-doc:', e.message); }
+
+  // Resume points за результатом
+  if (ok && (attempt || 1) === 1) {
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id, letterId,
+      type: `${doc_type}_passed_first`, impact: 2,
+      context: { fields },
+    });
+  } else if (ok && attempt === 2) {
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id, letterId,
+      type: `${doc_type}_passed_second`, impact: 0,
+      context: { fields },
+    });
+  } else if (!ok && attempt === 2) {
+    // Друга спроба теж не вдалась → −бал, повертаємо expected щоб клієнт показав правильні
+    incidentScheduler.addResumePoint({
+      sessionId: session.id, studentId: req.user.id, letterId,
+      type: `${doc_type}_failed`, impact: -2,
+      context: { errors, fields },
+    });
+    return res.json({ ok: false, errors, attempt: 2, give_up: true, correct: expected });
+  }
+
+  res.json({ ok, errors, attempt: attempt || 1 });
+});
+
+// GET /api/student/orders/:letterId/doc-context
+// Повертає всі дані потрібні для генерації документів по рейсу:
+// реквізити замовника, перевізника, фрахти, кордон, відстані
+router.get('/orders/:letterId/doc-context', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const letterId = req.params.letterId;
+  const letter = db.prepare(`
+    SELECT id, subject, from_name, company, country, dirs,
+           dist_to_border, dist_after_border, border_name, incoterms,
+           client_address, client_iban, client_bank, client_edrpou,
+           client_director, client_contract_no, freight_amount
+    FROM letters WHERE id=?
+  `).get(letterId);
+  if (!letter) return res.status(404).json({ error: 'letter_not_found' });
+
+  // Перевізник з угоди
+  const op = db.prepare('SELECT carrier_id, carrier_freight FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
+  let carrier = null;
+  if (op?.carrier_id) {
+    carrier = db.prepare('SELECT id, name, person, phone, nationality, edrpou, address FROM carriers WHERE id=?').get(op.carrier_id);
+  }
+  // Угоди для номерів авто і фрахту
+  const chat = op?.carrier_id ? db.prepare('SELECT plate_truck, plate_trailer FROM carrier_chats WHERE session_id=? AND carrier_id=?').get(session.id, op.carrier_id) : null;
+
+  let dirs = []; try { dirs = JSON.parse(letter.dirs || '[]'); } catch(e){}
+
+  res.json({
+    letter_id: letter.id,
+    dirs,
+    is_import: dirs.length && dirs[dirs.length - 1] === 'UA',
+    border_name: letter.border_name || '',
+    dist_to_border: letter.dist_to_border || 0,
+    dist_after_border: letter.dist_after_border || 0,
+    incoterms: letter.incoterms || '',
+    client: {
+      name: letter.company || '',
+      director: letter.client_director || '',
+      address: letter.client_address || '',
+      iban: letter.client_iban || '',
+      bank: letter.client_bank || '',
+      edrpou: letter.client_edrpou || '',
+      contract: letter.client_contract_no || '№ 001 від 01.01.2018р.',
+    },
+    carrier: carrier ? {
+      name: carrier.name,
+      person: carrier.person,
+      edrpou: carrier.edrpou || '',
+      address: carrier.address || '',
+      freight: op.carrier_freight || 0,
+      plate_truck: chat?.plate_truck || '',
+      plate_trailer: chat?.plate_trailer || '',
+    } : null,
+    freight_client: letter.freight_amount || 0,
+  });
+});
+
 module.exports = router;
