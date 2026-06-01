@@ -113,7 +113,11 @@ tx();
 console.log(`[seed-client-details] ✓ Оновлено реквізити для ${count} замовників`);
 
 // 2) Перевізники — ЄДРПО і адреса
-const carriers = db.prepare('SELECT id, name, nationality FROM carriers WHERE edrpou IS NULL OR edrpou=""').all();
+// Перевіряємо чи колонка nationality існує
+const carrierCols = db.prepare('PRAGMA table_info(carriers)').all().map(c => c.name);
+const hasNat = carrierCols.includes('nationality');
+const selectCols = hasNat ? 'id, name, nationality' : 'id, name';
+const carriers = db.prepare(`SELECT ${selectCols} FROM carriers WHERE edrpou IS NULL OR edrpou=''`).all();
 const updCarr = db.prepare('UPDATE carriers SET edrpou=?, address=? WHERE id=?');
 const txC = db.transaction(() => {
   for (const c of carriers) {
