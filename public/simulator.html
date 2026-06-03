@@ -863,6 +863,17 @@ body {
 .acc-doc-btn.primary { background: var(--acc); border-color: var(--acc); color: #151515; font-weight: 600; }
 .acc-doc-btn.primary:hover { background: #e8a845; }
 .acc-doc-empty { font-size: 12px; color: var(--t3); font-style: italic; }
+.acc-docs-list { margin-top: 12px; }
+.acc-docs-sub { font-size: 9px; letter-spacing: .06em; text-transform: uppercase; color: var(--t3); font-weight: 600; margin-bottom: 7px; }
+.acc-doc-item { display: flex; align-items: center; gap: 10px; background: var(--bg2); border: 1px solid var(--b1); border-radius: 7px; padding: 7px 11px; margin-bottom: 6px; }
+.acc-doc-name { font-size: 12px; color: var(--t1); flex: 1; }
+.acc-doc-ver { font-family: var(--mono); font-size: 10px; color: var(--t3); }
+.acc-doc-badge { font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 12px; }
+.acc-doc-badge.ok { background: rgba(60,160,60,.15); color: #6fc96f; }
+.acc-doc-badge.err { background: rgba(255,190,99,.15); color: var(--acc); }
+.acc-doc-badge.wait { background: var(--bg4); color: var(--t3); }
+.acc-doc-open { background: transparent; border: 1px solid var(--b2); border-radius: 6px; color: var(--t2); font-size: 11px; padding: 4px 10px; cursor: pointer; font-family: inherit; }
+.acc-doc-open:hover { border-color: var(--acc); color: var(--acc); }
 
 .apps-empty {
   background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r2);
@@ -3810,7 +3821,10 @@ function renderOrderAccordion(a, docsAvailable){
   const cf = parseFloat(a.client_freight) || 0;
   const rf = parseFloat(a.carrier_freight) || 0;
 
-  // тимчасові курси (25c — персист)
+  // 25c: курси — з пам'яті сесії або збережені на заявці (персист)
+  if (!_appRates[a.id] && (a.rate_client || a.rate_carrier)) {
+    _appRates[a.id] = { client: a.rate_client || '', carrier: a.rate_carrier || '' };
+  }
   const rates = _appRates[a.id] || { client: '', carrier: '' };
 
   // ряд деталей
@@ -3863,8 +3877,46 @@ function renderOrderAccordion(a, docsAvailable){
     <div class="acc-docs">
       <div class="acc-docs-title">Документи рейсу</div>
       <div class="acc-doc-btns">${docsButtons}</div>
+      <div class="acc-docs-list" id="acc-docs-list-${a.id}"></div>
     </div>
   </div>`;
+}
+
+// 25c: підвантажити збережені документи рейсу в панель акордеона
+async function loadAccDocsList(appId, letterId){
+  const box = document.getElementById('acc-docs-list-'+appId);
+  if (!box || !letterId) return;
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const r = await fetch(`/api/student/orders/${letterId}/documents`, { headers:{'Authorization':'Bearer '+token} });
+    if (!r.ok) return;
+    const docs = await r.json();
+    if (!docs.length) { box.innerHTML=''; return; }
+    const names = { application:'Заявка', spravka:'Довідка', rakhunok:'Рахунок', akt:'Акт' };
+    const statusBadge = (s) => {
+      if (s==='accepted') return '<span class="acc-doc-badge ok">прийнято</span>';
+      if (s==='error') return '<span class="acc-doc-badge err">помилка</span>';
+      return '<span class="acc-doc-badge wait">на перевірці</span>';
+    };
+    box.innerHTML = '<div class="acc-docs-sub">Згенеровані документи</div>' + docs.map(d => `
+      <div class="acc-doc-item">
+        <span class="acc-doc-name">${names[d.doc_type]||d.doc_type} <span class="acc-doc-ver">v${d.version}</span></span>
+        ${statusBadge(d.status)}
+        <button class="acc-doc-open" onclick="event.stopPropagation();openSavedDoc('${d.id}')">Відкрити</button>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+// 25c: відкрити збережений документ (html) у новому вікні для перегляду/друку
+async function openSavedDoc(docId){
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const r = await fetch(`/api/student/documents/${docId}`, { headers:{'Authorization':'Bearer '+token} });
+    if (!r.ok) { notify('Не вдалось завантажити документ','err'); return; }
+    const doc = await r.json();
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(doc.html || '<p>Документ порожній</p>'); w.document.close(); }
+  } catch(e) { notify('Помилка','err'); }
 }
 
 function fmtUah(n){ return Math.round(n).toLocaleString('uk-UA').replace(/,/g,' ') + ' ₴'; }
@@ -3873,9 +3925,15 @@ function fmtUah(n){ return Math.round(n).toLocaleString('uk-UA').replace(/,/g,' 
 function toggleOrderAccordion(appId){
   _expandedAppId = (_expandedAppId === appId) ? null : appId;
   redrawApplicationsTable();
+  // 25c: підвантажити збережені документи рейсу
+  if (_expandedAppId === appId) {
+    const a = _applicationsCache.find(x => x.id === appId);
+    if (a && a.letter_id) setTimeout(() => loadAccDocsList(appId, a.letter_id), 50);
+  }
 }
 
-// 25b: live-перерахунок UAH при вводі курсу + збереження в тимчасове сховище
+// 25c: live-перерахунок UAH + персист курсів на сервер (debounce)
+let _rateSaveTimer = null;
 function onAccRateInput(appId){
   const a = _applicationsCache.find(x => x.id === appId);
   if (!a) return;
@@ -3890,6 +3948,18 @@ function onAccRateInput(appId){
   const uahC  = document.getElementById('acc-uah-c-'+appId);
   if (uahCl) uahCl.textContent = rc ? fmtUah(cf*parseFloat(rc)) : '—';
   if (uahC)  uahC.textContent  = rcar ? fmtUah(rf*parseFloat(rcar)) : '—';
+  // персист на сервер (з затримкою щоб не слати на кожну цифру)
+  clearTimeout(_rateSaveTimer);
+  _rateSaveTimer = setTimeout(async () => {
+    try {
+      const token = localStorage.getItem('docaa_token');
+      await fetch(`/api/student/applications/${appId}/rates`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+        body: JSON.stringify({ rate_client: rc, rate_carrier: rcar }),
+      });
+    } catch(e) {}
+  }, 600);
 }
 
 // Витягуємо короткий маршрут з адрес "місто → місто"
@@ -8062,6 +8132,7 @@ async function loadAppDataForDoc(appId) {
     cargo: appData.cargo || '',
     spravka: null, // буде встановлено після створення довідки
     _appId: appId, // для подальших викликів
+    _carrierId: ctx.carrier?.id || app.carrier_id || null,
     _ctx: ctx,
     // 25b: тимчасові курси з акордеона картки (персист — 25c)
     _rateClient: (_appRates[appId]?.client) || '',
@@ -8196,7 +8267,7 @@ async function generateSpravka(idx){
     </div>
     <div class="form-group">
       <label class="form-label">Додаткова інформація</label>
-      <textarea id="sp-notes" placeholder="${ctx.incoterms && ctx.incoterms.toUpperCase().includes('EXW') ? 'УВАГА — умови EXW: додайте рядок про навантажувальні роботи' : ''}" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:50px"></textarea>
+      <textarea id="sp-notes" placeholder="Тут можна додати додатковий текст за потреби" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none;resize:vertical;min-height:50px"></textarea>
     </div>
     <div style="display:flex;gap:8px">
       <button class="btn primary" style="flex:1" onclick="submitSpravka(${idx})">Зберегти і надіслати замовнику</button>
@@ -8238,36 +8309,11 @@ async function submitSpravka(idx){
     notify('Заповніть усі поля (курси і розбивку)', 'err'); return;
   }
 
-  const token = localStorage.getItem('docaa_token');
-  try {
-    const r = await fetch(`/api/student/orders/${o.letterId||o.id}/submit-spravka`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body: JSON.stringify({
-        before, after, fee, rate_freight: rateFr, rate_carrier: rateC,
-        freight_eur: o.freight_client, carrier_freight_eur: o.freight_carrier,
-        notes,
-      }),
-    });
-    const data = await r.json();
-    if (data.ok) {
-      // Зберегли — генеруємо HTML і надсилаємо замовнику
-      o.spravka = { before, after, fee, totalUAH: Math.round(o.freight_client*rateFr), rate: rateFr, notes, ctx };
-      mo?.remove();
-      notify('Довідка прийнята і збережена ✓', 'ok');
-      renderSpravkaDoc(idx, ctx, { before, after, fee, rateFr, notes });
-    } else {
-      // Помилки — показуємо
-      const errBox = document.createElement('div');
-      errBox.style.cssText='background:rgba(220,68,68,.1);border:1px solid rgba(220,68,68,.3);border-radius:8px;padding:10px 12px;margin-top:10px;font-size:12px;color:#e66';
-      errBox.innerHTML = '<strong>Знайдено помилки:</strong><ul style="margin:6px 0 0 16px">' +
-        data.errors.map(e=>`<li>${e}</li>`).join('') + '</ul>';
-      const old = mo.querySelector('._spravka_errors');
-      if (old) old.remove();
-      errBox.className = '_spravka_errors';
-      mo.querySelector('.modal-box').appendChild(errBox);
-    }
-  } catch(e) { notify('Помилка з\'єднання', 'err'); }
+  // 25c: без миттєвої перевірки — зберігаємо локально, генеруємо HTML, надсилаємо.
+  // Перевірку зробить замовник через 1–20 сим-хв (cron + document-checker).
+  o.spravka = { before, after, fee, totalUAH: Math.round(o.freight_client*rateFr), rate: rateFr, notes, ctx };
+  mo?.remove();
+  renderSpravkaDoc(idx, ctx, { before, after, fee, rateFr, notes });
 }
 
 function renderSpravkaDoc(idx, ctx, vals){
@@ -8290,8 +8336,7 @@ function renderSpravkaDoc(idx, ctx, vals){
   Транспортно-експедиторські витрати становлять ${totalUAH.toLocaleString('uk-UA')},00 (${numToWords(totalUAH)} гривень 00 копійок);<br><br>
   - Транспортно-експедиторські витрати по маршруту: ${fromCity} — пп. ${border} становлять ${vals.before.toLocaleString('uk-UA')},00 (${numToWords(vals.before)} гривень 00 копійок);<br>
   - Транспортно-експедиторські витрати по маршруту: пп. ${border} — ${toCity} становлять ${vals.after.toLocaleString('uk-UA')},00 (${numToWords(vals.after)} гривень 00 копійок);<br>
-  <br>Експедиторська винагорода: ${vals.fee.toLocaleString('uk-UA')},00 грн;<br>
-  <br>Страхування вантажу не проводилось.
+  <br>Експедиторська винагорода: ${vals.fee.toLocaleString('uk-UA')},00 грн;
   ${vals.notes?`<br><br>${vals.notes}`:''}
 </div>
 <div class="footer"><div class="sig">_________________ ${DOCAA_DETAILS.name}</div></div>
@@ -8368,7 +8413,6 @@ async function generateDocWithGaps(idx, docType){
   if (!o.letterId) {
     notify('Не вдалось знайти рейс для цієї заявки','err'); return;
   }
-  if(!o.spravka){ notify('Спочатку згенеруйте довідку — рахунок і акт залежать від неї','warn'); return; }
 
   // Підвантажуємо контекст
   const token = localStorage.getItem('docaa_token');
@@ -8381,42 +8425,46 @@ async function generateDocWithGaps(idx, docType){
   } catch(e){}
   if (!ctx) { notify('Не вдалось завантажити дані рейсу','err'); return; }
 
-  const gapsAll = pickGapsRakhunokAkt(o.letterId||o.id);
-  const gaps = docType==='rakhunok' ? gapsAll.rakhunok : gapsAll.akt;
-
-  // Очікувані значення (для перевірки)
-  const expected = {
+  // 25c: дані беруться з заявки/контексту. Порожні поля лишаються порожні —
+  // замовник напише "не вистачає даних" через 1–20 сим-хв (cron). Без gap-модалки.
+  const fields = {
     truck_plate: o.plate_truck || ctx.carrier?.plate_truck || '',
     trailer_plate: o.plate_trailer || ctx.carrier?.plate_trailer || '',
     border: ctx.border_name || '',
     doc_date: formatSimDate(),
   };
 
-  // Будуємо HTML — для пропущених полів робимо клікабельні span
+  // totalUAH: з довідки якщо є, інакше з курсу акордеона × фрахт замовника
+  let totalUAH;
+  if (o.spravka) {
+    totalUAH = o.spravka.before + o.spravka.after + o.spravka.fee;
+  } else {
+    const rate = o._rateClient ? parseFloat(o._rateClient) : 0;
+    totalUAH = Math.round((o.freight_client || 0) * rate);
+  }
+
   const num = String(parseInt(o.number)||idx+1).padStart(4,'0');
-  const totalUAH = o.spravka.before + o.spravka.after + o.spravka.fee;
   const fromCity = (o.load_address||'').split(',').slice(-2).join(',').trim();
   const toCity = (o.unload_address||'').split(',').slice(-2).join(',').trim();
   const contract = ctx.client?.contract || '№ 001 від 01.01.2018р.';
-  const border = ctx.border_name || 'Краківець';
+  const border = fields.border || 'Краківець';
 
-  // Хелпер: повертає або значення, або клікабельний gap
-  const gap = (field, value) => {
-    if (gaps.includes(field)) {
-      return `<span class="doc-gap" data-field="${field}" onclick="docGapClick(this)" title="Клікніть щоб вписати"></span>`;
-    }
-    return value || '';
-  };
+  // gap-хелпер тепер просто повертає значення (або порожньо)
+  const gap = (field, value) => fields[field] || value || '';
 
   let docHtml = '';
   if (docType === 'rakhunok') {
-    docHtml = renderRakhunokHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, gap, expected });
+    docHtml = renderRakhunokHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, gap, expected: fields });
+    o.rakhunok = { num, totalUAH, fields };
   } else {
-    docHtml = renderAktHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, contract, gap, expected });
+    docHtml = renderAktHtml({ ctx, o, num, totalUAH, fromCity, toCity, border, contract, gap, expected: fields });
+    o.akt = { num, totalUAH, fields };
   }
 
-  // Показуємо модалку з документом + завданням
-  showDocCheckModal(idx, docType, docHtml, gaps, expected, ctx);
+  // Повний HTML і одразу прев'ю+надсилання (як довідка)
+  const full = wrapDocHtmlForSend(docHtml, docType, num);
+  const subject = docType==='rakhunok' ? `Рахунок №${num} — ${o.client_name}` : `Акт №${num} — ${o.client_name}`;
+  previewAndSend(full, subject, idx, docType);
 }
 
 // HTML рахунку (як у мокапі rakhunok-v3)
@@ -8975,33 +9023,38 @@ async function doSendDoc(emailOrderId, orderIdx, docType, btn){
     renderOrders2List();
   }
 
-  // Для ДОВІДКИ — серверна перевірка EXW (інакше AI-перевірка як було)
-  if (docType === 'spravka' && o?.spravka) {
-    try {
-      const token = localStorage.getItem('docaa_token');
-      const r = await fetch(`/api/student/orders/${emailOrderId}/submit-certificate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({
-          notes: o.spravka.notes || body || '',
-          before: o.spravka.before,
-          after: o.spravka.after,
-          fee: o.spravka.fee,
-        }),
-      });
-      const data = await r.json();
-      if (data.ok && data.status === 'has_error') {
-        // Замовник напише про помилку через тригер інциденту
-        // (інцидент уже спрацював в БД, polling підтягне у пошту)
-        setTimeout(() => {
-          if (typeof reloadEmailThreads === 'function') reloadEmailThreads();
-        }, 1000);
-      }
-    } catch(e) {}
-  } else {
-    // Для інших документів — AI-перевірка як було
-    checkDocWithAI(emailOrderId, docType, subject);
-  }
+  // 25c: зберігаємо документ у order_documents → cron перевірить через 1–20 сим-хв
+  // (стара миттєва перевірка submit-certificate / checkDocWithAI прибрана)
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const docHtml = mo?._docHtml || '';
+    // payload для серверної перевірки (checker)
+    let payload = {};
+    if (docType === 'spravka' && o?.spravka) {
+      payload = {
+        before: o.spravka.before, after: o.spravka.after, fee: o.spravka.fee,
+        rate_freight: o.spravka.rate, rate_carrier: o._rateCarrier ? parseFloat(o._rateCarrier) : o.spravka.rate,
+        freight_eur: o.freight_client, carrier_freight_eur: o.freight_carrier,
+        notes: o.spravka.notes || body || '',
+      };
+    } else if ((docType === 'rakhunok' || docType === 'akt') && o) {
+      const d = docType === 'rakhunok' ? o.rakhunok : o.akt;
+      payload = { fields: d?.fields || {}, expected: d?.fields || {} };
+    }
+    await fetch(`/api/student/orders/${o?.letterId || emailOrderId}/documents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({
+        doc_type: docType === 'carrier_order' ? 'application' : docType,
+        application_id: o?._appId || null,
+        carrier_id: o?._carrierId || null,
+        payload,
+        html: docHtml,
+      }),
+    });
+    // підтягнути відповідь коли cron спрацює
+    setTimeout(() => { if (typeof reloadEmailThreads === 'function') reloadEmailThreads(); }, 1500);
+  } catch(e) { console.error('[doc-save]', e); }
   mo?.remove();
 }
 
