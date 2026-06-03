@@ -1318,6 +1318,23 @@ body {
 .sp-input:focus { border-color: var(--acc); }
 .sp-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+/* Деплой 25a — універсальні поля форм у темі Docaa (раніше не мали стилю → білі) */
+.form-group { margin-bottom: 14px; }
+.form-label {
+  display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--t3); font-weight: 600; margin-bottom: 6px;
+}
+.form-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg3); border: 1px solid var(--b2); color: var(--t1);
+  font-family: var(--sans); font-size: 13px; padding: 9px 12px;
+  border-radius: var(--r); outline: none; transition: border-color .15s;
+}
+.form-input:focus { border-color: var(--acc); }
+.form-input::placeholder { color: var(--t3); }
+select.form-input { appearance: none; cursor: pointer; }
+input[type="number"].form-input, .form-input[type="number"] { font-family: var(--mono); }
+
 /* Кастомний dropdown */
 .sp-dropdown { position: relative; }
 .sp-dropdown-trigger {
