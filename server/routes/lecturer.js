@@ -145,63 +145,78 @@ router.post('/sessions/:studentId/resume', LEC, (req, res) => {
 });
 
 // POST /api/lecturer/sessions/:studentId/reset
-// Скидає сесію і генерує новий набір листів
+// Скидає все для студента і генерує новий набір листів.
+// body.start_date (опц.) — ДД.ММ.РРРР; якщо нема — бере поточну дату групи.
 router.post('/sessions/:studentId/reset', LEC, (req, res) => {
-  const studentId = req.params.studentId;
+  try {
+    const studentId = req.params.studentId;
 
-  // Get current session id before deleting
-  const session = db.prepare('SELECT id FROM sessions WHERE student_id=?').get(studentId);
+    const member = db.prepare('SELECT group_id FROM group_members WHERE student_id=?').get(studentId);
+    if (!member) return res.status(404).json({ error: 'Student not in any group' });
 
-  // Delete in correct order (children first)
-  if (session) {
-    db.prepare('DELETE FROM email_threads WHERE session_id=?').run(session.id);
-    db.prepare('DELETE FROM carrier_chats WHERE session_id=?').run(session.id);
-    db.prepare('DELETE FROM order_progress WHERE session_id=?').run(session.id);
-    db.prepare('DELETE FROM confirmations WHERE session_id=?').run(session.id).catch?.(() => {});
-    db.prepare('DELETE FROM sessions WHERE id=?').run(session.id);
+    // Якщо передали дату — оновлюємо дату старту групи (одна на групу)
+    if (req.body && req.body.start_date) {
+      const sd = String(req.body.start_date).trim();
+      if (!/^\d{2}\.\d{2}\.\d{4}$/.test(sd)) {
+        return res.status(400).json({ error: 'start_date must be DD.MM.YYYY' });
+      }
+      db.prepare("UPDATE groups SET start_date=?, started_at=datetime('now') WHERE id=?")
+        .run(sd, member.group_id);
+    } else {
+      // дата не передана — гарантуємо що група стартована (started_at не порожній)
+      db.prepare("UPDATE groups SET started_at=COALESCE(NULLIF(started_at,''), datetime('now')) WHERE id=?")
+        .run(member.group_id);
+    }
+
+    // Повна чистка + нова assignment
+    wipeStudentSession(studentId);
+    const newAssignment = generateAssignment(studentId, member.group_id, req.user.id);
+
+    res.json({ ok: true, new_assignment_id: newAssignment.id, letter_count: newAssignment.letter_ids.length });
+  } catch (e) {
+    console.error('[reset session] error:', e.message);
+    res.status(500).json({ error: 'reset_failed', detail: e.message });
   }
-
-  // Delete old assignment and generate new one
-  const oldAssignment = db.prepare('SELECT * FROM assignments WHERE student_id=?').get(studentId);
-  if (oldAssignment) {
-    db.prepare('DELETE FROM assignments WHERE student_id=?').run(studentId);
-  }
-
-  // Find group for this student
-  const member = db.prepare('SELECT group_id FROM group_members WHERE student_id=?').get(studentId);
-  if (!member) return res.status(404).json({ error: 'Student not in any group' });
-
-  // Generate fresh assignment
-  const newAssignment = generateAssignment(studentId, member.group_id, req.user.id);
-
-  res.json({ ok: true, new_assignment_id: newAssignment.id, letter_count: newAssignment.letter_ids.length });
 });
 
 // POST /api/lecturer/groups/:groupId/reset — рестарт всієї групи
+// body.start_date (опц.) — ДД.ММ.РРРР; якщо нема — поточна реальна дата.
 router.post('/groups/:groupId/reset', LEC, (req, res) => {
-  const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.groupId, req.user.id);
-  if (!g) return res.status(404).json({ error: 'Group not found' });
+  try {
+    const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.groupId, req.user.id);
+    if (!g) return res.status(404).json({ error: 'Group not found' });
 
-  const members = db.prepare('SELECT student_id FROM group_members WHERE group_id=?').all(req.params.groupId);
-  const results = [];
-
-  for (const m of members) {
-    const studentId = m.student_id;
-    const session = db.prepare('SELECT id FROM sessions WHERE student_id=?').get(studentId);
-
-    if (session) {
-      db.prepare('DELETE FROM email_threads WHERE session_id=?').run(session.id);
-      db.prepare('DELETE FROM carrier_chats WHERE session_id=?').run(session.id);
-      db.prepare('DELETE FROM order_progress WHERE session_id=?').run(session.id);
-      db.prepare('DELETE FROM sessions WHERE id=?').run(session.id);
+    // Дата старту: передана або поточна реальна (ДД.ММ.РРРР)
+    let startDate = req.body && req.body.start_date ? String(req.body.start_date).trim() : '';
+    if (startDate) {
+      if (!/^\d{2}\.\d{2}\.\d{4}$/.test(startDate)) {
+        return res.status(400).json({ error: 'start_date must be DD.MM.YYYY' });
+      }
+    } else {
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, '0');
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      startDate = `${dd}.${mm}.${now.getFullYear()}`;
     }
 
-    db.prepare('DELETE FROM assignments WHERE student_id=?').run(studentId);
-    const newAssignment = generateAssignment(studentId, req.params.groupId, req.user.id);
-    results.push({ student_id: studentId, letters: newAssignment.letter_ids.length });
-  }
+    // Записуємо дату і час старту групи — всі нові сесії підхоплять цю дату
+    db.prepare("UPDATE groups SET start_date=?, started_at=datetime('now') WHERE id=?")
+      .run(startDate, req.params.groupId);
 
-  res.json({ ok: true, students_reset: results.length, results });
+    const members = db.prepare('SELECT student_id FROM group_members WHERE group_id=?').all(req.params.groupId);
+    const results = [];
+
+    for (const m of members) {
+      wipeStudentSession(m.student_id);
+      const newAssignment = generateAssignment(m.student_id, req.params.groupId, req.user.id);
+      results.push({ student_id: m.student_id, letters: newAssignment.letter_ids.length });
+    }
+
+    res.json({ ok: true, start_date: startDate, students_reset: results.length, results });
+  } catch (e) {
+    console.error('[reset group] error:', e.message);
+    res.status(500).json({ error: 'reset_failed', detail: e.message });
+  }
 });
 
 // GET /api/lecturer/sessions/:studentId — view student progress
@@ -242,6 +257,45 @@ router.post('/groups/:groupId/rates', LEC, (req, res) => {
 });
 
 // ── HELPER: generate assignment ───────────────────────────────
+// ── 25-fix: повна безпечна чистка всіх даних студента ─────────
+// Чистить дочірні таблиці по session_id, резюме/аналіз по student_id.
+// Кожен DELETE захищений перевіркою існування таблиці — щоб рестарт
+// не падав 500 якщо якоїсь таблиці нема в поточній схемі.
+function tableExists(name) {
+  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+}
+function safeDelete(table, whereCol, value) {
+  if (!tableExists(table)) return 0;
+  try {
+    return db.prepare(`DELETE FROM ${table} WHERE ${whereCol}=?`).run(value).changes;
+  } catch (e) {
+    console.error(`[reset] DELETE ${table} WHERE ${whereCol}: ${e.message}`);
+    return 0;
+  }
+}
+function wipeStudentSession(studentId) {
+  const session = db.prepare('SELECT id FROM sessions WHERE student_id=?').get(studentId);
+  // Таблиці прив'язані до session_id (видаляємо ДО самої сесії)
+  if (session) {
+    const sid = session.id;
+    for (const t of ['order_events','incidents','resume_points','application_followups',
+                     'email_threads','carrier_chats','order_progress','confirmations','applications']) {
+      safeDelete(t, 'session_id', sid);
+    }
+    safeDelete('sessions', 'id', sid);
+  }
+  // Таблиці прив'язані до student_id (резюме/аналіз — теж скидаємо при рестарті)
+  for (const t of ['student_summaries','student_analysis']) {
+    safeDelete(t, 'student_id', studentId);
+  }
+  // На випадок осиротілих записів без сесії — чистимо і по student_id
+  for (const t of ['applications','application_followups','incidents','resume_points','order_events']) {
+    safeDelete(t, 'student_id', studentId);
+  }
+  // Стара assignment
+  safeDelete('assignments', 'student_id', studentId);
+}
+
 function generateAssignment(studentId, groupId, createdBy) {
   const allLetters = db.prepare('SELECT id,type FROM letters WHERE active=1').all();
 

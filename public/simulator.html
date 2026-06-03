@@ -2984,7 +2984,7 @@ function renderCarriers(){
             ${['Мультилок','Гідроборт','Допельшток','Рухома підлога'].map(p=>`<option value="equip_${p}" ${S.carrierFilter.special==='equip_'+p?'selected':''}>${p}</option>`).join('')}
           </optgroup>
         </select>
-        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="" autocomplete="off" name="docaa-search-carriers" type="search" data-form-type="other">
+        <input class="ct-inp" id="cf-q" placeholder="🔍 Пошук..." oninput="applyCarF()" value="" autocomplete="off" name="docaa-search-carriers" type="search" data-form-type="other" data-lpignore="true" data-1p-ignore="true" readonly onfocus="this.removeAttribute('readonly')">
         <button class="btn sm" onclick="resetCarF()" title="Скинути фільтри">✕ Скинути</button>
       </div>
     </div>
