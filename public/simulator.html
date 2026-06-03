@@ -3708,20 +3708,17 @@ function renderApplicationRow(a){
   const sendBtnIcon = isSent ? '📤' : (isLate ? '⏰' : '📋');
 
   // Дії
-  // Шукаємо індекс цієї заявки у savedOrders (для викликів документів)
-  const savedIdx = (S.savedOrders||[]).findIndex(so =>
-    (so.letterId && so.letterId === a.letter_id) ||
-    (so.number && a.number && String(so.number) === String(a.number))
-  );
-  const docsAvailable = savedIdx >= 0;
+  // Деплой 24a баг 9: кнопки документів активні якщо заявка прив'язана до листа
+  // і угода з обома сторонами підтверджена
+  const docsAvailable = !!a.letter_id;
   const docsBtns = docsAvailable ? `
-      <button class="apps-act-btn" title="Довідка про транспортні витрати" onclick="generateSpravka(${savedIdx})">📄</button>
-      <button class="apps-act-btn" title="Рахунок" onclick="generateRakhunok(${savedIdx})">💰</button>
-      <button class="apps-act-btn" title="Акт" onclick="generateAkt(${savedIdx})">✓</button>
+      <button class="apps-act-btn" title="Довідка про транспортні витрати" onclick="generateSpravkaForApp('${a.id}')">📄</button>
+      <button class="apps-act-btn" title="Рахунок" onclick="generateRakhunokForApp('${a.id}')">💰</button>
+      <button class="apps-act-btn" title="Акт" onclick="generateAktForApp('${a.id}')">✓</button>
   ` : `
-      <button class="apps-act-btn" title="Спочатку збережіть заявку" disabled>📄</button>
-      <button class="apps-act-btn" title="Спочатку збережіть заявку" disabled>💰</button>
-      <button class="apps-act-btn" title="Спочатку збережіть заявку" disabled>✓</button>
+      <button class="apps-act-btn" title="Заявка не прив'язана до листа" disabled>📄</button>
+      <button class="apps-act-btn" title="Заявка не прив'язана до листа" disabled>💰</button>
+      <button class="apps-act-btn" title="Заявка не прив'язана до листа" disabled>✓</button>
   `;
   const actions = `
     <div class="apps-act-row">
@@ -7879,6 +7876,91 @@ td{padding:7px 10px;border:1px solid #ccc;vertical-align:top}
 // ─── ДОВІДКА (Деплой 23) ──────────────────────────────────────
 // Студент вводить курси і суми, система перевіряє розбивку (±10% на рядки,
 // сума трьох рядків точно = фрахт у грн), надсилає замовнику.
+// Деплой 24a баг 9: обгортки для викликів документів з applications
+// Завантажують дані заявки з сервера і викликають відповідну функцію документа
+async function loadAppDataForDoc(appId) {
+  const token = localStorage.getItem('docaa_token');
+  // Заявка
+  const appRes = await fetch(`/api/student/applications/${appId}`, {
+    headers: {'Authorization':'Bearer '+token}
+  });
+  if (!appRes.ok) { notify('Не вдалось завантажити заявку','err'); return null; }
+  const app = await appRes.json();
+
+  // Контекст рейсу
+  if (!app.letter_id) { notify('Заявка не прив\'язана до листа','err'); return null; }
+  const ctxRes = await fetch(`/api/student/orders/${app.letter_id}/doc-context`, {
+    headers: {'Authorization':'Bearer '+token}
+  });
+  if (!ctxRes.ok) { notify('Не вдалось завантажити дані рейсу','err'); return null; }
+  const ctx = await ctxRes.json();
+
+  // Збираємо у форматі savedOrder для сумісності з існуючими функціями
+  let appData = {};
+  try { appData = JSON.parse(app.data_json || '{}'); } catch(e){}
+
+  const o = {
+    number: app.number_seq || appData.number || '',
+    letterId: app.letter_id,
+    client_name: ctx.client?.name || appData.client_name || '',
+    carrier_name: ctx.carrier?.name || appData.carrier_name || '',
+    freight_client: ctx.freight_client || appData.freight_client || 0,
+    freight_carrier: ctx.carrier?.freight || appData.freight_carrier || 0,
+    plate_truck: ctx.carrier?.plate_truck || appData.plate_truck || '',
+    plate_trailer: ctx.carrier?.plate_trailer || appData.plate_trailer || '',
+    load_address: appData.load_address || '',
+    unload_address: appData.unload_address || '',
+    border: ctx.border_name || appData.border || '',
+    cargo: appData.cargo || '',
+    spravka: null, // буде встановлено після створення довідки
+    _appId: appId, // для подальших викликів
+    _ctx: ctx,
+  };
+
+  // Якщо довідка вже збережена сервером — підтягуємо з order_progress
+  try {
+    const token2 = localStorage.getItem('docaa_token');
+    const spRes = await fetch(`/api/student/orders/${app.letter_id}/order-progress`, {
+      headers: {'Authorization':'Bearer '+token2}
+    });
+    if (spRes.ok) {
+      const opData = await spRes.json();
+      if (opData?.spravka_json) {
+        const sp = JSON.parse(opData.spravka_json);
+        o.spravka = { before: sp.before, after: sp.after, fee: sp.fee, totalUAH: (sp.before||0)+(sp.after||0)+(sp.fee||0), rate: sp.rate_freight, notes: sp.notes };
+      }
+    }
+  } catch(e){}
+
+  // Додаємо в S.savedOrders якщо ще немає (щоб старі функції працювали)
+  if (!S.savedOrders) S.savedOrders = [];
+  let idx = S.savedOrders.findIndex(s => s._appId === appId || s.letterId === app.letter_id);
+  if (idx < 0) {
+    S.savedOrders.push(o);
+    idx = S.savedOrders.length - 1;
+  } else {
+    // Оновлюємо щоб підтягнути актуальні дані
+    S.savedOrders[idx] = { ...S.savedOrders[idx], ...o };
+  }
+  return idx;
+}
+
+async function generateSpravkaForApp(appId) {
+  const idx = await loadAppDataForDoc(appId);
+  if (idx === null || idx < 0) return;
+  generateSpravka(idx);
+}
+async function generateRakhunokForApp(appId) {
+  const idx = await loadAppDataForDoc(appId);
+  if (idx === null || idx < 0) return;
+  generateRakhunok(idx);
+}
+async function generateAktForApp(appId) {
+  const idx = await loadAppDataForDoc(appId);
+  if (idx === null || idx < 0) return;
+  generateAkt(idx);
+}
+
 async function generateSpravka(idx){
   const o=(S.savedOrders||[])[idx]; if(!o) return;
   // Прив'язка до листа — fallback якщо letterId не збережено

@@ -2439,6 +2439,16 @@ router.get('/orders/:letterId/doc-context', STU, (req, res) => {
   });
 });
 
+// GET /api/student/orders/:letterId/order-progress
+// Деплой 24a баг 9: повертає поточний стан рейсу + JSON-документи якщо є
+router.get('/orders/:letterId/order-progress', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'no_session' });
+  const op = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+    .get(session.id, req.params.letterId);
+  res.json(op || {});
+});
+
 // POST /api/student/session/pause — Деплой 24a баг 7
 // Клієнт повідомляє про паузу сесії — cron не запускатиме інциденти
 router.post('/session/pause', STU, (req, res) => {
