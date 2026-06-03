@@ -2399,13 +2399,15 @@ router.get('/orders/:letterId/doc-context', STU, (req, res) => {
   if (!letter) return res.status(404).json({ error: 'letter_not_found' });
 
   // Перевізник з угоди
-  const op = db.prepare('SELECT carrier_id, carrier_freight FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
+  const op = db.prepare('SELECT carrier_id, carrier_freight, carrier_plate, vehicle_data FROM order_progress WHERE session_id=? AND letter_id=?').get(session.id, letterId);
   let carrier = null;
   if (op?.carrier_id) {
     carrier = db.prepare('SELECT id, name, person, phone, nationality, edrpou, address FROM carriers WHERE id=?').get(op.carrier_id);
   }
-  // Угоди для номерів авто і фрахту
-  const chat = op?.carrier_id ? db.prepare('SELECT plate_truck, plate_trailer FROM carrier_chats WHERE session_id=? AND carrier_id=?').get(session.id, op.carrier_id) : null;
+  // Номери авто: з vehicle_data (JSON), fallback на carrier_plate. Клієнт добере з application_data.
+  let chat = {};
+  try { chat = (op && op.vehicle_data) ? JSON.parse(op.vehicle_data) : {}; } catch (e) { chat = {}; }
+  if (!chat.plate_truck && op && op.carrier_plate) chat.plate_truck = op.carrier_plate;
 
   let dirs = []; try { dirs = JSON.parse(letter.dirs || '[]'); } catch(e){}
 
