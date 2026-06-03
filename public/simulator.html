@@ -829,6 +829,41 @@ body {
 .apps-act-btn:not(:disabled):hover { background: var(--bg4); border-color: var(--acc); color: var(--acc); }
 .apps-act-btn:disabled { opacity: .35; cursor: not-allowed; }
 
+/* ─── 25b: інлайн-акордеон картки рейсу ─── */
+.apps-row.expanded { background: var(--bg3); }
+.apps-row:hover { background: var(--bg3); }
+.apps-acc-row > td { padding: 0 !important; background: var(--bg1, #181818); border-bottom: 1px solid var(--b1); }
+.apps-acc { padding: 16px 18px; cursor: default; }
+.acc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px 22px; margin-bottom: 14px; }
+.acc-det { display: flex; flex-direction: column; gap: 2px; }
+.acc-det-l { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--t3); }
+.acc-det-v { font-size: 13px; color: var(--t1); }
+.acc-rates { background: var(--bg2); border: 1px solid var(--b1); border-radius: 9px; padding: 12px 14px; margin-bottom: 12px; }
+.acc-rates-title { font-size: 9px; letter-spacing: .07em; text-transform: uppercase; color: var(--t3); font-weight: 600; margin-bottom: 10px; }
+.acc-rate-row { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.acc-rate-label { font-size: 12px; color: var(--t2); min-width: 130px; }
+.acc-rate-eur { font-size: 13px; font-weight: 600; color: var(--t1); min-width: 70px; }
+.acc-rate-x { color: var(--t3); }
+.acc-rate-input {
+  width: 80px; background: var(--bg3); border: 1px solid var(--b2); color: var(--t1);
+  font-size: 13px; font-weight: 600; padding: 6px 8px; border-radius: 6px; outline: none; text-align: center;
+}
+.acc-rate-input:focus { border-color: var(--acc); }
+.acc-rate-uah { font-size: 12px; color: var(--t2); margin-left: auto; min-width: 90px; text-align: right; }
+.acc-reward-line { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--b1); font-size: 12px; color: var(--t2); }
+.acc-reward-val { color: var(--acc); font-weight: 600; }
+.acc-reward-note { color: var(--t3); }
+.acc-docs-title { font-size: 9px; letter-spacing: .07em; text-transform: uppercase; color: var(--t3); font-weight: 600; margin-bottom: 8px; }
+.acc-doc-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.acc-doc-btn {
+  background: var(--bg3); border: 1px solid var(--b2); color: var(--t2);
+  font-size: 12px; padding: 8px 14px; border-radius: 7px; cursor: pointer; font-family: inherit; transition: all .15s;
+}
+.acc-doc-btn:hover { border-color: var(--acc); color: var(--acc); }
+.acc-doc-btn.primary { background: var(--acc); border-color: var(--acc); color: #151515; font-weight: 600; }
+.acc-doc-btn.primary:hover { background: #e8a845; }
+.acc-doc-empty { font-size: 12px; color: var(--t3); font-style: italic; }
+
 .apps-empty {
   background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r2);
   padding: 48px; text-align: center; color: var(--t4);
@@ -3523,6 +3558,11 @@ function openChatView(cid){
 // ─── НОВА вкладка "Замовлення" — таблиця заявок (deplo 9) ─────
 let _applicationsCache = [];
 let _applicationsFilter = 'all'; // all/new/in_transit/completed/cancelled
+// 25b: яка заявка зараз розгорнута в акордеоні (id або null)
+let _expandedAppId = null;
+// 25b: тимчасові курси по заявці {appId: {client: '41.50', carrier: '41.50'}}
+// (персист на сервер додамо в 25c)
+let _appRates = {};
 
 async function renderOrders(){
   unlock('orders');
@@ -3724,30 +3764,21 @@ function renderApplicationRow(a){
   const sendBtnDisabled = (!canSend && !isSent) ? 'disabled' : '';
   const sendBtnIcon = isSent ? '📤' : (isLate ? '⏰' : '📋');
 
-  // Дії
-  // Деплой 24a баг 9: кнопки документів активні якщо заявка прив'язана до листа
-  // і угода з обома сторонами підтверджена
+  // Дії (рядок таблиці) — БЕЗ кнопок документів (вони тепер в акордеоні, 25b)
+  // Деплой 24a баг 9: документи доступні якщо заявка прив'язана до листа
   const docsAvailable = !!a.letter_id;
-  const docsBtns = docsAvailable ? `
-      <button class="apps-act-btn" title="Довідка про транспортні витрати" onclick="generateSpravkaForApp('${a.id}')">📄</button>
-      <button class="apps-act-btn" title="Рахунок" onclick="generateRakhunokForApp('${a.id}')">💰</button>
-      <button class="apps-act-btn" title="Акт" onclick="generateAktForApp('${a.id}')">✓</button>
-  ` : `
-      <button class="apps-act-btn" title="Заявка не прив'язана до листа" disabled>📄</button>
-      <button class="apps-act-btn" title="Заявка не прив'язана до листа" disabled>💰</button>
-      <button class="apps-act-btn" title="Заявка не прив'язана до листа" disabled>✓</button>
-  `;
   const actions = `
     <div class="apps-act-row">
       <button class="${sendBtnClass}" title="${escapeHtml(sendBtnTitle)}" ${sendBtnDisabled}
-              onclick="openSendApplicationPreview('${a.id}')">${sendBtnIcon}</button>
-      ${docsBtns}
-      <button class="apps-act-btn" title="Редагувати" onclick="openApplicationForm('${a.id}')">✏</button>
+              onclick="event.stopPropagation();openSendApplicationPreview('${a.id}')">${sendBtnIcon}</button>
+      <button class="apps-act-btn" title="Редагувати" onclick="event.stopPropagation();openApplicationForm('${a.id}')">✏</button>
       ${a.status === 'in_transit' ? `<button class="apps-act-btn" title="Підтвердити доставку (наступний деплой)" disabled>🚛</button>` : ''}
+      <button class="apps-act-btn" title="Документи рейсу" onclick="event.stopPropagation();toggleOrderAccordion('${a.id}')">${_expandedAppId===a.id?'▴':'▾'}</button>
     </div>
   `;
 
-  return `<tr>
+  const isExpanded = _expandedAppId === a.id;
+  const mainRow = `<tr class="apps-row${isExpanded?' expanded':''}" onclick="toggleOrderAccordion('${a.id}')" style="cursor:pointer">
     <td class="mono">${escapeHtml(numDisplay)}</td>
     <td class="route">${escapeHtml(route)}</td>
     <td>${escapeHtml(clientName)}</td>
@@ -3759,6 +3790,106 @@ function renderApplicationRow(a){
     <td><span class="apps-status ${status.cls}">${status.label}</span></td>
     <td>${actions}</td>
   </tr>`;
+
+  // 25b: рядок-акордеон з деталями рейсу + курси + кнопки документів
+  const accRow = isExpanded ? `<tr class="apps-acc-row"><td colspan="10">${renderOrderAccordion(a, docsAvailable)}</td></tr>` : '';
+
+  return mainRow + accRow;
+}
+
+// 25b: вміст акордеона картки рейсу
+function renderOrderAccordion(a, docsAvailable){
+  const client = S.allClients?.find(c => c.id === a.client_id);
+  const clientName = client?.company || '—';
+  let carrierName = '—', carrier = null;
+  if (a.carrier_id) {
+    carrier = (S.carriers || []).find(c => c.id === a.carrier_id) || (S.allCarriers || []).find(c => c.id === a.carrier_id);
+    if (carrier) carrierName = carrier.name;
+  }
+  const fmtE = n => n ? '€ ' + Math.round(n).toLocaleString('uk-UA').replace(/,/g,' ') : '—';
+  const cf = parseFloat(a.client_freight) || 0;
+  const rf = parseFloat(a.carrier_freight) || 0;
+
+  // тимчасові курси (25c — персист)
+  const rates = _appRates[a.id] || { client: '', carrier: '' };
+
+  // ряд деталей
+  const det = (label, val) => `<div class="acc-det"><span class="acc-det-l">${label}</span><span class="acc-det-v">${escapeHtml(val||'—')}</span></div>`;
+
+  const route = extractRouteFromAddresses(a.load_address, a.unload_address);
+  const plate = a.carrier_plate || (carrier && a.carrier_plate) || '—';
+  const driver = a.carrier_driver || '—';
+
+  const docsButtons = docsAvailable ? `
+    <button class="acc-doc-btn primary" onclick="event.stopPropagation();generateSpravkaForApp('${a.id}')">📄 Довідка</button>
+    <button class="acc-doc-btn" onclick="event.stopPropagation();generateRakhunokForApp('${a.id}')">💰 Рахунок</button>
+    <button class="acc-doc-btn" onclick="event.stopPropagation();generateAktForApp('${a.id}')">✓ Акт</button>
+  ` : `<div class="acc-doc-empty">Заявка не прив'язана до листа — документи недоступні</div>`;
+
+  return `
+  <div class="apps-acc" onclick="event.stopPropagation()">
+    <div class="acc-grid">
+      ${det('Замовник', clientName)}
+      ${det('Перевізник', carrierName)}
+      ${det('Маршрут', route)}
+      ${det('Дата завантаження', a.load_date)}
+      ${det('Авто', plate)}
+      ${det('Водій', driver)}
+    </div>
+
+    <div class="acc-rates">
+      <div class="acc-rates-title">Фрахти і курси</div>
+      <div class="acc-rate-row">
+        <span class="acc-rate-label">Фрахт замовника</span>
+        <span class="acc-rate-eur mono">${fmtE(cf)}</span>
+        <span class="acc-rate-x">×</span>
+        <input type="number" step="0.01" class="acc-rate-input mono" id="acc-rate-cl-${a.id}"
+               placeholder="курс" value="${rates.client}" oninput="onAccRateInput('${a.id}')">
+        <span class="acc-rate-x">=</span>
+        <span class="acc-rate-uah mono" id="acc-uah-cl-${a.id}">${rates.client?fmtUah(cf*parseFloat(rates.client)):'—'}</span>
+      </div>
+      <div class="acc-rate-row">
+        <span class="acc-rate-label">Фрахт перевізника</span>
+        <span class="acc-rate-eur mono">${fmtE(rf)}</span>
+        <span class="acc-rate-x">×</span>
+        <input type="number" step="0.01" class="acc-rate-input mono" id="acc-rate-c-${a.id}"
+               placeholder="курс" value="${rates.carrier}" oninput="onAccRateInput('${a.id}')">
+        <span class="acc-rate-x">=</span>
+        <span class="acc-rate-uah mono" id="acc-uah-c-${a.id}">${rates.carrier?fmtUah(rf*parseFloat(rates.carrier)):'—'}</span>
+      </div>
+      <div class="acc-reward-line">Експедиторська винагорода: <span class="mono acc-reward-val">${fmtE(cf-rf)}</span> <span class="acc-reward-note">(різниця)</span></div>
+    </div>
+
+    <div class="acc-docs">
+      <div class="acc-docs-title">Документи рейсу</div>
+      <div class="acc-doc-btns">${docsButtons}</div>
+    </div>
+  </div>`;
+}
+
+function fmtUah(n){ return Math.round(n).toLocaleString('uk-UA').replace(/,/g,' ') + ' ₴'; }
+
+// 25b: розгортання/згортання акордеона
+function toggleOrderAccordion(appId){
+  _expandedAppId = (_expandedAppId === appId) ? null : appId;
+  redrawApplicationsTable();
+}
+
+// 25b: live-перерахунок UAH при вводі курсу + збереження в тимчасове сховище
+function onAccRateInput(appId){
+  const a = _applicationsCache.find(x => x.id === appId);
+  if (!a) return;
+  const clEl = document.getElementById('acc-rate-cl-'+appId);
+  const cEl  = document.getElementById('acc-rate-c-'+appId);
+  const rc = clEl ? clEl.value : '';
+  const rcar = cEl ? cEl.value : '';
+  _appRates[appId] = { client: rc, carrier: rcar };
+  const cf = parseFloat(a.client_freight) || 0;
+  const rf = parseFloat(a.carrier_freight) || 0;
+  const uahCl = document.getElementById('acc-uah-cl-'+appId);
+  const uahC  = document.getElementById('acc-uah-c-'+appId);
+  if (uahCl) uahCl.textContent = rc ? fmtUah(cf*parseFloat(rc)) : '—';
+  if (uahC)  uahC.textContent  = rcar ? fmtUah(rf*parseFloat(rcar)) : '—';
 }
 
 // Витягуємо короткий маршрут з адрес "місто → місто"
@@ -7932,6 +8063,9 @@ async function loadAppDataForDoc(appId) {
     spravka: null, // буде встановлено після створення довідки
     _appId: appId, // для подальших викликів
     _ctx: ctx,
+    // 25b: тимчасові курси з акордеона картки (персист — 25c)
+    _rateClient: (_appRates[appId]?.client) || '',
+    _rateCarrier: (_appRates[appId]?.carrier) || '',
   };
 
   // Якщо довідка вже збережена сервером — підтягуємо з order_progress
@@ -8026,7 +8160,7 @@ async function generateSpravka(idx){
         <div style="display:flex;gap:8px;align-items:center">
           <div style="background:var(--bg2);padding:8px 10px;border-radius:6px;font-family:var(--mono);min-width:90px;text-align:center">€${o.freight_client}</div>
           <span style="color:var(--t3)">×</span>
-          <input id="sp-rate-fr" type="number" step="0.01" class="form-input" placeholder="курс" style="width:90px" value="">
+          <input id="sp-rate-fr" type="number" step="0.01" class="form-input" placeholder="курс" style="width:90px" value="${o._rateClient||''}">
           <span style="color:var(--t3)">=</span>
           <span id="sp-out-fr" style="font-family:var(--mono);color:var(--acc);font-weight:600">—</span>
         </div>
@@ -8037,7 +8171,7 @@ async function generateSpravka(idx){
         <div style="display:flex;gap:8px;align-items:center">
           <div style="background:var(--bg2);padding:8px 10px;border-radius:6px;font-family:var(--mono);min-width:90px;text-align:center">€${o.freight_carrier}</div>
           <span style="color:var(--t3)">×</span>
-          <input id="sp-rate-c" type="number" step="0.01" class="form-input" placeholder="курс" style="width:90px" value="">
+          <input id="sp-rate-c" type="number" step="0.01" class="form-input" placeholder="курс" style="width:90px" value="${o._rateCarrier||''}">
           <span style="color:var(--t3)">=</span>
           <span id="sp-out-c" style="font-family:var(--mono);color:var(--t2);font-weight:600">—</span>
         </div>
@@ -8085,6 +8219,7 @@ async function generateSpravka(idx){
   };
   document.getElementById('sp-rate-fr').addEventListener('input', updateOut);
   document.getElementById('sp-rate-c').addEventListener('input', updateOut);
+  updateOut(); // 25b: одразу порахувати якщо курс підставлено з акордеона
 }
 
 async function submitSpravka(idx){
