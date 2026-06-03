@@ -286,7 +286,7 @@ function wipeStudentSession(studentId) {
     const sid = session.id;
     for (const t of ['order_events','incidents','resume_points','application_followups',
                      'email_threads','carrier_chats','order_progress','confirmations',
-                     'order_documents','applications']) {
+                     'order_documents','cargo_board','student_analysis','applications']) {
       safeDelete(t, 'session_id', sid);
     }
     safeDelete('sessions', 'id', sid);
