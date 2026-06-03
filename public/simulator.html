@@ -2170,6 +2170,9 @@ function pauseTimer(){
   document.getElementById('timer-dot')?.classList.add('paused');
   updatePauseBtn();
   showPauseOverlay();
+  // Деплой 24a баг 7: повідомляємо сервер щоб зупинити cron інцидентів
+  const token = localStorage.getItem('docaa_token');
+  fetch('/api/student/session/pause', { method:'POST', headers:{'Authorization':'Bearer '+token} }).catch(()=>{});
 }
 function resumeTimer(){
   S.paused=false; S.lastTick=Date.now();
@@ -2178,6 +2181,9 @@ function resumeTimer(){
   updatePauseBtn();
   hidePauseOverlay();
   resetInactivity();
+  // Деплой 24a баг 7: повідомляємо сервер що пауза закінчилась
+  const token = localStorage.getItem('docaa_token');
+  fetch('/api/student/session/resume', { method:'POST', headers:{'Authorization':'Bearer '+token} }).catch(()=>{});
 }
 // Ручна пауза — знімається тільки кнопкою/оверлеєм
 function toggleManualPause(){
@@ -2880,6 +2886,9 @@ function buildClientSys(em, ord){
 
   return `Ти — ${em.from}, представник компанії "${em.company}". ${lang}
 
+ЕКСПЕДИТОР (з ким ти спілкуєшся): ${(S.user?.name || '').split(' ')[0] || 'експедитор'} (компанія Docaa, ФОП Стефанюк Л.М.).
+ВАЖЛИВО: коли звертаєшся на ім'я, використовуй ТІЛЬКИ "${(S.user?.name || '').split(' ')[0] || ''}". НЕ вигадуй інших імен. Якщо студент представився інакше — можеш використати те ім'я яким він себе назвав. Якщо взагалі не знаєш — пиши без імені ("Добрий день", "Колеги").
+
 СЬОГОДНІ: ${todayStr}. Дата завантаження з твого листа: ${ord.loadDate} (може зсунутись у переговорах).
 
 ═══════════════════════════════════════════════════
@@ -3346,6 +3355,9 @@ ${dateNote}
 
   return `Ти — ${c.person||'менеджер'}, компанія "${c.name}". ${langNote}
 
+ЕКСПЕДИТОР (з ким ти спілкуєшся): ${(S.user?.name || '').split(' ')[0] || 'експедитор'} (компанія Docaa, ФОП Стефанюк Л.М.).
+ВАЖЛИВО: коли звертаєшся на ім'я, використовуй ТІЛЬКИ "${(S.user?.name || '').split(' ')[0] || ''}". НЕ вигадуй інших імен. Якщо студент представився інакше у переписці — можеш використати те ім'я. Якщо не знаєш — пиши без імені.
+
 СЬОГОДНІ: ${todayStr}. Усі дати ТІЛЬКИ після цієї. НІКОЛИ не називай дату з минулого. Якщо в замовленні є конкретна дата — використовуй ТОЧНО її.
 
 ТВІЙ АВТОПАРК (тільки це!): ${myTypes}.
@@ -3657,14 +3669,28 @@ function renderApplicationRow(a){
   const status = statusMap[a.status] || statusMap['new'];
 
   // Перевіряємо чи можна надсилати заявку перевізнику
-  // Умови: 1) заявка створена (так, бо вона тут); 2) угода закрита з обома
+  // Умови: угода закрита з обома. Кнопка АКТИВНА аж поки рейс не ВИКОНАНА/СКАСОВАНА
+  // (Деплой 24a, баг 1: дозволяємо надсилання постфактум, з мінусом у резюме)
   let canSend = false;
   let cantSendReason = '';
+  let isLate = false; // надсилання після дати завантаження
   if (a.letter_id) {
     const ord = S.orders?.find(o => o.id === a.letter_id);
     if (ord) {
       const closed = (ord.state === 'closed' || ord.state === 'closed_changed');
-      if (closed) canSend = true;
+      const isCompletedOrCancelled = ord.state === 'closed_completed' || ord.state === 'cancelled' || a.status === 'completed' || a.status === 'cancelled';
+      // Перевіряємо чи дата завантаження вже настала
+      if (a.load_date_iso) {
+        const loadD = new Date(a.load_date_iso);
+        const simDate = (function(){
+          const d = parseStartDateUA(S.startDate);
+          if (d) d.setDate(d.getDate() + ((S.timerDay||1)-1));
+          return d;
+        })();
+        if (simDate && loadD && simDate > loadD) isLate = true;
+      }
+      if (closed && !isCompletedOrCancelled) canSend = true;
+      else if (isCompletedOrCancelled) cantSendReason = 'Рейс вже завершено';
       else cantSendReason = 'Спочатку підтвердіть угоду з замовником і перевізником';
     } else {
       cantSendReason = 'Не знайдено пов\'язаного рейсу';
@@ -3677,19 +3703,31 @@ function renderApplicationRow(a){
   const sendBtnClass = isSent ? 'apps-act-btn done' : (canSend ? 'apps-act-btn' : 'apps-act-btn');
   const sendBtnTitle = isSent
     ? 'Заявку надіслано — можна переглянути'
-    : (canSend ? 'Надіслати заявку перевізнику' : cantSendReason);
+    : (canSend ? (isLate ? '⚠ Надсилання постфактум — буде зафіксовано як пізнє оформлення' : 'Надіслати заявку перевізнику') : cantSendReason);
   const sendBtnDisabled = (!canSend && !isSent) ? 'disabled' : '';
-  const sendBtnIcon = isSent ? '📤' : '📋';
+  const sendBtnIcon = isSent ? '📤' : (isLate ? '⏰' : '📋');
 
   // Дії
-  // У деплої 11 робочі: 📋 (надсилання) і ✏ (редагування)
+  // Шукаємо індекс цієї заявки у savedOrders (для викликів документів)
+  const savedIdx = (S.savedOrders||[]).findIndex(so =>
+    (so.letterId && so.letterId === a.letter_id) ||
+    (so.number && a.number && String(so.number) === String(a.number))
+  );
+  const docsAvailable = savedIdx >= 0;
+  const docsBtns = docsAvailable ? `
+      <button class="apps-act-btn" title="Довідка про транспортні витрати" onclick="generateSpravka(${savedIdx})">📄</button>
+      <button class="apps-act-btn" title="Рахунок" onclick="generateRakhunok(${savedIdx})">💰</button>
+      <button class="apps-act-btn" title="Акт" onclick="generateAkt(${savedIdx})">✓</button>
+  ` : `
+      <button class="apps-act-btn" title="Спочатку збережіть заявку" disabled>📄</button>
+      <button class="apps-act-btn" title="Спочатку збережіть заявку" disabled>💰</button>
+      <button class="apps-act-btn" title="Спочатку збережіть заявку" disabled>✓</button>
+  `;
   const actions = `
     <div class="apps-act-row">
       <button class="${sendBtnClass}" title="${escapeHtml(sendBtnTitle)}" ${sendBtnDisabled}
               onclick="openSendApplicationPreview('${a.id}')">${sendBtnIcon}</button>
-      <button class="apps-act-btn" title="Довідка (наступний деплой)" disabled>📄</button>
-      <button class="apps-act-btn" title="Рахунок (наступний деплой)" disabled>💰</button>
-      <button class="apps-act-btn" title="Акт (наступний деплой)" disabled>✓</button>
+      ${docsBtns}
       <button class="apps-act-btn" title="Редагувати" onclick="openApplicationForm('${a.id}')">✏</button>
       ${a.status === 'in_transit' ? `<button class="apps-act-btn" title="Підтвердити доставку (наступний деплой)" disabled>🚛</button>` : ''}
     </div>
@@ -7682,6 +7720,16 @@ function saveOrder(editIdx){
     route:[document.getElementById('of-load-addr').value.split(',').slice(-2).join(',').trim(),'→',document.getElementById('of-unload-addr').value.split(',').slice(-2).join(',').trim()].join(' '),
   };
   order.reward=order.freight_client-order.freight_carrier;
+  // Прив'язка до листа (потрібна для документів)
+  // Шукаємо лист за client_name + carrier_name + маршрут
+  if (!order.letterId) {
+    const matchOrder = (S.orders||[]).find(o => {
+      const emCompany = o.email?.company || o.email?.from;
+      return emCompany && order.client_name &&
+        emCompany.trim().toLowerCase() === order.client_name.trim().toLowerCase();
+    });
+    if (matchOrder) order.letterId = matchOrder.id;
+  }
 
   if(!S.savedOrders) S.savedOrders=[];
   if(editIdx!==undefined&&editIdx!=='undefined'){
@@ -7833,6 +7881,18 @@ td{padding:7px 10px;border:1px solid #ccc;vertical-align:top}
 // сума трьох рядків точно = фрахт у грн), надсилає замовнику.
 async function generateSpravka(idx){
   const o=(S.savedOrders||[])[idx]; if(!o) return;
+  // Прив'язка до листа — fallback якщо letterId не збережено
+  if (!o.letterId) {
+    const matchOrder = (S.orders||[]).find(ord => {
+      const emCompany = ord.email?.company || ord.email?.from;
+      return emCompany && o.client_name && emCompany.trim().toLowerCase() === o.client_name.trim().toLowerCase();
+    });
+    if (matchOrder) o.letterId = matchOrder.id;
+  }
+  if (!o.letterId) {
+    notify('Не вдалось знайти рейс для цієї заявки. Оформіть заявку через "Підтвердити завантаження" у листі замовника.','err');
+    return;
+  }
   // Перевіряємо що угоди закриті: маємо фрахт замовника і перевізника
   if(!o.freight_client || !o.freight_carrier){
     notify('Спершу маємо мати погоджений фрахт замовника і перевізника','err');
@@ -8063,6 +8123,17 @@ function pickGapsRakhunokAkt(orderId){
 // Універсальна генерація документа (рахунок або акт)
 async function generateDocWithGaps(idx, docType){
   const o = (S.savedOrders||[])[idx]; if(!o) return;
+  // Fallback letterId
+  if (!o.letterId) {
+    const matchOrder = (S.orders||[]).find(ord => {
+      const emCompany = ord.email?.company || ord.email?.from;
+      return emCompany && o.client_name && emCompany.trim().toLowerCase() === o.client_name.trim().toLowerCase();
+    });
+    if (matchOrder) o.letterId = matchOrder.id;
+  }
+  if (!o.letterId) {
+    notify('Не вдалось знайти рейс для цієї заявки','err'); return;
+  }
   if(!o.spravka){ notify('Спочатку згенеруйте довідку — рахунок і акт залежать від неї','warn'); return; }
 
   // Підвантажуємо контекст
@@ -8815,6 +8886,8 @@ window.addEventListener('load',()=>{
 
   // Update user name
   document.getElementById('sb-company-name').textContent=user.name||'Студент';
+  // Деплой 24a баг 4: зберігаємо у S щоб AI промпти знали ім'я
+  S.user = { id: user.id, name: user.name || '', email: user.email || '' };
 
   loadSessionFromServer(token).then(()=>{
     // Unlock all navigation items
@@ -9120,6 +9193,7 @@ async function loadSessionFromServer(token){
           reliability:c.reliability||0.85,
           availability:c.availability||0.60,
           nationality:c.nationality||'UA',
+          _fromExchange: !!c.from_exchange, // Деплой 24a баг 3: позначка біржових з чатом
         });
       });
       console.log('Loaded '+S.carriers.length+' carriers from server');

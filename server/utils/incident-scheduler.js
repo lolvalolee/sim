@@ -415,6 +415,16 @@ function updateOrderState(incident) {
     `).run(incident.session_id, incident.letter_id);
     if (r.changes > 0) console.log(`[incident-sched] Скасовано ПД-нагадування (студент переслав ПД)`);
   }
+
+  // Деплой 24a Баг 1: коли машина завантажилась (loaded_ok) — більше не нагадуємо
+  // про заявку (перевізник вже завантажився, формальна заявка може бути постфактум)
+  if (incident.type === 'loaded_ok') {
+    const r = db.prepare(`
+      UPDATE incidents SET state='cancelled', fired_at=datetime('now')
+      WHERE session_id=? AND letter_id=? AND type='carrier_asks_where_address' AND state='pending'
+    `).run(incident.session_id, incident.letter_id);
+    if (r.changes > 0) console.log(`[incident-sched] Скасовано нагадування про заявку (вже loaded)`);
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -440,11 +450,15 @@ function runDueIncidents(sessionIdFilter) {
   }
   if (pending.length === 0) return 0;
 
-  // Перевіряємо що session активна
+  // Перевіряємо що session активна (Деплой 24a баг 7: пропускаємо сесії на паузі)
   for (const inc of pending) {
-    const session = db.prepare(`SELECT status FROM sessions WHERE id=?`).get(inc.session_id);
+    const session = db.prepare(`SELECT status, paused FROM sessions WHERE id=?`).get(inc.session_id);
     if (!session || session.status === 'stopped') {
       db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`).run(now, inc.id);
+      continue;
+    }
+    // Якщо сесія на паузі — пропускаємо, не запускаємо інцидент
+    if (session.paused) {
       continue;
     }
     try {

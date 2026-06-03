@@ -497,12 +497,30 @@ function getSession(studentId) {
   return db.prepare('SELECT * FROM sessions WHERE student_id=?').get(studentId);
 }
 
-// GET /api/student/carriers — all active carriers
+// GET /api/student/carriers — всі довідникові + біржові з якими є чат у цій сесії
+// (Деплой 24a, баги 2 і 3: чати не зникають після перезавантаження + біржовий
+// доступний для оформлення заявки після підтвердження угоди)
 router.get('/carriers', STU, (req, res) => {
-  const carriers = db.prepare(
+  const session = getSession(req.user.id);
+  // Довідникові (зберігаємо існуючу поведінку — у клієнта вони показуються в "Перевізники")
+  const directory = db.prepare(
     'SELECT id,name,person,phone,dirs,vehicle_types,reliability,availability,personality,nationality FROM carriers WHERE active=1 AND COALESCE(for_exchange,0)=0 ORDER BY nationality,name'
   ).all();
-  res.json(carriers);
+
+  let exchangeWithChat = [];
+  if (session) {
+    // Біржові з якими є чат у цій сесії — повертаємо з прапорцем from_exchange=1
+    // щоб клієнт міг приховати їх у пошуку "Перевізники", але показав у "Переговори" і автокомпліті заявки
+    exchangeWithChat = db.prepare(`
+      SELECT c.id, c.name, c.person, c.phone, c.dirs, c.vehicle_types,
+             c.reliability, c.availability, c.personality, c.nationality,
+             1 AS from_exchange
+      FROM carriers c
+      INNER JOIN carrier_chats cc ON cc.carrier_id = c.id AND cc.session_id = ?
+      WHERE c.active=1 AND COALESCE(c.for_exchange,0)=1
+    `).all(session.id);
+  }
+  res.json([...directory, ...exchangeWithChat]);
 });
 // ─── CONFIRMATION (Підтвердження угоди) ─────────────────────────────
 // Дві окремі точки входу:
@@ -1141,18 +1159,44 @@ function getNextApplicationNumber(studentId){
 }
 
 // GET /api/student/applications — список усіх заявок студента
+// Деплой 24a баг 8: status тягнеться з order_progress.state (актуальний етап рейсу)
 router.get('/applications', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
 
   const rows = db.prepare(`
-    SELECT * FROM applications WHERE session_id=? ORDER BY number_seq DESC
+    SELECT a.*, op.state AS op_state
+    FROM applications a
+    LEFT JOIN order_progress op ON op.session_id = a.session_id AND op.letter_id = a.letter_id
+    WHERE a.session_id=? ORDER BY a.number_seq DESC
   `).all(session.id);
 
-  const result = rows.map(r => ({
-    ...r,
-    validation_warnings: r.validation_warnings ? JSON.parse(r.validation_warnings) : [],
-  }));
+  // Мапа стану рейсу → відображуваний статус заявки
+  const stateToStatus = {
+    'new': 'new',
+    'closed': 'new',
+    'closed_changed': 'new',
+    'loaded': 'in_transit',
+    'at_border': 'in_transit',
+    'pd_requested': 'in_transit',
+    'pd_sent': 'in_transit',
+    'at_customs_dst': 'in_transit',
+    'at_unloading': 'in_transit',
+    'unloaded': 'completed',
+    'closed_completed': 'completed',
+    'cancelled': 'cancelled',
+    'cancelled_by_client': 'cancelled',
+  };
+
+  const result = rows.map(r => {
+    // Якщо є стан рейсу — пріоритетніше нього
+    const dynamicStatus = r.op_state ? (stateToStatus[r.op_state] || r.status) : r.status;
+    return {
+      ...r,
+      status: dynamicStatus,
+      validation_warnings: r.validation_warnings ? JSON.parse(r.validation_warnings) : [],
+    };
+  });
   res.json(result);
 });
 
@@ -1485,16 +1529,21 @@ router.get('/carriers/search', STU, (req, res) => {
   const q = (req.query.q || '').trim().toLowerCase();
   if (q.length < 2) return res.json([]);
 
-  // Беремо всіх активних — їх ~635, можна фільтрувати в пам'яті
+  // Беремо всіх активних довідникових + біржових з якими є чат у цій сесії
+  // (Деплой 24a, баг 3: біржовий доступний для заявки після підтвердження угоди)
   const all = db.prepare(`
     SELECT c.id, c.name, c.person, c.phone,
+           COALESCE(c.for_exchange,0) AS from_exchange,
            CASE WHEN EXISTS(
              SELECT 1 FROM carrier_chats cc
              WHERE cc.session_id = ? AND cc.carrier_id = c.id
            ) THEN 1 ELSE 0 END AS had_chat
     FROM carriers c
-    WHERE c.active=1 AND COALESCE(c.for_exchange,0)=0
-  `).all(session.id);
+    WHERE c.active=1 AND (
+      COALESCE(c.for_exchange,0) = 0
+      OR EXISTS(SELECT 1 FROM carrier_chats cc2 WHERE cc2.session_id=? AND cc2.carrier_id=c.id)
+    )
+  `).all(session.id, session.id);
 
   // Фільтр у Node.js — коректно з кирилицею
   const filtered = all.filter(c => {
@@ -1670,6 +1719,32 @@ router.post('/applications/:id/send-to-carrier', STU, (req, res) => {
           carrier_name: carrier.name,
         }));
     } catch(e){}
+
+    // Деплой 24a Баг 1: якщо заявка надіслана після дати завантаження — фіксуємо
+    // пізнє оформлення в резюме (-1)
+    try {
+      const letter = db.prepare('SELECT load_day_offset FROM letters WHERE id=?').get(app.letter_id);
+      const op = db.prepare('SELECT state, loaded_at FROM order_progress WHERE session_id=? AND letter_id=?')
+        .get(session.id, app.letter_id);
+      // Якщо стан вже loaded або далі — це пізнє надсилання
+      const isLateState = op && ['loaded','at_border','pd_requested','pd_sent','at_customs_dst','at_unloading','unloaded','closed_completed'].includes(op.state);
+      if (isLateState) {
+        incidentScheduler.addResumePoint({
+          sessionId: session.id, studentId: req.user.id, letterId: app.letter_id,
+          type: 'order_late', impact: -1,
+          context: { sent_after_state: op.state, note: 'Заявку оформлено постфактум' },
+        });
+      }
+    } catch(e) { console.error('order_late resume:', e.message); }
+
+    // Деплой 24a Баг 1: скасовуємо реактивне нагадування про заявку
+    // (carrier_asks_where_address) бо студент вже надіслав
+    try {
+      db.prepare(`
+        UPDATE incidents SET state='cancelled', fired_at=datetime('now')
+        WHERE session_id=? AND letter_id=? AND type='carrier_asks_where_address' AND state='pending'
+      `).run(session.id, app.letter_id);
+    } catch(e) {}
   }
 
   res.json({
@@ -2362,6 +2437,43 @@ router.get('/orders/:letterId/doc-context', STU, (req, res) => {
     } : null,
     freight_client: letter.freight_amount || 0,
   });
+});
+
+// POST /api/student/session/pause — Деплой 24a баг 7
+// Клієнт повідомляє про паузу сесії — cron не запускатиме інциденти
+router.post('/session/pause', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'no_session' });
+  try {
+    db.prepare('UPDATE sessions SET paused=1, paused_at=datetime(\'now\') WHERE id=?').run(session.id);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/session/resume', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'no_session' });
+  try {
+    // Зміщуємо всі pending інциденти на тривалість паузи
+    const sess = db.prepare('SELECT paused_at FROM sessions WHERE id=?').get(session.id);
+    if (sess?.paused_at) {
+      const pausedAt = new Date(sess.paused_at + 'Z').getTime();
+      const now = Date.now();
+      const elapsedMs = now - pausedAt;
+      if (elapsedMs > 0) {
+        // SQLite datetime — зсуваємо на elapsedMs мілісекунд
+        const shiftSec = Math.floor(elapsedMs / 1000);
+        db.prepare(`
+          UPDATE incidents
+          SET scheduled_at = datetime(scheduled_at, '+' || ? || ' seconds')
+          WHERE session_id=? AND state='pending'
+        `).run(shiftSec, session.id);
+        console.log(`[session/resume] Зсунуто інциденти на ${shiftSec}с (пауза)`);
+      }
+    }
+    db.prepare('UPDATE sessions SET paused=0, paused_at=NULL WHERE id=?').run(session.id);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 module.exports = router;
