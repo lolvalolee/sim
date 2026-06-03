@@ -264,8 +264,14 @@ router.post('/groups/:groupId/rates', LEC, (req, res) => {
 function tableExists(name) {
   return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
 }
+function colExists(table, col) {
+  try {
+    return db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === col);
+  } catch (e) { return false; }
+}
 function safeDelete(table, whereCol, value) {
   if (!tableExists(table)) return 0;
+  if (!colExists(table, whereCol)) return 0; // тихо пропускаємо якщо колонки нема
   try {
     return db.prepare(`DELETE FROM ${table} WHERE ${whereCol}=?`).run(value).changes;
   } catch (e) {
@@ -275,25 +281,27 @@ function safeDelete(table, whereCol, value) {
 }
 function wipeStudentSession(studentId) {
   const session = db.prepare('SELECT id FROM sessions WHERE student_id=?').get(studentId);
-  // Таблиці прив'язані до session_id (видаляємо ДО самої сесії)
+  // Таблиці прив'язані до session_id (видаляємо ДО самої сесії, інакше FK fail)
   if (session) {
     const sid = session.id;
     for (const t of ['order_events','incidents','resume_points','application_followups',
-                     'email_threads','carrier_chats','order_progress','confirmations','applications']) {
+                     'email_threads','carrier_chats','order_progress','confirmations',
+                     'order_documents','applications']) {
       safeDelete(t, 'session_id', sid);
     }
     safeDelete('sessions', 'id', sid);
   }
+  // Стара assignment — ПІСЛЯ sessions (бо sessions.assignment_id → FK на assignments)
+  safeDelete('assignments', 'student_id', studentId);
   // Таблиці прив'язані до student_id (резюме/аналіз — теж скидаємо при рестарті)
   for (const t of ['student_summaries','student_analysis']) {
     safeDelete(t, 'student_id', studentId);
   }
-  // На випадок осиротілих записів без сесії — чистимо і по student_id
-  for (const t of ['applications','application_followups','incidents','resume_points','order_events']) {
+  // На випадок осиротілих записів без сесії — чистимо по student_id
+  // (тільки таблиці що РЕАЛЬНО мають колонку student_id; order_events її не має)
+  for (const t of ['applications','application_followups','incidents','resume_points']) {
     safeDelete(t, 'student_id', studentId);
   }
-  // Стара assignment
-  safeDelete('assignments', 'student_id', studentId);
 }
 
 function generateAssignment(studentId, groupId, createdBy) {
