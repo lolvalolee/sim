@@ -22,6 +22,7 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const scenariosLib = require('./incident-scenarios');
+const documentChecker = require('./document-checker');
 
 // Один сим-час = 10 хв реального (день 120хв = 12 сим-год 9:00-21:00)
 // Збігається з CFG.dayDuration=120 у simulator.html
@@ -475,6 +476,101 @@ function runDueIncidents(sessionIdFilter) {
   return pending.length;
 }
 
+// ════════════════════════════════════════════════════════════
+// ДЕПЛОЙ 25c — перевірка документів через cron (детермінована)
+// Бере order_documents зі status='sent' і check_due_at<=now,
+// викликає checker, пише шаблонну фразу в чат/тред, оновлює status.
+// ════════════════════════════════════════════════════════════
+function runDueDocumentChecks(sessionIdFilter) {
+  const now = new Date().toISOString();
+  let docs;
+  if (sessionIdFilter) {
+    docs = db.prepare(`
+      SELECT * FROM order_documents
+      WHERE status='sent' AND check_due_at <= ? AND session_id=?
+      ORDER BY check_due_at ASC LIMIT 50
+    `).all(now, sessionIdFilter);
+  } else {
+    docs = db.prepare(`
+      SELECT * FROM order_documents
+      WHERE status='sent' AND check_due_at <= ?
+      ORDER BY check_due_at ASC LIMIT 100
+    `).all(now);
+  }
+  if (docs.length === 0) return 0;
+
+  let processed = 0;
+  for (const doc of docs) {
+    const session = db.prepare(`SELECT status, paused, student_id FROM sessions WHERE id=?`).get(doc.session_id);
+    if (!session || session.status === 'stopped') {
+      // сесію скинуто/зупинено — позначаємо документ як перевірений без дії
+      db.prepare(`UPDATE order_documents SET status='accepted', checked_at=? WHERE id=?`).run(now, doc.id);
+      continue;
+    }
+    if (session.paused) continue; // на паузі — чекаємо
+
+    try {
+      const letter = db.prepare('SELECT dirs, dist_to_border, dist_after_border, incoterms FROM letters WHERE id=?').get(doc.letter_id);
+      let payload = {}; try { payload = JSON.parse(doc.payload_json || '{}'); } catch (e) {}
+      const result = documentChecker.checkDocument(doc.doc_type, payload, letter || {});
+      const text = documentChecker.buildReplyText(doc.doc_type, result);
+      const nowIso = new Date().toISOString();
+      const timeStr = new Date().toLocaleTimeString('uk', { hour: '2-digit', minute: '2-digit' });
+
+      if (doc.doc_type === 'application') {
+        // Заявку перевіряє ПЕРЕВІЗНИК → пишемо в carrier_chats
+        if (doc.carrier_id) {
+          const chat = db.prepare(`SELECT * FROM carrier_chats WHERE session_id=? AND carrier_id=?`)
+            .get(doc.session_id, doc.carrier_id);
+          if (chat) {
+            const msgs = JSON.parse(chat.messages || '[]');
+            msgs.push({ role: 'carrier', text, time: timeStr, ts: nowIso, read: false, from_doc: doc.id });
+            db.prepare('UPDATE carrier_chats SET messages=?, updated_at=? WHERE id=?')
+              .run(JSON.stringify(msgs), nowIso, chat.id);
+          }
+        }
+      } else {
+        // Довідку/рахунок/акт перевіряє ЗАМОВНИК → пишемо в email_threads
+        let thread = db.prepare('SELECT * FROM email_threads WHERE session_id=? AND letter_id=?')
+          .get(doc.session_id, doc.letter_id);
+        if (!thread) {
+          const tid = uuidv4();
+          db.prepare(`INSERT INTO email_threads (id, session_id, letter_id, messages) VALUES (?,?,?,?)`)
+            .run(tid, doc.session_id, doc.letter_id, JSON.stringify([]));
+          thread = db.prepare('SELECT * FROM email_threads WHERE id=?').get(tid);
+        }
+        const msgs = JSON.parse(thread.messages || '[]');
+        msgs.push({ role: 'ai', text, ts: nowIso, from_doc: doc.id });
+        db.prepare('UPDATE email_threads SET messages=? WHERE id=?').run(JSON.stringify(msgs), thread.id);
+      }
+
+      // Оновлюємо статус документа
+      db.prepare(`UPDATE order_documents SET status=?, errors_json=?, checked_at=? WHERE id=?`)
+        .run(result.ok ? 'accepted' : 'error', JSON.stringify(result.errors || []), nowIso, doc.id);
+
+      // Резюме (impact): прийнято +1, помилка -1
+      try {
+        addResumePoint({
+          sessionId: doc.session_id, studentId: session.student_id, letterId: doc.letter_id,
+          type: `doc_${doc.doc_type}_${result.ok ? 'ok' : 'err'}`,
+          impact: result.ok ? 1 : -1,
+          context: { doc_id: doc.id, errors: result.errors },
+        });
+      } catch (e) {}
+
+      // Тригер polling браузера
+      db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(nowIso, doc.session_id);
+      processed++;
+    } catch (e) {
+      console.error(`[doc-check] error ${doc.id}:`, e.message);
+      // щоб не зациклити — позначаємо accepted (не блокуємо студента)
+      db.prepare(`UPDATE order_documents SET status='accepted', checked_at=? WHERE id=?`).run(now, doc.id);
+    }
+  }
+  if (processed) console.log(`[doc-check] Перевірено ${processed} документів`);
+  return processed;
+}
+
 // ────────────────────────────────────────────────────────────
 // Запуск cron — викликається з index.js
 // ────────────────────────────────────────────────────────────
@@ -483,6 +579,7 @@ function startCron(intervalMs = 60 * 1000) { // щохвилини
   if (cronTimer) clearInterval(cronTimer);
   cronTimer = setInterval(() => {
     try { runDueIncidents(); } catch (e) { console.error('[incident-cron]', e.message); }
+    try { runDueDocumentChecks(); } catch (e) { console.error('[doc-check-cron]', e.message); }
   }, intervalMs);
   console.log(`[incident-sched] Cron запущено: інтервал ${intervalMs}ms`);
 }
@@ -928,6 +1025,7 @@ module.exports = {
   scheduleReactiveIfNotInformed,
   cancelReactiveIncidents,
   runDueIncidents,
+  runDueDocumentChecks,
   startCron,
   stopCron,
   addResumePoint,

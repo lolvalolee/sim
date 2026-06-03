@@ -7,6 +7,7 @@ const db = require('../db');
 const followupScheduler = require('../utils/followup-scheduler');
 const incidentScheduler = require('../utils/incident-scheduler');
 const incidentScenarios = require('../utils/incident-scenarios');
+const documentChecker = require('../utils/document-checker');
 
 const STU = requireAuth(['student']);
 
@@ -232,6 +233,7 @@ router.get('/session/version', STU, (req, res) => {
 
   // Швидкий запуск інцидентів для цієї сесії (миттєвість при polling)
   try { incidentScheduler.runDueIncidents(session.id); } catch (e) {}
+  try { incidentScheduler.runDueDocumentChecks(session.id); } catch (e) {}
 
   // Перечитуємо version бо runDueIncidents міг його змінити
   const fresh = db.prepare('SELECT version, status FROM sessions WHERE id=?').get(session.id);
@@ -377,6 +379,7 @@ router.get('/chats/unread-summary', STU, (req, res) => {
 
   // Швидкий запуск інцидентів для цієї сесії (миттєвість)
   try { incidentScheduler.runDueIncidents(session.id); } catch (e) {}
+  try { incidentScheduler.runDueDocumentChecks(session.id); } catch (e) {}
 
   const chats = db.prepare('SELECT carrier_id, messages, updated_at FROM carrier_chats WHERE session_id=?')
     .all(session.id);
@@ -2380,6 +2383,109 @@ router.post('/orders/:letterId/submit-doc', STU, (req, res) => {
 
   res.json({ ok, errors, attempt: attempt || 1 });
 });
+
+// ════════════════════════════════════════════════════════════════
+// ДЕПЛОЙ 25c — документи v2: курси на заявку + єдиний флоу
+// ════════════════════════════════════════════════════════════════
+
+// POST /api/student/applications/:appId/rates — зберегти/оновити курси заявки
+router.post('/applications/:appId/rates', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { rate_client, rate_carrier } = req.body || {};
+  try {
+    const app = db.prepare('SELECT id FROM applications WHERE id=? AND student_id=?').get(req.params.appId, req.user.id);
+    if (!app) return res.status(404).json({ error: 'application_not_found' });
+    db.prepare('UPDATE applications SET rate_client=?, rate_carrier=? WHERE id=?')
+      .run(rate_client != null ? String(rate_client) : null, rate_carrier != null ? String(rate_carrier) : null, req.params.appId);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[rates] error:', e.message);
+    res.status(500).json({ error: 'save_failed', detail: e.message });
+  }
+});
+
+// Хелпер: випадкова затримка 1–20 сим-хв у реальних мс (1 сим-хв = 10 сек реальних)
+function docCheckDelayMs() {
+  const simMinutes = 1 + Math.floor(Math.random() * 20); // 1..20
+  return simMinutes * 10 * 1000; // сек → мс
+}
+
+// POST /api/student/orders/:letterId/documents — згенерувати+зберегти+надіслати
+// Єдиний флоу для 4 типів. НЕ повертає помилки одразу — перевірка через cron.
+// body: { doc_type, application_id, carrier_id?, payload, html }
+router.post('/orders/:letterId/documents', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+
+  const letterId = req.params.letterId;
+  const { doc_type, application_id, carrier_id, payload, html } = req.body || {};
+  if (!['application', 'spravka', 'rakhunok', 'akt'].includes(doc_type)) {
+    return res.status(400).json({ error: 'bad_doc_type' });
+  }
+
+  try {
+    // Версія: для spravka/rakhunok/akt — наступна по рейсу; application — завжди 1 (окремі записи)
+    let version = 1;
+    if (doc_type !== 'application') {
+      const last = db.prepare(
+        'SELECT MAX(version) as mx FROM order_documents WHERE session_id=? AND letter_id=? AND doc_type=?'
+      ).get(session.id, letterId, doc_type);
+      version = (last?.mx || 0) + 1;
+    }
+
+    const dueMs = docCheckDelayMs();
+    const checkDueAt = new Date(Date.now() + dueMs).toISOString();
+    const docId = uuidv4();
+
+    db.prepare(`
+      INSERT INTO order_documents
+        (id, session_id, letter_id, application_id, doc_type, version, carrier_id, payload_json, html, status, check_due_at)
+      VALUES (?,?,?,?,?,?,?,?,?, 'sent', ?)
+    `).run(docId, session.id, letterId, application_id || null, doc_type, version,
+           carrier_id || null, JSON.stringify(payload || {}), html || '', checkDueAt);
+
+    res.json({ ok: true, doc_id: docId, version, status: 'sent', check_due_at: checkDueAt });
+  } catch (e) {
+    console.error('[documents] error:', e.message);
+    res.status(500).json({ error: 'save_failed', detail: e.message });
+  }
+});
+
+// GET /api/student/orders/:letterId/documents — список документів рейсу (для панелі)
+router.get('/orders/:letterId/documents', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  try {
+    const rows = db.prepare(`
+      SELECT id, doc_type, version, carrier_id, status, errors_json, created_at, checked_at
+      FROM order_documents
+      WHERE session_id=? AND letter_id=?
+      ORDER BY doc_type, version
+    `).all(session.id, req.params.letterId);
+    res.json(rows.map(r => ({ ...r, errors: safeParse(r.errors_json, []) })));
+  } catch (e) {
+    res.status(500).json({ error: 'list_failed', detail: e.message });
+  }
+});
+
+// GET /api/student/documents/:docId — html однієї версії (перегляд/друк)
+router.get('/documents/:docId', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  try {
+    const doc = db.prepare(`
+      SELECT id, doc_type, version, status, html, payload_json, errors_json, created_at, checked_at
+      FROM order_documents WHERE id=? AND session_id=?
+    `).get(req.params.docId, session.id);
+    if (!doc) return res.status(404).json({ error: 'doc_not_found' });
+    res.json({ ...doc, payload: safeParse(doc.payload_json, {}), errors: safeParse(doc.errors_json, []) });
+  } catch (e) {
+    res.status(500).json({ error: 'fetch_failed', detail: e.message });
+  }
+});
+
+function safeParse(s, fallback) { try { return JSON.parse(s); } catch (e) { return fallback; } }
 
 // GET /api/student/orders/:letterId/doc-context
 // Повертає всі дані потрібні для генерації документів по рейсу:
