@@ -191,6 +191,17 @@ router.get('/session', STU, (req, res) => {
       let toCity = '';
       const route = (l.subject || '').match(/—\s*([^(]+)/);
       if (route) toCity = route[1].trim();
+      // Деплой 25: навчальні параметри з letters_v2 (якщо є)
+      let v2 = null;
+      try {
+        v2 = db.prepare('SELECT * FROM letters_v2 WHERE letter_id=?').get(l.id) || null;
+      } catch (e) { v2 = null; } // таблиці ще нема — працюємо без v2
+      // Ціна за даними ODS: фіксована тільки якщо завдання НЕ "погодити фрахт"
+      let priceVisible = !!l.freight_fixed;
+      if (v2) {
+        const negotiate = /погодити фрахт/i.test(v2.hidden_task || '') || /погодити фрахт/i.test(v2.data_required || '');
+        priceVisible = !negotiate;
+      }
       return {
         ...l,
         missing: l.missing ? JSON.parse(l.missing) : [],
@@ -199,6 +210,8 @@ router.get('/session', STU, (req, res) => {
         hidden_data: l.hidden_data ? JSON.parse(l.hidden_data) : {},
         from_city: fromCity,
         to_city: toCity,
+        v2,
+        price_visible: priceVisible ? 1 : 0,
       };
     });
 
@@ -990,6 +1003,30 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
   // Resume: поєднання джерел (база + біржа).
   // Якщо студент вів переговори і з довідниковим, і з біржовим перевізником
   // у цій сесії — +бал за порівняння джерел (одноразово).
+  if (isApprove) {
+    // Деплой 25: оцінка правильності типу ТЗ (Варіант C — об'єктивно по угоді)
+    // Порівнюємо тип ТЗ перевізника з vehicle_required/vehicle_alternative з letters_v2
+    try {
+      const v2 = db.prepare('SELECT vehicle_required, vehicle_alternative FROM letters_v2 WHERE letter_id=?').get(letterId);
+      if (v2 && v2.vehicle_required) {
+        let carrierTypes = [];
+        try { carrierTypes = JSON.parse(carrier.vehicle_types || '[]'); } catch(e) {}
+        const norm = s => String(s||'').toLowerCase().trim();
+        const reqV = norm(v2.vehicle_required);
+        const alts = (v2.vehicle_alternative||'').split(/[,;]/).map(norm).filter(Boolean);
+        const ok = carrierTypes.some(t => {
+          const tn = norm(t);
+          return tn.includes(reqV) || reqV.includes(tn) || alts.some(a => tn.includes(a) || a.includes(tn));
+        });
+        incidentScheduler.addResumePoint({
+          sessionId: session.id, studentId: req.user.id, letterId,
+          type: ok ? 'vehicle_correct' : 'vehicle_wrong',
+          impact: ok ? 1 : -1,
+          context: { required: v2.vehicle_required, alternative: v2.vehicle_alternative, carrier_types: carrierTypes },
+        });
+      }
+    } catch (e) { /* letters_v2 ще нема — пропускаємо */ }
+  }
   if (isApprove) {
     try {
       const already = db.prepare(`
@@ -2517,14 +2554,20 @@ router.get('/orders/:letterId/doc-context', STU, (req, res) => {
 
   let dirs = []; try { dirs = JSON.parse(letter.dirs || '[]'); } catch(e){}
 
+  // Деплой 25: дані з letters_v2 (rate_basis, точні км) — пріоритет над letters
+  let v2 = null;
+  try { v2 = db.prepare('SELECT * FROM letters_v2 WHERE letter_id=?').get(letterId) || null; } catch(e){}
+
   res.json({
     letter_id: letter.id,
     dirs,
-    is_import: dirs.length && dirs[dirs.length - 1] === 'UA',
-    border_name: letter.border_name || '',
-    dist_to_border: letter.dist_to_border || 0,
-    dist_after_border: letter.dist_after_border || 0,
-    incoterms: letter.incoterms || '',
+    is_import: v2 ? (v2.direction === 'імпорт') : (dirs.length && dirs[dirs.length - 1] === 'UA'),
+    border_name: (v2 && v2.border_short) || letter.border_name || '',
+    dist_to_border: (v2 && v2.km_before_border) || letter.dist_to_border || 0,
+    dist_after_border: (v2 && v2.km_after_border) || letter.dist_after_border || 0,
+    incoterms: (v2 && v2.incoterms) || letter.incoterms || '',
+    rate_basis: (v2 && v2.rate_basis) || 'завантаження',
+    freight_ref: (v2 && v2.freight_ref) || null,
     client: {
       name: letter.company || '',
       director: letter.client_director || '',

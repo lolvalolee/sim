@@ -2659,7 +2659,7 @@ function openEmail(orderId){
         <input class="freight-input" id="fi-${orderId}" type="number" placeholder="0" min="100">
         <span class="freight-currency">EUR</span>
         <button class="btn primary sm" onclick="proposeFreight('${orderId}')">Запропонувати</button>
-        <span style="font-size:11px;color:var(--t3)">Діапазон: €${ord.freightMin||'?'}–€${ord.freightMax||'?'}</span>
+        ${(ord.freightMin&&ord.freightMax)?`<span style="font-size:11px;color:var(--t3)">Діапазон: €${ord.freightMin}–€${ord.freightMax}</span>`:''}
       </div></div>`;
   }
 
@@ -2919,8 +2919,18 @@ function buildClientSys(em, ord){
     : '';
 
   // СЦЕНАРІЇ ЦІНИ
+  // Деплой 25: для рейсів "погодити фрахт" (ціни в листі нема) — торг від freight_ref:
+  // ти готовий рухатись від орієнтиру -100 (дешевше) до +300 (дорожче) євро, межа ±400.
+  const fref = ord.freightRef || freight;
+  const negotiateFromRef = `Твій внутрішній орієнтир фрахту: EUR ${fref} (НЕ називай його одразу — чекай пропозиції студента).
+Правила торгу: якщо студент пропонує в межах EUR ${fref-100}–${fref+300} — можеш погодитись (поторгувавшись трохи).
+Якщо пропозиція нижча за EUR ${fref-100} — кажеш "дорого не для нас, але це замало" і називаєш зустрічну ближче до ${fref}.
+Якщо вища за EUR ${fref+300} — торгуйся вниз поступово (крок 150→100→50).
+АБСОЛЮТНА МЕЖА: ніколи не погоджуйся поза EUR ${fref-400}–${fref+400}.`;
   const scenarios = {
-    agree: `Готовий платити EUR ${freight}. Якщо в межах +-5% — погоджуєшся. Якщо дорожче на 10%+ — питаєш чи можна дешевше.`,
+    agree: ord.freightFixed
+      ? `Готовий платити EUR ${freight}. Якщо в межах +-5% — погоджуєшся. Якщо дорожче на 10%+ — питаєш чи можна дешевше.`
+      : negotiateFromRef,
     negotiate_down: `Фрахт EUR ${freight}. ЗАВЖДИ торгуєшся вниз. Знижуєш поступово: спочатку на 150, потім 100, потім 50 євро.`,
     urgent: `ВАНТАЖ ТЕРМІНОВИЙ. Готовий EUR ${freight} або +15% якщо є авто на дату. Акцентуєш на терміновості.`,
     strict: `Бюджет СТРОГО EUR ${freight}. Якщо дорожче — відмовляєш.`,
@@ -3304,6 +3314,7 @@ async function sendChatMsg(cid,pfx){
     loadDate: ordCtx.loadDate,
     delivDate: ordCtx.delivDate,
     weight: ordCtx.email?.weight||'',
+    freightRef: ordCtx.freightRef || ordCtx.clientFreight || null, // Деплой 25: орієнтир торгу
     tripState: stateContext, // ← новий блок
   } : null);
   const hist=S.chats[cid].filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
@@ -3384,6 +3395,17 @@ function buildCarrierSys(c, ordContext){
 Кузов потрібен: ${ordContext.vehicle||''}
 ${dateNote}
 Дата доставки: ${ordContext.delivDate||'уточнюється'}`;
+
+    // Деплой 25: торг від орієнтиру (перевізник хоче дорожче, студент збиває)
+    if (ordContext.freightRef) {
+      const fr = ordContext.freightRef;
+      orderBlock += `\n
+ЦІНА (твій внутрішній орієнтир ринку: EUR ${fr} — НЕ називай його прямо):
+- Свою першу ціну називай вище орієнтиру: EUR ${fr+100}–${fr+300}.
+- Якщо студент торгується — поступайся кроками (100→50), але НЕ опускайся нижче EUR ${fr-300}.
+- Пропозиція студента в межах EUR ${fr-300}–${fr+300} — можеш погодитись після невеликого торгу.
+- АБСОЛЮТНА МЕЖА: ніколи не погоджуйся нижче EUR ${fr-400}. Якщо тиснуть нижче — "Остаточно ні."`;
+    }
 
     // Cross-context: поточний стан рейсу (тільки після угоди)
     if (ordContext.tripState) {
@@ -7263,6 +7285,17 @@ async function renderResume(){
     akt_passed_first: 'Акт — з першої спроби',
     akt_passed_second: 'Акт — з другої спроби',
     akt_failed: 'Акт — не виправив',
+    // Деплой 25: тип ТЗ за letters_v2
+    vehicle_correct: 'Правильний тип ТЗ',
+    vehicle_wrong: 'Невірний тип ТЗ',
+    // Деплой 25c: документи v2 (cron-перевірка)
+    doc_spravka_ok: 'Довідка прийнята',
+    doc_spravka_err: 'Помилка в довідці',
+    doc_rakhunok_ok: 'Рахунок прийнятий',
+    doc_rakhunok_err: 'Помилка в рахунку',
+    doc_akt_ok: 'Акт прийнятий',
+    doc_akt_err: 'Помилка в акті',
+    order_late: 'Заявка надіслана із запізненням',
   };
 
   const metrics = analysis?.metrics || {};
@@ -9281,6 +9314,27 @@ function composeClientLetter(letter){
     const seed = (letter.id||'').split('').reduce((a,ch)=>a+ch.charCodeAt(0),0);
     const intro = CLIENT_INTROS[seed % CLIENT_INTROS.length]({fromCountry});
 
+    // ── Деплой 25 (Варіант C): якщо є v2.data_required — це і є зміст листа ──
+    // Колонка «Дані» з ODS: для легких рейсів там усе є; для складних частина
+    // даних відсутня — студент має зрозуміти сам або уточнити (hidden_task).
+    if (letter.v2 && letter.v2.data_required) {
+      const lines2 = [intro, ''];
+      if (route) lines2.push(`Маршрут: ${route}`);
+      lines2.push(letter.v2.data_required.trim());
+      // Ціна: тільки якщо price_visible (за ODS — не "погодити фрахт")
+      if (letter.price_visible && letter.freight_amount) {
+        lines2.push(`Фрахт: €${letter.freight_amount}`);
+      }
+      if (letter.v2.incoterms) lines2.push(`Умови поставки: ${letter.v2.incoterms}`);
+      lines2.push('');
+      lines2.push(`Завантаження: {loadDate}`);
+      lines2.push(`Бажана доставка: {delivDate}`);
+      lines2.push('');
+      lines2.push(`З повагою,\n${letter.from_name||''}${letter.company?'\n'+letter.company:''}`);
+      return lines2.join('\n');
+    }
+
+    // ── Стара логіка (fallback, якщо v2 нема) ──
     // Збираємо рядки даних — приховані пропускаємо
     const lines = [intro, ''];
     if (route) lines.push(`Маршрут: ${route}`);
@@ -9376,7 +9430,8 @@ async function loadSessionFromServer(token){
       status: op.status||'new',
       clientFreightAgreed: op.client_freight||null,
       clientFreight: letter.freight_amount||null,
-      freightFixed: !!letter.freight_fixed,
+      freightFixed: letter.price_visible !== undefined ? !!letter.price_visible : !!letter.freight_fixed,
+      v2: letter.v2 || null,
       freightMin: letter.freight_min||null,
       freightMax: letter.freight_max||null,
       carrierFreightAgreed: op.carrier_freight||null,
@@ -9406,15 +9461,19 @@ async function loadSessionFromServer(token){
       customsOut: letter.customs_out_address || '',
       customsIn: letter.customs_in_address || '',
       cargoDescription: letter.cargo_description || '',
-      // М'які + приховані + завдання
-      vehicleAlternatives: letter.vehicle_alternatives
-        ? (typeof letter.vehicle_alternatives === 'string' ? JSON.parse(letter.vehicle_alternatives) : letter.vehicle_alternatives)
-        : [],
+      // М'які + приховані + завдання (Деплой 25: пріоритет letters_v2)
+      vehicleAlternatives: (letter.v2 && letter.v2.vehicle_alternative)
+        ? letter.v2.vehicle_alternative.split(/[,;]/).map(s=>s.trim()).filter(Boolean)
+        : (letter.vehicle_alternatives
+          ? (typeof letter.vehicle_alternatives === 'string' ? JSON.parse(letter.vehicle_alternatives) : letter.vehicle_alternatives)
+          : []),
       hiddenData: letter.hidden_data
         ? (typeof letter.hidden_data === 'string' ? JSON.parse(letter.hidden_data) : letter.hidden_data)
         : {},
-      taskHint: letter.task_hint || '',
-      difficultyLevel: letter.difficulty_level || '',
+      taskHint: (letter.v2 && letter.v2.hidden_task) || letter.task_hint || '',
+      difficultyLevel: (letter.v2 && letter.v2.difficulty_v2) || letter.difficulty_level || '',
+      vehicleRequired: (letter.v2 && letter.v2.vehicle_required) || letter.vehicle || '',
+      freightRef: (letter.v2 && letter.v2.freight_ref) || letter.freight_amount || null,
       willCancel: false,
       incoterms: letter.incoterms||'',
       scenario: letter.scenario||'agree',
