@@ -237,11 +237,17 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
 // ────────────────────────────────────────────────────────────
 function fireIncident(incident) {
   const payload = (() => { try { return JSON.parse(incident.payload_json || '{}'); } catch(e) { return {}; } })();
-  const text = scenariosLib.pickRandom(scenariosLib.textPoolForType(incident.type));
+  let text = scenariosLib.pickRandom(scenariosLib.textPoolForType(incident.type));
   if (!text) {
     console.warn(`[incident-fire] немає тексту для типу ${incident.type}`);
     db.prepare(`UPDATE incidents SET state='cancelled', fired_at=datetime('now') WHERE id=?`).run(incident.id);
     return;
+  }
+
+  // Деплой 24b: замовник присилає ПД з РЕАЛЬНИМ номером (letters.pd_number)
+  if (incident.type === 'client_pd_sent') {
+    const l = db.prepare('SELECT pd_number FROM letters WHERE id=?').get(incident.letter_id);
+    if (l?.pd_number) text = `${text}\nПД: ${l.pd_number}`;
   }
 
   const channel = scenariosLib.channelForType(incident.type);
@@ -386,7 +392,8 @@ function updateOrderState(incident) {
     'loaded_ok': { state: 'loaded', timestamp: 'loaded_at' },
     'at_border_clear': { state: 'at_border', timestamp: 'at_border_at' },
     'at_border_need_pd': { state: 'pd_requested', timestamp: 'pd_requested_at' },
-    'client_pd_sent': { state: 'pd_sent', timestamp: 'pd_sent_at' },
+    // Деплой 24b: 'client_pd_sent' БІЛЬШЕ НЕ перемикає стан — pd_sent ставиться
+    // тільки коли студент переслав ПРАВИЛЬНИЙ номер перевізнику (handlePdDetection)
     'at_terminal': { state: 'at_customs_dst', timestamp: 'at_customs_at' },
     'at_unloading_arrived': { state: 'at_unloading' },
     'at_unloading_wait': { state: 'at_unloading' },

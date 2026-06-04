@@ -3425,7 +3425,7 @@ ${dateNote}
         in_transit: 'у дорозі',
         at_border: 'на кордоні',
         pd_requested: 'на кордоні, чекаю ПД від експедитора',
-        pd_sent: 'отримали ПД, проходимо кордон',
+        pd_sent: 'отримали ПД, проходимо кордон. ВАЖЛИВО: ПД ВЖЕ ОТРИМАНА — НЕ питай про неї знову',
         at_customs_dst: 'на терміналі розмитнення',
         customs_problem: 'проблема з розмитненням',
         simple_demand: 'вимагаю простій',
@@ -3817,8 +3817,11 @@ function renderApplicationRow(a){
   `;
 
   const isExpanded = _expandedAppId === a.id;
+  // Деплой 24b: ⚠ якщо по рейсу є штрафи/списання
+  const hasCharges = a.letter_id && typeof chargesForLetter === 'function' && chargesForLetter(a.letter_id).length > 0;
+  const warnIcon = hasCharges ? `<span title="Є штрафи по рейсу — клікніть" style="cursor:pointer;margin-left:5px" onclick="event.stopPropagation();showChargesListModal('${a.letter_id}')">⚠</span>` : '';
   const mainRow = `<tr class="apps-row${isExpanded?' expanded':''}" onclick="toggleOrderAccordion('${a.id}')" style="cursor:pointer">
-    <td class="mono">${escapeHtml(numDisplay)}</td>
+    <td class="mono">${escapeHtml(numDisplay)}${warnIcon}</td>
     <td class="route">${escapeHtml(route)}</td>
     <td>${escapeHtml(clientName)}</td>
     <td>${escapeHtml(carrierName)}</td>
@@ -6097,6 +6100,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     startUnreadPolling();
     if (typeof startSimplePolling === 'function') startSimplePolling();
+    if (typeof startChargesPolling === 'function') startChargesPolling();
   }, 2000);
 });
 
@@ -7302,6 +7306,9 @@ async function renderResume(){
     doc_akt_ok: 'Акт прийнятий',
     doc_akt_err: 'Помилка в акті',
     order_late: 'Заявка надіслана із запізненням',
+    // Деплой 24b
+    pd_wrong: 'Переслав невірну ПД',
+    carrier_refusal_fine: 'Штраф за пізню відмову перевізника',
   };
 
   const metrics = analysis?.metrics || {};
@@ -8263,7 +8270,7 @@ async function generateSpravka(idx){
     ${!isImport ? `<div style="background:rgba(220,68,68,.1);border:1px solid rgba(220,68,68,.3);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--t2)">⚠ Це рейс з України (експорт). Довідка тут не потрібна — її роблять для розмитнення в Україні.</div>` : ''}
 
     <div style="background:var(--bg3);border-radius:8px;padding:12px;margin-bottom:14px">
-      <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Фрахти і курси</div>
+      <div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Фрахти і курси${ctx.rate_basis ? ` <span style="color:var(--acc);text-transform:none;letter-spacing:0">· курс на дату ${ctx.rate_basis==='розвантаження'?'розвантаження':'завантаження'}</span>` : ''}</div>
 
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">Фрахт замовника</label>
@@ -9802,6 +9809,86 @@ function startSimplePolling() {
   _simplePollTimer = setInterval(checkSimpleStatusForAll, 20 * 1000);
   // Перший виклик одразу
   checkSimpleStatusForAll();
+}
+
+// ── Деплой 24b: штрафи/списання (order_charges) ──────────────
+let _chargesCache = [];
+let _chargesPollTimer = null;
+
+async function checkCharges() {
+  try {
+    const token = localStorage.getItem('docaa_token');
+    const r = await fetch('/api/student/charges', { headers: {'Authorization':'Bearer '+token} });
+    if (!r.ok) return;
+    _chargesCache = await r.json();
+    // Нові (не підтверджені) — показуємо модалку по одному
+    const fresh = _chargesCache.find(c => !c.acknowledged);
+    if (fresh && !document.getElementById('charge-modal-ov')) {
+      showChargeModal(fresh);
+    }
+  } catch(e) {}
+}
+
+function showChargeModal(charge) {
+  const ov = document.createElement('div');
+  ov.id = 'charge-modal-ov';
+  ov.className = 'modal-ov';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:9999';
+  ov.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:14px;padding:24px;width:380px">
+      <div style="font-size:16px;font-weight:600;color:var(--t1);margin-bottom:10px">⚠ Штраф від перевізника</div>
+      <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">${escapeHtml(charge.reason||'')}</div>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:16px">${escapeHtml(charge.carrier_name||'')}</div>
+      <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:#f05060;margin-bottom:18px">−€${charge.amount}</div>
+      <button class="btn primary" style="width:100%" onclick="ackCharge('${charge.id}')">ОК, зрозуміло</button>
+    </div>`;
+  document.body.appendChild(ov);
+}
+
+async function ackCharge(chargeId) {
+  try {
+    const token = localStorage.getItem('docaa_token');
+    await fetch(`/api/student/charges/${chargeId}/ack`, { method:'POST', headers:{'Authorization':'Bearer '+token} });
+  } catch(e) {}
+  document.getElementById('charge-modal-ov')?.remove();
+  const c = _chargesCache.find(x => x.id === chargeId);
+  if (c) c.acknowledged = 1;
+  // Оновити профіт і таблицю заявок (⚠)
+  if (typeof refreshHeader === 'function') try { refreshHeader(); } catch(e){}
+  if (typeof redrawApplicationsTable === 'function') try { redrawApplicationsTable(); } catch(e){}
+}
+
+function chargesForLetter(letterId) {
+  return _chargesCache.filter(c => c.letter_id === letterId);
+}
+
+function showChargesListModal(letterId) {
+  const list = chargesForLetter(letterId);
+  if (!list.length) return;
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9998';
+  ov.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--b2);border-radius:14px;padding:22px;width:420px">
+      <div style="font-size:15px;font-weight:600;color:var(--t1);margin-bottom:14px">Штрафи та списання по рейсу</div>
+      ${list.map(c=>`
+        <div style="background:var(--bg3);border:1px solid var(--b1);border-radius:8px;padding:10px 13px;margin-bottom:8px">
+          <div style="font-size:12px;color:var(--t1)">${escapeHtml(c.reason||'')}</div>
+          <div style="display:flex;justify-content:space-between;margin-top:5px">
+            <span style="font-size:11px;color:var(--t3)">${escapeHtml(c.carrier_name||'')}</span>
+            <span style="font-family:var(--mono);font-size:13px;font-weight:600;color:#f05060">−€${c.amount}</span>
+          </div>
+        </div>`).join('')}
+      <button class="btn" style="width:100%;margin-top:8px" onclick="this.closest('.modal-ov').remove()">Закрити</button>
+    </div>`;
+  ov.addEventListener('click', e=>{ if(e.target===ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
+function startChargesPolling() {
+  if (_chargesPollTimer) clearInterval(_chargesPollTimer);
+  _chargesPollTimer = setInterval(checkCharges, 25 * 1000);
+  checkCharges();
 }
 
 // Кнопка "Простої — домовитись" у чаті з перевізником

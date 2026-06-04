@@ -265,6 +265,13 @@ Object.assign(CARRIER_TEXTS, {
     'Досі без ПД. Машина простоює, це гроші. Прискорте будь ласка.',
     'Нагадую — без ПД не пройдемо. Чекаємо вже довго.',
   ],
+
+  // Деплой 24b: студент переслав невірну/вигадану ПД
+  carrier_pd_wrong: [
+    'ПД не вірне. Перевірте номер і пришліть правильний.',
+    'Брокер каже ПД не проходить — номер невірний. Дайте правильну ПД.',
+    'Це не та ПД. Машина далі стоїть. Чекаю вірний номер.',
+  ],
 });
 
 // Тексти-нагадування від замовника (реактивні)
@@ -374,6 +381,7 @@ function textPoolForType(type) {
     'carrier_simple_demand_firm': CARRIER_TEXTS.simple_demand_firm,
     'carrier_asks_where_address': CARRIER_TEXTS.carrier_asks_where_address,
     'carrier_pd_reminder': CARRIER_TEXTS.carrier_pd_reminder,
+    'carrier_pd_wrong': CARRIER_TEXTS.carrier_pd_wrong,
     'client_docs_reminder': CLIENT_TEXTS.client_docs_reminder,
     'carrier_customs_delay': CARRIER_TEXTS.customs_delay,
     'carrier_customs_simple_demand': CARRIER_TEXTS.customs_simple_demand,
