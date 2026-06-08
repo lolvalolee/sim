@@ -481,6 +481,7 @@ function renderGroupDetail(){
           ? `<button class="btn" onclick="resetGroupStart('${g.id}')">🔄 Скинути старт</button>`
           : `<button class="btn primary" onclick="startGroup('${g.id}')">▶ Почати симуляцію</button>`}
         <button class="btn" onclick="openRatesModal('${g.id}')">💱 Курси EUR/UAH</button>
+        <button class="btn" onclick="openPauseModal('${g.id}', ${g.idle_pause_min != null ? g.idle_pause_min : 'null'})">⏸ Автопауза</button>
         <button class="btn" onclick="resetWholeGroup('${g.id}')">🔄 Рестарт всієї групи</button>
         <button class="btn primary" onclick="document.getElementById('modal-student').style.display='flex'">+ Додати студента</button>
       </div>
@@ -540,7 +541,7 @@ function renderStudentCards(){
             : status==='stopped'
             ? `<button class="icon-btn" title="Відновити" onclick="resumeSession('${st.id}')">▶</button>`
             : `<button class="icon-btn" style="opacity:.3" disabled title="Неактивна">⏸</button>`}
-          <button class="icon-btn danger" title="Рестарт сесії" onclick="resetSession('${st.id}')">🔄</button>
+          <button class="icon-btn danger" title="Рестарт сесії" onclick="if(confirm('Скинути прогрес студента?'))resetSession('${st.id}')">🔄</button>
           <button class="icon-btn" title="Розгорнути" onclick="toggleStudentDetail('${st.id}')"><span class="expand-arrow">▾</span></button>
         </div>
       </div>
@@ -766,63 +767,54 @@ function copySummary(studentId){
   );
 }
 
-async function resetWholeGroup(groupId){
-  openResetDateModal('group', groupId, STATE.selectedGroup?.name || '');
-}
-
-// ── 25-fix: модалка вибору дати старту при рестарті ──────────
-function openResetDateModal(kind, id, label){
-  const today = new Date();
-  const iso = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-  let ov = document.getElementById('reset-date-ov');
-  if(ov) ov.remove();
-  ov = document.createElement('div');
-  ov.id = 'reset-date-ov';
+// №14: налаштування інтервалу автопаузи на групу
+function openPauseModal(groupId, current){
+  const cur = (current === null || current === undefined) ? '' : current;
+  const ov = document.createElement('div');
   ov.className = 'modal-ov';
+  ov.id = 'pause-modal-ov';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999';
-  const title = kind==='group' ? `Рестарт групи "${label}"` : `Рестарт студента ${label}`;
   ov.innerHTML = `
-    <div style="background:var(--bg2,#1c1c1c);border:1px solid var(--b2,#383838);border-radius:14px;padding:22px;width:380px;font-family:var(--sans,'Inter',sans-serif)">
-      <div style="font-size:16px;font-weight:600;color:var(--t1,#f0f0f0);margin-bottom:6px">${title}</div>
-      <div style="font-size:12px;color:var(--t3,#888);line-height:1.5;margin-bottom:16px">Весь прогрес буде скинуто, згенеруються нові листи. Оберіть дату старту симуляції — з неї почнеться прискорений час (День 1).</div>
-      <label style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3,#888);font-weight:600;margin-bottom:6px">Дата старту</label>
-      <input type="date" id="reset-date-input" value="${iso}" style="width:100%;box-sizing:border-box;background:var(--bg3,#242424);border:1px solid var(--b2,#383838);color:var(--t1,#f0f0f0);font-family:var(--sans,'Inter');font-size:14px;padding:10px 12px;border-radius:8px;outline:none;margin-bottom:8px">
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--t1,#f0f0f0);margin-bottom:18px;cursor:pointer">
-        <input type="checkbox" id="reset-date-today" checked onchange="document.getElementById('reset-date-input').disabled=this.checked;if(this.checked)document.getElementById('reset-date-input').value='${iso}'">
-        Поточна дата (сьогодні)
-      </label>
-      <div style="display:flex;gap:8px">
-        <button class="btn primary" style="flex:1" onclick="confirmResetWithDate('${kind}','${id}')">Рестарт</button>
-        <button class="btn" onclick="document.getElementById('reset-date-ov').remove()">Скасувати</button>
+    <div style="background:var(--bg2,#1c1c1c);border:1px solid var(--b2,#333);border-radius:14px;padding:24px;width:420px">
+      <div style="font-size:16px;font-weight:600;color:var(--t1,#fff);margin-bottom:8px">Автопауза при бездіяльності</div>
+      <div style="font-size:13px;color:var(--t2,#aaa);line-height:1.6;margin-bottom:16px">
+        Через скільки хвилин бездіяльності студента симуляція стає на паузу.
+        Залиште поле порожнім або 0, щоб <b>не ставити паузу взагалі</b>.
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+        <input type="number" id="pause-min-input" min="0" placeholder="без паузи" value="${cur}"
+               style="width:120px;background:var(--bg3,#252525);border:1px solid var(--b2,#333);color:var(--t1,#fff);font-size:15px;padding:9px 12px;border-radius:8px;outline:none;text-align:center">
+        <span style="font-size:13px;color:var(--t3,#888)">хвилин</span>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn" onclick="document.getElementById('pause-modal-ov').remove()">Скасувати</button>
+        <button class="btn primary" onclick="savePause('${groupId}')">Зберегти</button>
       </div>
     </div>`;
-  document.body.appendChild(ov);
-  document.getElementById('reset-date-input').disabled = true;
   ov.addEventListener('click', e=>{ if(e.target===ov) ov.remove(); });
+  document.body.appendChild(ov);
 }
 
-async function confirmResetWithDate(kind, id){
-  const useToday = document.getElementById('reset-date-today')?.checked;
-  let start_date = null;
-  if(!useToday){
-    const iso = document.getElementById('reset-date-input')?.value; // YYYY-MM-DD
-    if(!iso){ notify('Вкажіть дату','err'); return; }
-    const [y,m,d] = iso.split('-');
-    start_date = `${d}.${m}.${y}`;
-  }
-  document.getElementById('reset-date-ov')?.remove();
+async function savePause(groupId){
+  const v = document.getElementById('pause-min-input')?.value;
+  const idle_pause_min = (v === '' || Number(v) <= 0) ? null : Math.round(Number(v));
+  try {
+    await api('PATCH', `/groups/${groupId}`, { idle_pause_min });
+    notify(idle_pause_min ? `Автопауза: ${idle_pause_min} хв ✓` : 'Автопаузу вимкнено ✓', 'ok');
+    document.getElementById('pause-modal-ov')?.remove();
+    STATE.groups = await api('GET','/groups') || STATE.groups;
+  } catch(e){ notify(e.message,'err'); }
+}
+
+async function resetWholeGroup(groupId){
+  if(!confirm('Рестарт групи:\n\n• Прогрес ВСІХ студентів буде скинуто\n• Згенеруються нові набори листів\n• Дата старту встановиться на СЬОГОДНІ\n• Симуляція стартує одразу\n\nПродовжити? Дія незворотна.')) return;
   try{
-    const path = kind==='group' ? `/groups/${id}/reset` : `/sessions/${id}/reset`;
-    const r = await api('POST', path, start_date ? {start_date} : {});
-    if(kind==='group'){
-      notify(`Скинуто ${r.students_reset} студент(ів). Старт: ${r.start_date} ✓`,'ok');
-      STATE.groups = await api('GET','/groups') || STATE.groups;
-      STATE.selectedGroup = STATE.groups.find(g=>g.id===id);
-      openGroupPage(id);
-    }else{
-      notify(`Рестарт виконано. Нових листів: ${r.letter_count||8} ✓`,'ok');
-      if(STATE.selectedGroup) selectGroup(STATE.selectedGroup.id);
-    }
+    const r = await api('POST',`/groups/${groupId}/reset`);
+    notify(`Скинуто ${r.students_reset} студент(ів). Старт: ${r.new_start_date} ✓`,'ok');
+    // Оновити список груп (start_date і started_at змінились)
+    STATE.groups = await api('GET','/groups') || STATE.groups;
+    STATE.selectedGroup = STATE.groups.find(g=>g.id===groupId);
+    openGroupPage(groupId);
   }catch(e){ notify(e.message,'err'); }
 }
 
@@ -948,13 +940,20 @@ async function resumeSession(studentId){
 }
 
 async function resetSession(studentId){
-  // 25-fix: тепер через модалку вибору дати
-  const st = (STATE.selectedGroup?.students||[]).find(s=>s.id===studentId);
-  openResetDateModal('session', studentId, st?.name || 'студента');
+  try{
+    await api('POST',`/sessions/${studentId}/reset`);
+    notify('Сесію скинуто','warn');
+    selectGroup(STATE.selectedGroup.id);
+  }catch(e){ notify(e.message,'err'); }
 }
 
 async function restartStudent(studentId, name){
-  openResetDateModal('session', studentId, name || 'студента');
+  if(!confirm(`Рестарт студента ${name}?\n\nЦе скине весь прогрес і призначить НОВИЙ набір листів.`)) return;
+  try{
+    const res=await api('POST',`/sessions/${studentId}/reset`);
+    notify(`✓ ${name} — рестарт виконано. Нових листів: ${res?.letter_count||8}`,'ok');
+    selectGroup(STATE.selectedGroup.id);
+  }catch(e){ notify(e.message,'err'); }
 }
 
 async function restartGroup(groupId){

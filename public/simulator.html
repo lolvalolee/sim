@@ -2284,7 +2284,11 @@ function hidePauseOverlay(){
 }
 function resetInactivity(){
   clearTimeout(S.inactivityTimer);
-  S.inactivityTimer=setTimeout(()=>{ pauseTimer(); }, CFG.inactivityThreshold*1000);
+  // №14: інтервал автопаузи задає лектор на групу (S.idlePauseMin, хв).
+  // Якщо null/0 — автопаузи НЕМАЄ взагалі.
+  const mins = S.idlePauseMin;
+  if (mins == null || mins <= 0) return; // без автопаузи
+  S.inactivityTimer=setTimeout(()=>{ pauseTimer(); }, mins * 60 * 1000);
 }
 // Активність скидає таймер неактивності. Якщо стоїть пауза — НЕ знімаємо
 // автоматично (тепер пауза завжди потребує кліку на оверлей "Продовжити").
@@ -2322,7 +2326,7 @@ function checkEvents(){
         notify(`❌ ${ord.id}: замовник відмовився від перевезення!`,'err');
       } else if(ev.from==='carrier'&&ord.carrierId){
         if(!S.chats[ord.carrierId]) S.chats[ord.carrierId]=[];
-        S.chats[ord.carrierId].push({role:'carrier',text:ev.text,time:nowTime(),event:true});
+        S.chats[ord.carrierId].push({role:'carrier',text:ev.text,time:simNowHHMM(),event:true});
         saveChatToServer(ord.carrierId);
         if(ev.severity==='critical') ord.status='problem';
         notify(`${ev.severity==='critical'?'🚨':'📨'} Перевізник по ${ord.id}: нове повідомлення`,'warn');
@@ -2375,9 +2379,10 @@ function updateBadges(){
   const unread=visibleEmails.filter(e=>e.unread).length;
   const eb=document.getElementById('badge-email');
   if(eb){
-    const total=visibleEmails.length;
-    eb.textContent=unread||total;
-    eb.style.display=(unread||total)?'':'none';
+    // №3: показуємо ТІЛЬКИ кількість непрочитаних. Раніше "unread||total" при 0
+    // непрочитаних показувало total (всі листи) → стрибок назад на 4.
+    eb.textContent=unread;
+    eb.style.display=unread>0?'':'none';
   }
   // Рахуємо непрочитані повідомлення в чатах (від AI/carrier, не системні)
   let unreadChats = 0;
@@ -2635,6 +2640,13 @@ function openEmail(orderId){
   const ord=S.orders.find(o=>o.id===orderId);
   if(!em||!ord) return;
   em.unread=false; S.selectedEmail=orderId;
+  // №3: персист прочитаності (щоб після reload/polling лист лишався прочитаним)
+  try {
+    const key='docaa_read_emails_'+(S.sessionId||'');
+    const set=new Set(JSON.parse(localStorage.getItem(key)||'[]'));
+    set.add(orderId);
+    localStorage.setItem(key, JSON.stringify([...set]));
+  } catch(e){}
   updateBadges(); renderEmailList();
 
   const missingHtml='';
@@ -2659,7 +2671,6 @@ function openEmail(orderId){
         <input class="freight-input" id="fi-${orderId}" type="number" placeholder="0" min="100">
         <span class="freight-currency">EUR</span>
         <button class="btn primary sm" onclick="proposeFreight('${orderId}')">Запропонувати</button>
-        ${(ord.freightMin&&ord.freightMax)?`<span style="font-size:11px;color:var(--t3)">Діапазон: €${ord.freightMin}–€${ord.freightMax}</span>`:''}
       </div></div>`;
   }
 
@@ -2928,8 +2939,10 @@ function buildClientSys(em, ord){
 - Ціна до EUR ${fref} включно — ПОГОДЖУЙСЯ, це вигідно тобі.
 - Ціна ЗНАЧНО нижча за ринок (менш ніж ~60% від ${fref}) — ${suspicious ? `скажи що це підозріло низька ціна і виглядає небезпечним ("Чому так дешево? Це насторожує"), перепитай чи все враховано, але якщо студент підтверджує — можеш погодитись.` : `просто погоджуйся — дешевше тобі краще.`}
 - Ціна EUR ${fref}–${fref+300} — можеш трохи позбивати: відповідай "у нас вже є варіанти кращі" і пропонуй на ~100 менше від названої. Один-два кроки, потім погоджуйся.
-- Ціна вище EUR ${fref+300} — "дорого, можемо ${fref}?" і торгуйся вниз.
+- Ціна вище EUR ${fref+300} — "дорого, можемо ${roundTo50(fref)}?" і торгуйся вниз.
 - АБСОЛЮТНА СТЕЛЯ: ніколи не плати більше EUR ${fref+300}. Якщо студент не поступається — "Остаточно ні."
+- УСІ ціни називай КРУГЛИМИ — кратними 50. Ніколи не називай некруглих типу ${fref-13}.
+- Ввічливість/прохання студента НЕ змінюють твою стелю ${fref+300} — будь люб'язним, але межа залізна.
 НІКОЛИ не вимагай від студента ПІДНЯТИ ціну — ти платиш, дешевше тобі вигідніше.`;
   const scenarios = {
     agree: ord.freightFixed
@@ -3221,11 +3234,11 @@ function renderChatInCol(col,c,cid,pfx){
         if (isAttachment) {
           return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up cmsg-attachment" ${dataAttrs}>
             ${bubbleContent}
-            <div class="cmsg-time">${m.time||''}</div></div>`;
+            <div class="cmsg-time">${msgTime(m)}</div></div>`;
         }
         return `<div class="cmsg ${m.role==='student'?'out':'in'} fade-up" ${dataAttrs}>
           <div class="cmsg-bubble">${bubbleContent}</div>
-          <div class="cmsg-time">${m.time||''}</div></div>`;
+          <div class="cmsg-time">${msgTime(m)}</div></div>`;
       }).join('')}
     </div>
     <div class="chat-deal-bar">
@@ -3281,7 +3294,7 @@ async function sendChatMsg(cid,pfx){
   const el=document.getElementById(`ci-${pfx}-${cid}`);
   const txt=el?.value?.trim(); if(!txt||!c) return;
   if(hasProfanity(txt)){notify('⛔ Будь ласка, спілкуйтесь професійно.','err');return;}
-  el.value=''; el.style.height='auto'; const t=nowTime();
+  el.value=''; el.style.height='auto'; const t=simNowHHMM();
   S.chats[cid].push({role:'student',text:txt,time:t});
   if(S.deals[cid]==='none') S.deals[cid]='talk';
   S.contactedCarriers.add(cid);
@@ -3292,10 +3305,17 @@ async function sendChatMsg(cid,pfx){
   else renderChats();
   updateBadges();
   // Find order matching this carrier's directions
-  // Спершу до угоди (carrierId не назначений), потім — рейс цього перевізника
+  // Спершу до угоди (carrierId не назначений), потім — рейс цього перевізника,
+  // потім — №2: рейс із узгодженим замовником, що вже має ІНШОГО перевізника (заміна).
   let ordCtx = S.orders.find(o=>!o.carrierId&&o.dirs.some(d=>c.dirs.includes(d))&&o.clientFreightAgreed);
   if (!ordCtx) {
     ordCtx = S.orders.find(o => o.carrierId === cid);
+  }
+  if (!ordCtx) {
+    // №2: заміна — дозволяємо вести переговори з новим перевізником на рейс,
+    // що вже має іншого перевізника (паралельні угоди / заміна не того ТЗ).
+    ordCtx = S.orders.find(o => o.carrierId && o.carrierId !== cid && o.clientFreightAgreed &&
+      o.dirs.some(d => c.dirs.includes(d)));
   }
   // Збагачуємо контекст інформацією про поточний стан рейсу
   let stateContext = null;
@@ -3325,7 +3345,7 @@ async function sendChatMsg(cid,pfx){
   try{
     const res=await callClaude(sys,hist);
     S.chats[cid]=S.chats[cid].filter(m=>!m.loading);
-    S.chats[cid].push({role:'carrier',text:res,time:nowTime()});
+    S.chats[cid].push({role:'carrier',text:res,time:simNowHHMM()});
     // Звук про нове повідомлення від перевізника
     if (typeof playCarrierSound === 'function') playCarrierSound();
     const lo=res.toLowerCase();
@@ -3406,11 +3426,13 @@ ${dateNote}
       const fr = ordContext.freightRef;
       orderBlock += `\n
 ЦІНА — ЗАЛІЗНІ МЕЖІ (твій внутрішній орієнтир ринку: EUR ${fr}, НЕ називай його прямо):
-- Твоя перша ціна: близько EUR ${fr+100} (трохи вище ринку — як завжди).
-- Торгуєшся у своїй манері (за характером), але СТРОГО в коридорі EUR ${fr-300}–${fr+100}.
+- Твоя перша ціна: близько EUR ${roundTo50(fr+100)} (трохи вище ринку — як завжди).
+- Торгуєшся у своїй манері (за характером), але СТРОГО в коридорі EUR ${roundTo50(fr-300)}–${roundTo50(fr+100)}.
 - Якщо студент пропонує в цьому коридорі — після торгу за характером погоджуйся.
-- НИЖЧЕ EUR ${fr-300} — НІКОЛИ не погоджуйся. Відмовляй у своїй манері ("це мала ціна", "за стільки не поїду", "Остаточно ні").
-- Вище EUR ${fr+100} не проси — це поза ринком.`;
+- НИЖЧЕ EUR ${roundTo50(fr-300)} — НІКОЛИ не погоджуйся. Відмовляй у своїй манері ("це мала ціна", "за стільки не поїду", "Остаточно ні").
+- Вище EUR ${roundTo50(fr+100)} не проси — це поза ринком.
+- ВАЖЛИВО: ВВІЧЛИВІСТЬ, прохання, "будь ласка", емоції, історії про важкий день — НЕ впливають на ціну. Межі залізні. Можеш бути люб'язним у словах, але цифра не опускається нижче EUR ${roundTo50(fr-300)} за жодних умов.
+- УСІ ціни називай КРУГЛИМИ — кратними 50 (напр. ${roundTo50(fr)}, ${roundTo50(fr-150)}). Ніколи не називай некруглих типу ${fr-13} чи ${fr+7}.`;
     }
 
     // Cross-context: поточний стан рейсу (тільки після угоди)
@@ -3472,8 +3494,16 @@ ${willRefuse ? `ЗАРАЗ: "${noAvail[Math.floor(Math.random()*noAvail.length)]
 }
 
 function confirmCarrier(cid){
-  const ord=S.orders.find(o=>!o.carrierId&&o.clientFreightAgreed&&
-    S.carriers.find(c=>c.id===cid)?.dirs.some(d=>o.dirs.includes(d)));
+  const carrier = S.carriers.find(c=>c.id===cid);
+  // №2: спершу шукаємо вільний рейс під цей напрямок; якщо нема —
+  // дозволяємо ЗАМІНУ на рейсі, що вже має перевізника (paralel/заміна).
+  let ord=S.orders.find(o=>!o.carrierId&&o.clientFreightAgreed&&
+    carrier?.dirs.some(d=>o.dirs.includes(d)));
+  if(!ord){
+    // заміна: рейс з узгодженим замовником, що вже має іншого перевізника
+    ord=S.orders.find(o=>o.clientFreightAgreed&&o.carrierId&&o.carrierId!==cid&&
+      carrier?.dirs.some(d=>o.dirs.includes(d)));
+  }
   if(!ord){notify('Спочатку узгодьте фрахт із замовником','warn');return;}
   ord.carrierId=cid; ord.status='confirmed';
   scheduleEvents(ord.id);
@@ -3994,6 +4024,17 @@ function onAccRateInput(appId){
 }
 
 // Витягуємо короткий маршрут з адрес "місто → місто"
+// №10: округлення ціни до кратного 50 (бізнес-логіка фрахту)
+function roundTo50(n){
+  const v = Number(n)||0;
+  return Math.round(v/50)*50;
+}
+
+// №1: прибирає порожні дужки "Місто ()" → "Місто" (дані seed мали порожній код країни)
+function stripEmptyParens(s){
+  return String(s||'').replace(/\s*\(\s*\)/g, '').replace(/\s{2,}/g,' ').trim();
+}
+
 function extractRouteFromAddresses(loadAddr, unloadAddr){
   if (!loadAddr && !unloadAddr) return '—';
   const extract = (addr) => {
@@ -4009,7 +4050,7 @@ function extractRouteFromAddresses(loadAddr, unloadAddr){
     }
     return parts[0] || '?';
   };
-  return `${extract(loadAddr)} → ${extract(unloadAddr)}`;
+  return stripEmptyParens(`${extract(loadAddr)} → ${extract(unloadAddr)}`);
 }
 
 function setApplicationsFilter(f){
@@ -5437,11 +5478,11 @@ function showApplicationForm(){
           <div class="zf-grid cols-2">
             <div class="zf-field">
               <label class="zf-label">Дата завантаження<span class="req">*</span></label>
-              <input type="date" class="zf-input" id="af-load-date" value="${dateToIso(d.load_date)}">
+              <input type="text" readonly class="zf-input dp-field" id="af-load-date" placeholder="ДД.ММ.РРРР" value="${escapeHtml(d.load_date||'')}" onclick="dpOpen('af-load-date')" style="cursor:pointer">
             </div>
             <div class="zf-field">
               <label class="zf-label">Дата розвантаження</label>
-              <input type="date" class="zf-input" id="af-unload-date" value="${dateToIso(d.unload_date)}">
+              <input type="text" readonly class="zf-input dp-field" id="af-unload-date" placeholder="ДД.ММ.РРРР" value="${escapeHtml(d.unload_date||'')}" onclick="dpOpen('af-unload-date')" style="cursor:pointer">
             </div>
           </div>
         </div>
@@ -5574,8 +5615,8 @@ async function submitApplication(){
     cargo_weight: get('af-weight'),
     cargo_volume: get('af-volume'),
     adr_class: get('af-adr'),
-    load_date: isoToDate(get('af-load-date')),
-    unload_date: isoToDate(get('af-unload-date')),
+    load_date: get('af-load-date'),
+    unload_date: get('af-unload-date'),
     vehicle_type: get('af-vehicle-type'),
     vehicle_requirements: get('af-vehicle-req'),
     truck_plate: get('af-truck-plate'),
@@ -5873,6 +5914,105 @@ function errMsg(e){
 }
 function hasProfanity(txt){return CFG.profanityBlock&&STOP_WORDS.some(w=>txt.toLowerCase().includes(w));}
 function nowTime(){return new Date().toLocaleTimeString('uk',{hour:'2-digit',minute:'2-digit'});}
+
+// ── №7: кастомний date-picker (європейський: понеділок перший, формат ДД.ММ.РРРР) ──
+// Замінює нативний <input type="date"> (який показує тиждень за локаллю браузера).
+const _DP_MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+let _dpState = { inputId: null, viewY: 0, viewM: 0 };
+
+// Значення зберігаємо у hidden-сумісному форматі ДД.ММ.РРРР прямо в data-атрибуті поля.
+function dpOpen(inputId){
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  // закрити інші
+  document.querySelectorAll('.dp-pop').forEach(p=>p.remove());
+  const cur = parseDmy(inp.value) || new Date();
+  _dpState = { inputId, viewY: cur.getFullYear(), viewM: cur.getMonth() };
+  const pop = document.createElement('div');
+  pop.className = 'dp-pop';
+  pop.style.cssText = 'position:absolute;z-index:10000;background:var(--bg2);border:1px solid var(--b2);border-radius:10px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.5);width:248px';
+  const r = inp.getBoundingClientRect();
+  pop.style.left = (window.scrollX + r.left) + 'px';
+  pop.style.top = (window.scrollY + r.bottom + 4) + 'px';
+  pop.innerHTML = dpRender();
+  document.body.appendChild(pop);
+  setTimeout(()=>document.addEventListener('mousedown', dpOutside), 0);
+}
+function dpOutside(e){
+  if (!e.target.closest('.dp-pop') && !e.target.closest('.dp-field')) {
+    document.querySelectorAll('.dp-pop').forEach(p=>p.remove());
+    document.removeEventListener('mousedown', dpOutside);
+  }
+}
+function dpRender(){
+  const {viewY, viewM} = _dpState;
+  const first = new Date(viewY, viewM, 1);
+  const firstDow = (first.getDay()+6)%7; // понеділок=0
+  const days = new Date(viewY, viewM+1, 0).getDate();
+  let h = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <span onclick="dpNav(-1)" style="cursor:pointer;padding:2px 8px;color:var(--acc)">‹</span>
+    <span style="font-size:12px;font-weight:600;color:var(--t1)">${_DP_MONTHS[viewM]} ${viewY}</span>
+    <span onclick="dpNav(1)" style="cursor:pointer;padding:2px 8px;color:var(--acc)">›</span></div>`;
+  h += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">';
+  ['пн','вт','ср','чт','пт','сб','нд'].forEach(d=>h+=`<div style="font-size:9px;color:var(--t3);text-align:center;padding:3px 0">${d}</div>`);
+  for(let i=0;i<firstDow;i++) h+='<div></div>';
+  for(let day=1;day<=days;day++){
+    h += `<div onclick="dpPick(${day})" style="font-size:12px;text-align:center;padding:5px 0;border-radius:5px;cursor:pointer;color:var(--t1)" onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='transparent'">${day}</div>`;
+  }
+  h += '</div>';
+  return h;
+}
+function dpNav(delta){
+  _dpState.viewM += delta;
+  if (_dpState.viewM < 0) { _dpState.viewM = 11; _dpState.viewY--; }
+  if (_dpState.viewM > 11) { _dpState.viewM = 0; _dpState.viewY++; }
+  const pop = document.querySelector('.dp-pop');
+  if (pop) pop.innerHTML = dpRender();
+}
+function dpPick(day){
+  const {viewY, viewM, inputId} = _dpState;
+  const dd = String(day).padStart(2,'0');
+  const mm = String(viewM+1).padStart(2,'0');
+  const val = `${dd}.${mm}.${viewY}`;
+  const inp = document.getElementById(inputId);
+  if (inp) {
+    inp.value = val;
+    inp.dispatchEvent(new Event('change', {bubbles:true}));
+  }
+  document.querySelectorAll('.dp-pop').forEach(p=>p.remove());
+  document.removeEventListener('mousedown', dpOutside);
+}
+// ДД.ММ.РРРР → Date
+function parseDmy(s){
+  const m = String(s||'').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!m) return null;
+  return new Date(+m[3], +m[2]-1, +m[1]);
+}
+// №5: поточний СИМУЛЯЦІЙНИЙ час ГГ:ХХ (для штампу повідомлень, а не реальний годинник)
+function simNowHHMM(){
+  const h = (typeof S!=='undefined' && S.simHour!=null) ? S.simHour : CFG.dayStartHour;
+  const m = (typeof S!=='undefined' && S.simMin!=null) ? S.simMin : 0;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+// №5: сим-час для повідомлення — пріоритет m.time (вже сим), інакше конверсія ts (реальний) у сим
+function msgTime(m){
+  if (m && m.time) return m.time;
+  if (m && m.ts) {
+    // ts — реальний ISO. Переводимо в сим-час відносно старту сесії.
+    try {
+      const real = new Date(m.ts).getTime();
+      const startReal = (typeof S!=='undefined' && S.sessionStartReal) ? S.sessionStartReal : null;
+      if (startReal) {
+        const elapsedMin = (real - startReal) / 60000;
+        const dayFrac = (elapsedMin % CFG.dayDuration) / CFG.dayDuration;
+        const span = CFG.dayEndHour - CFG.dayStartHour;
+        const hf = CFG.dayStartHour + dayFrac * span;
+        return `${String(Math.floor(hf)).padStart(2,'0')}:${String(Math.floor((hf-Math.floor(hf))*60)).padStart(2,'0')}`;
+      }
+    } catch(e){}
+  }
+  return '';
+}
 function escapeHtml(s){
   if(s==null) return '';
   return String(s)
@@ -7188,7 +7328,7 @@ async function doConfirmCarrier(cid, btn){
     const resText=typeof data==='string'?data:(data.content?.[0]?.text||'');
     const confirmed=resText.toLowerCase().match(/домовились|підтвердж|підписую|добре|ок|ok/i);
 
-    S.chats[cid].push({role:'carrier',text:resText,time:nowTime()});
+    S.chats[cid].push({role:'carrier',text:resText,time:simNowHHMM()});
     saveChatToServer(cid);
 
     if(confirmed){
@@ -7309,6 +7449,7 @@ async function renderResume(){
     // Деплой 24b
     pd_wrong: 'Переслав невірну ПД',
     carrier_refusal_fine: 'Штраф за пізню відмову перевізника',
+    student_cancel_fine: 'Штраф за скасування менш ніж за 24 год',
   };
 
   const metrics = analysis?.metrics || {};
@@ -7519,6 +7660,7 @@ function saveCargo(editIdx){
   const route=document.getElementById('cb-route')?.value.trim();
   if(!route){notify('Введіть маршрут','err');return;}
   const item={
+    cargoId: 'cb_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), // №4: стабільний id
     route,
     vehicle_type:document.getElementById('cb-vehicle')?.value||'Тент',
     load_date:document.getElementById('cb-date')?.value||'',
@@ -7628,11 +7770,15 @@ async function scheduleCarrierFromExchange(cargoIdx){
     });
 
     // Хвилі: wave 1 одразу (з затримкою 15-40 сим-хв), wave 2 пізніше
+    const cargoId = cargo.cargoId; // №4: стабільний id для перевірки актуальності
     data.responders.forEach(r => {
       const baseDelay = r.wave===1 ? (15+Math.random()*25) : (40+Math.random()*50); // сим-хв
       const realMs = simMinToRealMs(baseDelay);
       setTimeout(()=>{
-        if(S.cargoBoard?.[cargoIdx]?.status!=='active') return;
+        // №4: пост ще існує і активний? (шукаємо за cargoId, не за індексом —
+        // після видалення/зсуву індекси не валідні, інакше пише по неактуальному)
+        const stillThere = (S.cargoBoard||[]).find(c => c.cargoId === cargoId && c.status==='active');
+        if(!stillThere) return;
         initExchangeResponder(r, cargo);
       }, realMs);
     });
@@ -7664,7 +7810,7 @@ async function initExchangeResponder(responder, cargo){
     const readyNote = responder.readiness==='ready'
       ? 'Ти готовий взяти вантаж, налаштований позитивно.'
       : 'Ти зацікавився, але ще придивляєшся.';
-    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. ${readyNote} Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і одразу назви свою ціну ${responder.start_price} EUR. Дуже коротко, як у Viber.`;
+    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. ${readyNote} Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і одразу назви свою ціну ${roundTo50(responder.start_price)} EUR. УСІ ціни кратні 50, не називай некруглих. Дуже коротко, як у Viber.`;
   } else {
     prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}. Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і запитай деталі (точна адреса / вага / коли вантажити / яка ціна). Ціну поки НЕ називай. Дуже коротко, як у Viber.`;
   }
@@ -7672,7 +7818,7 @@ async function initExchangeResponder(responder, cargo){
   try{
     const data=await callClaude(sys,[{role:'user',content:prompt}]);
     const text=typeof data==='string'?data:(data.content?.[0]?.text||'');
-    S.chats[cid].push({role:'carrier',text,time:nowTime(),fromExchange:true,read:false});
+    S.chats[cid].push({role:'carrier',text,time:simNowHHMM(),fromExchange:true,read:false});
     updateBadges();
     notify('📦 '+responder.name+' відгукнувся на ваш вантаж','warn');
     if(typeof playClientSound==='function') playClientSound();
@@ -7871,11 +8017,11 @@ function openNewOrderForm(editIdx){
 
       <div class="form-group" style="margin:0">
         <label class="form-label">Дата завантаження *</label>
-        <input id="of-load-date" type="date" class="form-input" value="${existing.load_date_iso||''}">
+        <input id="of-load-date" type="text" readonly class="form-input dp-field" placeholder="ДД.ММ.РРРР" value="${existing.load_date||''}" onclick="dpOpen('of-load-date')" style="cursor:pointer">
       </div>
       <div class="form-group" style="margin:0">
         <label class="form-label">Термін доставки</label>
-        <input id="of-deliv-date" type="date" class="form-input" value="${existing.deliv_date_iso||''}">
+        <input id="of-deliv-date" type="text" readonly class="form-input dp-field" placeholder="ДД.ММ.РРРР" value="${existing.deliv_date||''}" onclick="dpOpen('of-deliv-date')" style="cursor:pointer">
       </div>
       <div class="form-group" style="margin:0">
         <label class="form-label">Тип транспортного засобу *</label>
@@ -7963,10 +8109,10 @@ function saveOrder(editIdx){
     volume:document.getElementById('of-volume').value.trim(),
     adr:document.getElementById('of-adr').value.trim(),
     cmr:document.getElementById('of-cmr').value.trim(),
-    load_date:loadDateVal?new Date(loadDateVal).toLocaleDateString('uk-UA'):document.getElementById('of-load-date').value,
-    load_date_iso:loadDateVal,
-    deliv_date:delivDateVal?new Date(delivDateVal).toLocaleDateString('uk-UA'):'',
-    deliv_date_iso:delivDateVal,
+    load_date:loadDateVal||'',
+    load_date_iso:dateToIso(loadDateVal),
+    deliv_date:delivDateVal||'',
+    deliv_date_iso:dateToIso(delivDateVal),
     vehicle_type:document.getElementById('of-vehicle').value,
     vehicle_req:document.getElementById('of-vehicle-req').value.trim(),
     plate_truck:document.getElementById('of-plate1').value.trim().toUpperCase(),
@@ -9303,11 +9449,13 @@ function composeClientLetter(letter){
     // Гарантуємо коди країн у маршруті: "Місто — Місто" → "Місто (FROM) — Місто (TO)"
     // Якщо коди вже є у тексті (напр. "Сараєво (BA)") — лишаємо як є.
     if (route) {
+      route = stripEmptyParens(route); // №1: прибрати порожні дужки "Хаапсалу ()"
       const sep = route.includes('—') ? '—' : (route.includes('–') ? '–' : '-');
       const segs = route.split(sep).map(s=>s.trim());
       if (segs.length >= 2) {
         const codes = [fromCode, dirs[dirs.length-1] || ''];
         const withCodes = segs.map((seg, i) => {
+          seg = stripEmptyParens(seg);
           if (/\([A-Z]{2}\)/.test(seg)) return seg; // вже має код
           const code = i === 0 ? codes[0] : (i === segs.length-1 ? codes[1] : '');
           return code ? `${seg} (${code})` : seg;
@@ -9410,6 +9558,10 @@ async function loadSessionFromServer(token){
   // Apply session state
   S.timerMs=data.session.timer_ms||0;
   S.timerDay=data.session.timer_day||1;
+  // №14: інтервал автопаузи з налаштування групи (null = без паузи)
+  S.idlePauseMin = data.session.idle_pause_min != null ? data.session.idle_pause_min : null;
+  // №5: реальний момент, що відповідає timer_ms=0 (для конверсії ts повідомлень у сим-час)
+  S.sessionStartReal = Date.now() - S.timerMs;
   S.profit=data.session.profit||0;
   S.rates=data.session.rates||DEFAULT_RATES.slice();
   S.sessionId=data.session.id;
@@ -9508,6 +9660,9 @@ async function loadSessionFromServer(token){
   });
 
   // Build emails
+  // №3: множина прочитаних листів (персист per-session)
+  let _readEmails = new Set();
+  try { _readEmails = new Set(JSON.parse(localStorage.getItem('docaa_read_emails_'+(S.sessionId||''))||'[]')); } catch(e){}
   S.emails=S.orders.map(o=>{
     const thread=data.email_threads.find(t=>t.letter_id===o.id);
     return {
@@ -9517,10 +9672,21 @@ async function loadSessionFromServer(token){
       incoterms: o.incoterms||'',
       scenario: o.scenario||'agree',
       appearDay: o.appearDay || 1,
-      unread: !thread||thread.messages.length===0,
+      unread: (!thread||thread.messages.length===0) && !_readEmails.has(o.id),
       replies: thread?thread.messages:[],
     };
   });
+
+  // №4б: відновлення біржових постів (щоб не зникали після reload)
+  if (Array.isArray(data.cargo_board)) {
+    S.cargoBoard = data.cargo_board.map(c => ({
+      cargoId: c.id, // серверний id як стабільний ключ
+      route: c.route, vehicle_type: c.vehicle_type, weight: c.weight,
+      volume: c.volume, load_date: c.load_date, notes: c.notes,
+      status: c.status || 'active', views: c.views || 0,
+      updated_at: c.created_at || '',
+    }));
+  }
 
   // Restore carrier chats
   data.carrier_chats.forEach(chat=>{

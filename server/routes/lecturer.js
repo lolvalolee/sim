@@ -36,10 +36,15 @@ router.post('/groups', LEC, (req, res) => {
 router.patch('/groups/:id', LEC, (req, res) => {
   const g = db.prepare('SELECT id FROM groups WHERE id=? AND lecturer_id=?').get(req.params.id, req.user.id);
   if (!g) return res.status(404).json({ error: 'Not found' });
-  const { name, notes, active } = req.body;
+  const { name, notes, active, idle_pause_min } = req.body;
   if (name) db.prepare('UPDATE groups SET name=? WHERE id=?').run(name, req.params.id);
   if (notes !== undefined) db.prepare('UPDATE groups SET notes=? WHERE id=?').run(notes, req.params.id);
   if (active !== undefined) db.prepare('UPDATE groups SET active=? WHERE id=?').run(active?1:0, req.params.id);
+  // №14: інтервал автопаузи (хв). null/0 = без паузи.
+  if (idle_pause_min !== undefined) {
+    const v = (idle_pause_min === null || idle_pause_min === '' || Number(idle_pause_min) <= 0) ? null : Math.round(Number(idle_pause_min));
+    db.prepare('UPDATE groups SET idle_pause_min=? WHERE id=?').run(v, req.params.id);
+  }
   res.json({ ok: true });
 });
 

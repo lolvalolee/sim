@@ -129,7 +129,7 @@ router.get('/session', STU, (req, res) => {
   const member = db.prepare('SELECT group_id FROM group_members WHERE student_id=?').get(req.user.id);
   if (!member) return res.status(404).json({ error: 'No group. Contact your lecturer.' });
 
-  const group = db.prepare('SELECT id,start_date,started_at,rates FROM groups WHERE id=?').get(member.group_id);
+  const group = db.prepare('SELECT id,start_date,started_at,rates,idle_pause_min FROM groups WHERE id=?').get(member.group_id);
   if (!group) return res.status(404).json({ error: 'Group not found.' });
 
   // Якщо група ще не стартувала — повертаємо заглушку (200 OK, не помилка)
@@ -230,11 +230,18 @@ router.get('/session', STU, (req, res) => {
       profit: session.profit,
       rates: JSON.parse(session.rates),
       version: session.version || '',
+      idle_pause_min: group.idle_pause_min != null ? group.idle_pause_min : null,
     },
     letters,
     email_threads: emailThreads.map(t => ({ ...t, messages: JSON.parse(t.messages) })),
     carrier_chats: carrierChats.map(c => ({ ...c, messages: JSON.parse(c.messages), deal_status: c.deal_status })),
     order_progress: orderProgress,
+    cargo_board: (() => {
+      // №4б: повертаємо біржові пости щоб не зникали після reload
+      try {
+        return db.prepare('SELECT * FROM cargo_board WHERE session_id=? ORDER BY created_at').all(session.id);
+      } catch (e) { return []; }
+    })(),
   });
 });
 
@@ -342,31 +349,49 @@ router.post('/chats/:carrierId', STU, (req, res) => {
       try {
         handlePdDetection(session, req.params.carrierId, lastStudentMsg.text);
       } catch (e) { console.error('[pd-detect]', e.message); }
-    }
-    // ── Деплой 24b (Баг 6): детекція відмови перевізника ──
-    const lastCarrierMsg = Array.isArray(messages)
-      ? [...messages].reverse().find(m => m.role === 'carrier' || m.role === 'assistant')
-      : null;
-    if (lastCarrierMsg?.text) {
+      // ── №2: студент сам скасовує угоду з перевізником ──
       try {
-        handleCarrierRefusalDetection(session, req.params.carrierId, lastCarrierMsg.text);
-      } catch (e) { console.error('[refusal-detect]', e.message); }
+        handleStudentCancelCarrier(session, req.params.carrierId, lastStudentMsg.text);
+      } catch (e) { console.error('[cancel-detect]', e.message); }
     }
   } catch(e){}
 
   res.json({ ok: true });
 });
 
-// ── Деплой 24b (Баг 6): відмова перевізника + штраф €50 ─────
-// Детекція слів відмови у повідомленні ПЕРЕВІЗНИКА по рейсу з підтвердженою угодою.
-// Якщо до дати завантаження < 24 сим-год — штраф €50: запис у order_charges,
-// списання з профіту. Модалку показує фронт (acknowledged=0).
-const REFUSAL_REGEX = /відмова|відмовля|не їде|не поїде|передаю іншому|скасову|знімаємо рейс|зніму рейс/i;
+// ── №9/11: запис/оновлення угоди в session_deals (джерело істини) ──
+function upsertDeal(sessionId, letterId, role, counterpartyId, price, loadDate) {
+  try {
+    let name = '';
+    if (role === 'carrier' && counterpartyId) {
+      const c = db.prepare('SELECT name FROM carriers WHERE id=?').get(counterpartyId);
+      name = c?.name || '';
+    } else if (role === 'client') {
+      const l = db.prepare('SELECT company FROM letters WHERE id=?').get(letterId);
+      name = l?.company || '';
+    }
+    db.prepare(`
+      INSERT INTO session_deals (id, session_id, letter_id, role, counterparty_id, counterparty_name, agreed_price, load_date, status)
+      VALUES (?,?,?,?,?,?,?,?, 'active')
+      ON CONFLICT(session_id, letter_id, role)
+      DO UPDATE SET counterparty_id=excluded.counterparty_id, counterparty_name=excluded.counterparty_name,
+                    agreed_price=excluded.agreed_price, load_date=excluded.load_date,
+                    status='active', agreed_at=datetime('now')
+    `).run(uuidv4(), sessionId, letterId, role, counterpartyId || null, name, price, loadDate);
+  } catch (e) { console.error('[upsertDeal]', e.message); }
+}
 
-function handleCarrierRefusalDetection(session, carrierId, text) {
-  if (!REFUSAL_REGEX.test(text || '')) return;
+// ── №2: студент скасовує угоду з перевізником ─────────────────
+// Детекція слів скасування у повідомленні СТУДЕНТА. Звільняє рейс (deal_status=
+// cancelled), і якщо < 24 сим-год до завантаження — ШТРАФ €50 СТУДЕНТУ (перевізник
+// штрафує за пізню відмову). Штрафування перевізника/замовника — окрема логіка
+// на майбутній деплой (записано в беклог).
+const STUDENT_CANCEL_REGEX = /відміня|відмовля(ємо|юся|юсь)|скасову(ємо|ю)|знімаємо рейс|зніма(ю|ємо)|розрива(ю|ємо)|відмовляюсь від|більше не потрібн/i;
 
-  // Рейс цього перевізника з підтвердженою угодою, ще не виконаний
+function handleStudentCancelCarrier(session, carrierId, text) {
+  if (!STUDENT_CANCEL_REGEX.test(text || '')) return;
+
+  // Рейс цього перевізника з підтвердженою угодою
   const op = db.prepare(`
     SELECT * FROM order_progress
     WHERE session_id=? AND carrier_id=? AND carrier_agreed_at IS NOT NULL
@@ -375,54 +400,54 @@ function handleCarrierRefusalDetection(session, carrierId, text) {
   `).get(session.id, carrierId);
   if (!op) return;
 
-  // Вже оштрафовано за цей рейс+перевізника? — не дублюємо
-  const existing = db.prepare(`
-    SELECT 1 FROM order_charges
-    WHERE session_id=? AND letter_id=? AND type='carrier_refusal_fine'
-  `).get(session.id, op.letter_id);
-  if (existing) return;
+  // Звільняємо рейс: чат → cancelled, session_deals carrier → cancelled
+  db.prepare("UPDATE carrier_chats SET deal_status='cancelled' WHERE session_id=? AND carrier_id=?")
+    .run(session.id, carrierId);
+  try {
+    db.prepare("UPDATE session_deals SET status='cancelled' WHERE session_id=? AND letter_id=? AND role='carrier'")
+      .run(session.id, op.letter_id);
+  } catch(e){}
+  // Скидаємо прив'язку перевізника на рейсі (рейс знову вільний для нового)
+  db.prepare("UPDATE order_progress SET carrier_id=NULL, carrier_agreed_at=NULL, carrier_freight=NULL WHERE id=?")
+    .run(op.id);
 
-  // < 24 сим-год до завантаження?
-  // Дата завантаження: carrier_agreed_date (ДД.ММ.РРРР). Сим-час: 1 день = 120 хв реальних.
-  // Рахуємо в сим-днях від start_date сесії: скільки сим-годин лишилось.
+  // Штраф €50 студенту якщо < 24 сим-год до завантаження
   const loadDateStr = op.carrier_agreed_date || op.client_agreed_date;
-  if (!loadDateStr) return;
   const sess = db.prepare('SELECT start_date, timer_day, timer_ms, student_id FROM sessions WHERE id=?').get(session.id);
-  if (!sess) return;
-
-  const parseD = (s) => { const [d,m,y] = s.split('.').map(Number); return new Date(y, m-1, d); };
-  const start = parseD(sess.start_date);
-  const load = parseD(loadDateStr);
-  const loadDayNum = Math.round((load - start) / 86400000) + 1; // який сим-день — завантаження
-  const curDay = sess.timer_day || 1;
-  // Поточна сим-година в межах дня: timer_ms по дню (12 сим-год = 120 хв реальних)
-  const SIM_HOUR_MS_REAL = 10 * 60 * 1000;
-  const curHourInDay = Math.min(12, Math.floor((sess.timer_ms || 0) / SIM_HOUR_MS_REAL));
-  // Сим-годин до 9:00 дня завантаження (робочі: 12 год/день)
-  const hoursLeft = (loadDayNum - curDay) * 12 - curHourInDay;
-
-  if (hoursLeft < 24 && hoursLeft > -12) {
-    const carrier = db.prepare('SELECT name FROM carriers WHERE id=?').get(carrierId);
-    const FINE = 50;
-    db.prepare(`
-      INSERT INTO order_charges (id, session_id, letter_id, type, amount, reason, carrier_name)
-      VALUES (?,?,?,?,?,?,?)
-    `).run(uuidv4(), session.id, op.letter_id, 'carrier_refusal_fine', FINE,
-           `Штраф €${FINE} за відмову менш ніж за 24 год до завантаження`,
-           carrier?.name || '');
-    // Списання з профіту сесії
-    db.prepare('UPDATE sessions SET profit = COALESCE(profit,0) - ? WHERE id=?').run(FINE, session.id);
-    try {
-      incidentScheduler.addResumePoint({
-        sessionId: session.id, studentId: sess.student_id, letterId: op.letter_id,
-        type: 'carrier_refusal_fine', impact: -1,
-        context: { fine: FINE, carrier: carrier?.name, hours_left: hoursLeft },
-      });
-    } catch(e){}
-    db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), session.id);
-    console.log(`[refusal] Штраф €${FINE}: ${carrier?.name}, ${hoursLeft} сим-год до завантаження`);
+  if (loadDateStr && sess) {
+    const already = db.prepare(
+      "SELECT 1 FROM order_charges WHERE session_id=? AND letter_id=? AND type='student_cancel_fine'"
+    ).get(session.id, op.letter_id);
+    if (!already) {
+      const parseD = (s) => { const [d,m,y]=s.split('.').map(Number); return new Date(y,m-1,d); };
+      const start = parseD(sess.start_date);
+      const load = parseD(loadDateStr);
+      const loadDayNum = Math.round((load - start) / 86400000) + 1;
+      const curDay = sess.timer_day || 1;
+      const SIM_HOUR_MS_REAL = 10 * 60 * 1000;
+      const curHourInDay = Math.min(12, Math.floor((sess.timer_ms || 0) / SIM_HOUR_MS_REAL));
+      const hoursLeft = (loadDayNum - curDay) * 12 - curHourInDay;
+      if (hoursLeft < 24 && hoursLeft > -12) {
+        const carrier = db.prepare('SELECT name FROM carriers WHERE id=?').get(carrierId);
+        const FINE = 50;
+        db.prepare(`INSERT INTO order_charges (id, session_id, letter_id, type, amount, reason, carrier_name)
+          VALUES (?,?,?,?,?,?,?)`)
+          .run(uuidv4(), session.id, op.letter_id, 'student_cancel_fine', FINE,
+               `Штраф €${FINE} за скасування менш ніж за 24 год до завантаження`, carrier?.name || '');
+        db.prepare('UPDATE sessions SET profit = COALESCE(profit,0) - ? WHERE id=?').run(FINE, session.id);
+        try {
+          incidentScheduler.addResumePoint({
+            sessionId: session.id, studentId: sess.student_id, letterId: op.letter_id,
+            type: 'student_cancel_fine', impact: -1, context: { fine: FINE, carrier: carrier?.name, hours_left: hoursLeft },
+          });
+        } catch(e){}
+      }
+    }
   }
+  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), session.id);
+  console.log(`[student-cancel] рейс ${op.letter_id} звільнено від перевізника ${carrierId}`);
 }
+
 
 // ── Деплой 24b: детекція і перевірка ПД ──────────────────────
 // Студент пересилає номер ПД перевізнику в чат. Regex ловить номер,
@@ -760,6 +785,23 @@ router.post('/orders/:letterId/confirm-client', STU, async (req, res) => {
   const letter = db.prepare('SELECT * FROM letters WHERE id=?').get(letterId);
   if (!letter) return res.status(404).json({ error: 'letter_not_found' });
 
+  // №11 (A): захист від абсурдних сум ("мільйони"). Орієнтир — freight_ref з v2
+  // або freight_amount. Стеля = 2× орієнтиру (широкий коридор зберігає право на
+  // помилку, але блокує дописані зайві цифри типу 2000000).
+  {
+    let ref = 0;
+    try {
+      const v2 = db.prepare('SELECT freight_ref FROM letters_v2 WHERE letter_id=?').get(letterId);
+      ref = (v2 && v2.freight_ref) || letter.freight_amount || 0;
+    } catch(e){ ref = letter.freight_amount || 0; }
+    if (ref > 0 && parseFloat(price) > ref * 2) {
+      return res.status(400).json({
+        error: 'price_unrealistic',
+        message: `Сума €${parseFloat(price)} нереальна для цього рейсу. Перевірте — можливо зайві цифри.`,
+      });
+    }
+  }
+
   // Замовник
   const client = letter.client_id ? db.prepare('SELECT * FROM clients WHERE id=?').get(letter.client_id) : null;
 
@@ -954,6 +996,8 @@ router.post('/orders/:letterId/confirm-client', STU, async (req, res) => {
       date,
       route,
     });
+    // №9/11: фіксуємо угоду в session_deals (джерело істини для перевірок)
+    upsertDeal(session.id, letterId, 'client', null, parseFloat(price), date);
   } else {
     // reject — у журнал теж пишемо для дебагу
     logOrderEvent(session.id, letterId, 'client_confirm_rejected', {
@@ -1149,6 +1193,8 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
         date,
       });
     }
+    // №9/11: фіксуємо угоду перевізника в session_deals (заміна → перезапис)
+    upsertDeal(session.id, letterId, 'carrier', carrierId, parseFloat(price), date);
   } else {
     logOrderEvent(session.id, letterId, 'carrier_confirm_rejected', {
       verdict,
