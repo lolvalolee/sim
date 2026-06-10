@@ -444,7 +444,7 @@ function handleStudentCancelCarrier(session, carrierId, text) {
       }
     }
   }
-  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), session.id);
+  /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
   console.log(`[student-cancel] рейс ${op.letter_id} звільнено від перевізника ${carrierId}`);
 }
 
@@ -494,7 +494,7 @@ function handlePdDetection(session, carrierId, text) {
         type: 'pd_forwarded', impact: 1, context: { pd: sentPd },
       });
     } catch(e){}
-    db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), session.id);
+    /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
     console.log(`[pd-detect] ПД вірна (${sentPd}) → pd_sent`);
   } else {
     // Невірний номер АБО замовник ще не присилав (вигадана ПД)
@@ -2414,6 +2414,19 @@ router.post('/exchange/post', STU, (req, res) => {
   } catch(e){}
 
   res.json({ ok: true, cargo_id: cargoId, responders });
+});
+
+// №6: DELETE /api/student/exchange/:cargoId — видалення біржового поста.
+// Раніше видалення було тільки локальним (фронт splice) → reload повертав пост із БД.
+router.delete('/exchange/:cargoId', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  try {
+    db.prepare('DELETE FROM cargo_board WHERE id=? AND session_id=?').run(req.params.cargoId, session.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'delete_failed' });
+  }
 });
 
 // ─── ДОКУМЕНТИ (Деплой 23) ────────────────────────────────────

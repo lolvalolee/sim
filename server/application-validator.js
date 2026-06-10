@@ -41,17 +41,25 @@ function validateApplication({ formData, orderProgress, letter, client, carrier 
     const expected = parseFloat(orderProgress.carrier_agreed_price);
     const actual = parseFloat(formData.carrier_freight);
     if (!isNaN(expected) && !isNaN(actual) && expected !== actual) {
-      // Менше за домовлене — перевізник буде незадоволений
-      // Більше — рандомно прийме або зізнається
       const direction = actual < expected ? 'less' : 'more';
-      warnings.push({
-        field: 'carrier_freight',
-        expected,
-        actual,
-        direction,
-        severity: 'warn',
-        message: `У чаті з перевізником узгоджено €${expected}. Ви вписали €${actual}.`,
-      });
+      if (direction === 'less') {
+        // №4: занижено — перевізник незадоволений, вимагає домовлене
+        warnings.push({
+          field: 'carrier_freight', expected, actual, direction, severity: 'warn',
+          message: `Перевізник: у заявці фрахт €${actual}, а домовлялись на €${expected}. Це менше — виправте, будь ласка.`,
+        });
+      } else {
+        // №4: завищено. Реакція залежить від надійності перевізника:
+        // надійний (≥0.5, ~70%) помічає і вказує; ненадійний (<0.5) мовчки приймає зайве.
+        const reliability = (carrier && carrier.reliability != null) ? carrier.reliability : 0.8;
+        if (reliability >= 0.5) {
+          warnings.push({
+            field: 'carrier_freight', expected, actual, direction, severity: 'warn',
+            message: `Перевізник: отримав вашу заявку, але ви помилились з фрахтом — вказано €${actual} замість домовлених €${expected}. Поправте, будь ласка.`,
+          });
+        }
+        // ненадійний — без warning (мовчки бере більше; студент втрачає маржу)
+      }
     }
   } else if (formData.carrier_freight != null && (!orderProgress || !orderProgress.carrier_agreed_at)) {
     warnings.push({

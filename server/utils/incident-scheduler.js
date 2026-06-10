@@ -83,14 +83,31 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
 
   const inc = scenariosLib.SIM_INTERVALS;
 
+  // A (сим-час): сим-день завантаження відносно start_date сесії
+  const sess = db.prepare('SELECT start_date FROM sessions WHERE id=?').get(sessionId);
+  let loadSimDay = 1;
+  try {
+    if (sess && sess.start_date && loadDateIso) {
+      const [sd, sm, sy] = sess.start_date.split('.').map(Number);
+      const startD = new Date(sy, sm - 1, sd);
+      const loadD = new Date(loadDateIso);
+      if (!isNaN(loadD.getTime())) {
+        loadSimDay = Math.max(1, Math.round((loadD - startD) / 86400000) + 1);
+      }
+    }
+  } catch (e) {}
+
   // Загальна функція додавання інциденту
   function add(type, baseTime, deltaHours, payload = {}) {
     const id = uuidv4();
     const scheduledAt = new Date(new Date(baseTime).getTime() + simHoursToMs(deltaHours)).toISOString();
+    // target_sim_day: день завантаження + скільки повних сим-днів додає дельта (12 сим-год/день)
+    const targetSimDay = loadSimDay + Math.floor((deltaHours || 0) / 12);
+    const payloadWithTarget = { ...payload, target_sim_day: targetSimDay };
     db.prepare(`
       INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id, type, state, scheduled_at, payload_json)
       VALUES (?,?,?,?,?,?,?,'pending',?,?)
-    `).run(id, sessionId, studentId, letterId, applicationId || null, scenario, type, scheduledAt, JSON.stringify(payload));
+    `).run(id, sessionId, studentId, letterId, applicationId || null, scenario, type, scheduledAt, JSON.stringify(payloadWithTarget));
     return { id, scheduledAt };
   }
 
@@ -459,8 +476,9 @@ function runDueIncidents(sessionIdFilter) {
   if (pending.length === 0) return 0;
 
   // Перевіряємо що session активна (Деплой 24a баг 7: пропускаємо сесії на паузі)
+  let firedCount = 0;
   for (const inc of pending) {
-    const session = db.prepare(`SELECT status, paused FROM sessions WHERE id=?`).get(inc.session_id);
+    const session = db.prepare(`SELECT status, paused, timer_day, start_date FROM sessions WHERE id=?`).get(inc.session_id);
     if (!session || session.status === 'stopped') {
       db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`).run(now, inc.id);
       continue;
@@ -469,18 +487,31 @@ function runDueIncidents(sessionIdFilter) {
     if (session.paused) {
       continue;
     }
+    // ── A (сим-час): подія не настає раніше за свою сим-дату ──
+    // Інцидент має target_sim_day (сим-день, коли він має статись). Якщо студентів
+    // сим-день ще не досяг — НЕ стріляємо (інакше "розвантажився" раніше завантаження).
+    // Захищає від розсинхрону "cron за реальним часом vs студент за сим-часом".
+    let payload = {}; try { payload = JSON.parse(inc.payload_json || '{}'); } catch(e){}
+    if (payload.target_sim_day != null) {
+      const curDay = session.timer_day || 1;
+      if (curDay < payload.target_sim_day) {
+        continue; // студент ще не дійшов до сим-дня події — чекаємо
+      }
+    }
     try {
       fireIncident(inc);
-      // Оновлюємо session.version для тригеру polling у браузера
-      db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), inc.session_id);
+      firedCount++;
+      // version НЕ чіпаємо: студент дізнається про подію через пошту/чат (лічильник+звук).
+      // version смикає ТІЛЬКИ лектор (рестарт/стоп/дата). Інакше фронт хибно показує
+      // "лектор оновив сесію" і робить зайвий reload → розсинхрон.
     } catch (e) {
       console.error(`[incident-fire] error ${inc.id}:`, e.message);
       db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`).run(now, inc.id);
     }
   }
 
-  console.log(`[incident-sched] Виконано ${pending.length} інцидентів`);
-  return pending.length;
+  if (firedCount) console.log(`[incident-sched] Виконано ${firedCount} інцидентів`);
+  return firedCount;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -566,7 +597,7 @@ function runDueDocumentChecks(sessionIdFilter) {
       } catch (e) {}
 
       // Тригер polling браузера
-      db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(nowIso, doc.session_id);
+      /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
       processed++;
     } catch (e) {
       console.error(`[doc-check] error ${doc.id}:`, e.message);
@@ -714,7 +745,7 @@ function studentNegotiateCarrier({ sessionId, letterId, action, payload }) {
   fireIncident(newInc);
 
   // Оновлюємо session.version
-  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(now, incident.session_id);
+  /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
 
   return { ok: true, round, new_type: newType };
 }
@@ -770,7 +801,7 @@ function studentNegotiateClient({ sessionId, letterId, amount }) {
     context: { decision: clientDecision, amount },
   });
 
-  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(now, incident.session_id);
+  /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
 
   return { ok: true, client_decision: clientDecision, client_type: clientType };
 }
@@ -824,7 +855,7 @@ function studentResolveSimple({ sessionId, letterId, decision, amount }) {
     });
   }
 
-  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(new Date().toISOString(), sessionId);
+  /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
 
   return { ok: true, decision, amount: finalAmount };
 }
@@ -1006,7 +1037,7 @@ function studentCancelTrip({ sessionId, studentId, letterId }) {
     context: { cancelled_incidents: result.changes },
   });
 
-  db.prepare(`UPDATE sessions SET version=? WHERE id=?`).run(nowIso, sessionId);
+  /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
 
   return { ok: true, message: 'Перевізника повідомлено', cancelled_incidents: result.changes };
 }

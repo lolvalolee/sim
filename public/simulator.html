@@ -2337,7 +2337,7 @@ function checkEvents(){
       }
       updateBadges();
       if(S.module==='orders') renderOrders();
-      if(S.module==='chats') renderChats();
+      if(S.module==='chats') renderChatsSafe();
       if(S.module==='email') renderEmailList();
     });
   });
@@ -2666,12 +2666,8 @@ function openEmail(orderId){
     freightHtml=`<div class="freight-box"><h4>Фрахт узгоджено ✓</h4>
       <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:var(--grn)">€${ord.clientFreightAgreed}</div></div>`;
   } else {
-    freightHtml=`<div class="freight-box"><h4>Запропонуйте фрахт замовнику</h4>
-      <div class="freight-row">
-        <input class="freight-input" id="fi-${orderId}" type="number" placeholder="0" min="100">
-        <span class="freight-currency">EUR</span>
-        <button class="btn primary sm" onclick="proposeFreight('${orderId}')">Запропонувати</button>
-      </div></div>`;
+    freightHtml=`<div class="freight-box"><h4>Фрахт не узгоджено</h4>
+      <div style="font-size:12px;color:var(--t3);line-height:1.5">Обговоріть фрахт із замовником у листуванні нижче. Коли замовник погодиться — натисніть «Підтвердити угоду».</div></div>`;
   }
 
   const threadHtml=em.replies.length?`
@@ -2811,11 +2807,9 @@ async function sendEmailReply(orderId){
     em.replies.push({role:'ai',text:res});
     // Звук про нове повідомлення від замовника
     if (typeof playClientSound === 'function') playClientSound();
-    // auto-detect freight agreement
-    if(!ord.clientFreightAgreed&&!ord.freightFixed){
-      const m=res.match(/€\s?(\d{3,6})/);
-      if(m){const v=parseInt(m[1]);if(v>=(ord.freightMin||0)&&v<=(ord.freightMax||99999)){ord.clientFreightAgreed=v;notify(`✓ Фрахт €${v} узгоджено з ${em.from}`,'ok');}}
-    }
+    // №7: НЕ виставляємо clientFreightAgreed автоматично з тексту AI.
+    // Узгодження фрахту — ТІЛЬКИ через кнопку "Підтвердити угоду" (openClientConfirmPanel),
+    // інакше виходив фальшивий стан "УЗГОДЖЕНО" хоча замовник у чаті ще відмовляє.
     updateBadges();
     saveThreadToServer(orderId);
   }catch(e){em.replies=em.replies.filter(r=>!r.loading);em.replies.push({role:'ai',text:errMsg(e)});}
@@ -2916,6 +2910,15 @@ function buildClientSys(em, ord){
     ? `Альтернативні типи ТЗ ДЛЯ ЦЬОГО ВАНТАЖУ (погоджуйся якщо студент пропонує): ${vehicleAlts.join(', ')}`
     : 'Альтернативи типу ТЗ не передбачені для цього вантажу — лише ' + vehicle + '.';
 
+  // №1: ПРАВИЛО ВАГИ — AI не має вигадувати вагу і плутати палети з тоннами.
+  const vt = (vehicle || '').toLowerCase();
+  const weightCap = vt.includes('реф') ? 22 : (vt.includes('негабарит') || vt.includes('трал') || vt.includes('платформа') ? null : 24);
+  const weightRule = `\n=== ПРАВИЛО ВАГИ (СУВОРО) ===
+- Вагу вантажу бери ТІЛЬКИ з даних листа/завдання. НЕ вигадуй вагу.
+- НІКОЛИ не плутай КІЛЬКІСТЬ ПАЛЕТ із тоннами. "29 палет" НЕ означає "29 тон". Палета важить менше тонни.
+${weightCap ? `- Максимальна вага вантажу для цього ТЗ (${vehicle}): ${weightCap} тон. НЕ називай більше.` : '- Це негабарит/платформа — вага залежить від конструкції, бери з даних.'}
+- Якщо точної ваги нема в даних і студент питає — дай реалістичну для цього товару (в межах стелі), не завищуй.`;
+
   // ПРИХОВАНІ ДАНІ (AI знає але мовчить поки не запитають)
   const hidden = ord.hiddenData || em.hiddenData || {};
   const hiddenKeys = Object.keys(hidden);
@@ -3001,6 +3004,7 @@ ${customsIn ? `• Митниця розмитнення: ${customsIn}` : ''}
 ТИП ТЗ (м'яко, можна обговорювати):
 • Основний: ${vehicle}
 • ${vehicleAltsText}
+${weightRule}
 
 ЦІНА (обговорюється):
 ${scenarioText}
@@ -3341,7 +3345,23 @@ async function sendChatMsg(cid,pfx){
     freightRef: ordCtx.freightRef || ordCtx.clientFreight || null, // Деплой 25: орієнтир торгу
     tripState: stateContext, // ← новий блок
   } : null);
-  const hist=S.chats[cid].filter(m=>!m.loading).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
+  // №5: обмежуємо історію торгу — щоб серія старих відмов не "твердила" AI.
+  // Беремо останні 12 повідомлень (свіжий контекст торгу).
+  let fullHist=S.chats[cid].filter(m=>!m.loading);
+  let hist=fullHist.slice(-12).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
+  // №5: якщо остання пропозиція студента в прийнятному коридорі (−300..+100 від орієнтиру)
+  // — даємо AI сигнал-перебивач, щоб попередні відмови не блокували згоду.
+  const fref = ordCtx?.freightRef || ordCtx?.clientFreight || 0;
+  if (fref > 0) {
+    const lastStudent = [...fullHist].reverse().find(m=>m.role==='student');
+    const pm = lastStudent?.text?.match(/(\d{3,6})/);
+    if (pm) {
+      const offered = parseInt(pm[1]);
+      if (offered >= fref-300 && offered <= fref+100) {
+        hist.push({ role:'user', content:`[Система: запропонована ціна €${offered} у прийнятному діапазоні. Попередні відмови стосувались інших цифр — оціни цю пропозицію свіжо, без упередження.]` });
+      }
+    }
+  }
   try{
     const res=await callClaude(sys,hist);
     S.chats[cid]=S.chats[cid].filter(m=>!m.loading);
@@ -3514,6 +3534,26 @@ function confirmCarrier(cid){
 // ================================================================
 // CHATS MODULE
 // ================================================================
+// №2: безпечне фонове оновлення чатів — не губить недонабраний текст і фокус
+// у полі вводу відкритого чату (інакше textarea перестворюється і "сіпає").
+function renderChatsSafe(){
+  const active = document.activeElement;
+  const isInput = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
+  if (!isInput) { renderChats(); return; }
+  // Зберігаємо стан активного поля
+  const savedId = active.id;
+  const savedVal = active.value;
+  const savedStart = active.selectionStart;
+  const savedEnd = active.selectionEnd;
+  renderChats();
+  // Відновлюємо
+  const el = savedId ? document.getElementById(savedId) : null;
+  if (el) {
+    el.value = savedVal;
+    try { el.focus(); el.setSelectionRange(savedStart, savedEnd); } catch(e){}
+  }
+}
+
 function renderChats(){
   unlock('chats');
   const contacted=[...S.contactedCarriers].map(id=>S.carriers.find(c=>c.id===id)).filter(Boolean);
@@ -7695,9 +7735,17 @@ function editCargo(i){ openAddCargo(i); }
 
 function deleteCargo(i){
   if(!confirm('Видалити вантаж з біржі?')) return;
+  const cargo = S.cargoBoard[i];
   S.cargoBoard.splice(i,1);
   renderExchangeList();
-  saveCargoBoardToServer();
+  // №6: видаляємо на сервері за стабільним cargoId (інакше reload повертав пост)
+  if (cargo?.cargoId) {
+    const token=localStorage.getItem('docaa_token');
+    fetch('/api/student/exchange/'+encodeURIComponent(cargo.cargoId),{
+      method:'DELETE',
+      headers:{'Authorization':'Bearer '+token}
+    }).catch(()=>{});
+  }
   notify('Видалено','warn');
 }
 
@@ -7706,24 +7754,16 @@ function updateCargo(i){
   S.cargoBoard[i].status='active';
   S.cargoBoard[i].updated_at=new Date().toLocaleString('uk');
   renderExchangeList();
-  saveCargoBoardToServer();
   notify('Вантаж оновлено — тепер видно перевізникам ✓','ok');
   // Re-schedule carrier responses after update
   scheduleCarrierFromExchange(i);
 }
 
-function saveCargoBoardToServer(){
-  const token=localStorage.getItem('docaa_token');
-  if(!token||!S.sessionId) return;
-  // Save each cargo item
-  (S.cargoBoard||[]).forEach((c,i)=>{
-    fetch('/api/student/cargo/'+i,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify(c)
-    }).catch(()=>{});
-  });
-}
+// №6/12: saveCargoBoardToServer прибрано — він зберігав по ІНДЕКСУ масиву (/cargo/N),
+// чого на сервері не існувало → пости не зберігались коректно, дублювались і
+// "поверталися" після reload. Тепер: створення через exchange/post (повертає cargo_id),
+// видалення через DELETE /exchange/:cargoId. Стабільні id, без розсинхрону.
+function saveCargoBoardToServer(){ /* deprecated — синхронізація через post/delete */ }
 
 // AI biржові перевізники відгукуються на пост (підбір на сервері)
 async function scheduleCarrierFromExchange(cargoIdx){
@@ -7753,6 +7793,10 @@ async function scheduleCarrierFromExchange(cargoIdx){
     });
     if(!resp.ok) return;
     const data = await resp.json();
+    // №6: прив'язуємо серверний cargo_id до локального поста (для коректного DELETE)
+    if (data.cargo_id && S.cargoBoard?.[cargoIdx]) {
+      S.cargoBoard[cargoIdx].cargoId = data.cargo_id;
+    }
     if(!data.responders || data.responders.length===0) return;
 
     // Зберігаємо біржових перевізників у S.carriers (щоб чат працював)
@@ -7822,7 +7866,7 @@ async function initExchangeResponder(responder, cargo){
     updateBadges();
     notify('📦 '+responder.name+' відгукнувся на ваш вантаж','warn');
     if(typeof playClientSound==='function') playClientSound();
-    if(S.module==='chats') renderChats();
+    if(S.module==='chats') renderChatsSafe();
     if(typeof saveChatToServer==='function') saveChatToServer(cid);
   }catch(e){}
 }
@@ -9873,15 +9917,11 @@ function startAutosave(token){
       const data = await res.json();
       if (!data.exists) return;
 
-      // Якщо версія змінилась — лектор щось оновив
-      if (S.sessionVersion && data.version && data.version !== S.sessionVersion) {
-        if (!updateModalShown) {
-          updateModalShown = true;
-          showSessionUpdatedModal(data.status);
-        }
-      }
+      // version більше НЕ тригерить модалку "лектор оновив" — внутрішні події
+      // (інциденти/штрафи/документи) доставляються через пошту/чат (лічильник+звук),
+      // студент реагує сам. Реальні дії лектора йдуть через status/reset нижче.
 
-      // Якщо сесія зупинена — окремий екран
+      // Якщо сесія зупинена лектором — окремий екран
       if (data.status === 'stopped') {
         showSessionStopped();
       }
