@@ -3205,6 +3205,9 @@ function renderChatInCol(col,c,cid,pfx){
       ${msgs.map((m, idx)=>{
         const isLoading = m.loading;
         const isAttachment = m.attachment && m.attachment.type === 'application_to_carrier';
+        if (m.isSystem && m.system_kind === 'deal_cancelled') {
+          return `<div class="cmsg-system" style="align-self:center;max-width:90%;background:rgba(229,115,115,.08);border:1px solid rgba(229,115,115,.25);color:#e57373;padding:8px 12px;border-radius:8px;font-size:11px;line-height:1.5;text-align:center;margin:2px 0"><span style="font-weight:600">⊘ ${escapeHtml(m.text)}</span></div>`;
+        }
         let bubbleContent;
         if (isLoading) {
           bubbleContent = `<div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>`;
@@ -3249,8 +3252,18 @@ function renderChatInCol(col,c,cid,pfx){
       <span style="color:var(--t3)">Фрахт:</span>
       <span style="font-family:var(--mono);font-weight:600;color:var(--t1)" id="agreed-rate-${cid}">—</span>
       ${deal === 'confirmed'
-        ? '<button class="btn sm" style="margin-left:auto;opacity:.6;cursor:default" disabled>✓ Угода закрита</button>'
+        ? `<button class="btn sm" style="margin-left:auto;opacity:.6;cursor:default" disabled>✓ Угода закрита</button>
+           <button class="btn sm" style="color:#e57373;border-color:#3a2020" onclick="openCancelDeal('${cid}')" title="Скасувати угоду (до завантаження)"><span style="font-size:13px">✕</span> Скасувати</button>`
         : `<button class="btn primary sm" style="margin-left:auto" onclick="openCarrierConfirmPanel('${cid}')">✓ Підтвердити угоду</button>`}
+    </div>
+    <div id="cancel-panel-${cid}" style="display:none;padding:12px;background:rgba(229,115,115,.06);border-top:1px solid rgba(229,115,115,.2)">
+      <div style="font-size:12px;color:#e57373;font-weight:500;margin-bottom:8px">Скасування угоди з перевізником</div>
+      <textarea id="cancel-reason-${cid}" placeholder="Причина (напр. знайшов дешевшого / не той тип авто)" style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--b1);color:var(--t1);border-radius:7px;padding:9px 11px;font-size:12px;min-height:48px;resize:none;margin-bottom:8px;font-family:inherit"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn sm" onclick="closeCancelDeal('${cid}')">Відмінити</button>
+        <button class="btn sm" style="color:#ff8a8a;border-color:#5a2828;font-weight:600" onclick="doCancelDeal('${cid}')">Скасувати угоду</button>
+      </div>
+      <div style="font-size:10px;color:var(--t3);margin-top:8px"><span style="color:var(--acc)">⚠</span> Менш ніж за 24 год до завантаження — штраф €50</div>
     </div>
     <div class="chat-quick">
       <button class="btn sm" onclick="qi_('${cid}','${pfx}','Добрий день! Компанія Docaa. Є вантаж на рейс. Маєте вільне авто?')">Вільне авто?</button>
@@ -3266,6 +3279,52 @@ function renderChatInCol(col,c,cid,pfx){
       </button>
     </div>`;
   const mc=document.getElementById(`cm-${cid}`); if(mc) mc.scrollTop=mc.scrollHeight;
+}
+
+// №2/9/11/14: скасування угоди з перевізником через кнопку (до завантаження)
+function openCancelDeal(cid){
+  const p = document.getElementById(`cancel-panel-${cid}`);
+  if (p) p.style.display = 'block';
+}
+function closeCancelDeal(cid){
+  const p = document.getElementById(`cancel-panel-${cid}`);
+  if (p) p.style.display = 'none';
+  const r = document.getElementById(`cancel-reason-${cid}`);
+  if (r) r.value = '';
+}
+async function doCancelDeal(cid){
+  const reason = (document.getElementById(`cancel-reason-${cid}`)?.value || '').trim();
+  const token = localStorage.getItem('docaa_token');
+  try {
+    const res = await fetch(`/api/student/chats/${cid}/cancel-deal`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body: JSON.stringify({ reason }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.message || 'Не вдалося скасувати', 'err');
+      return;
+    }
+    // Функціональна плашка в чат локально
+    if (!S.chats[cid]) S.chats[cid] = [];
+    S.chats[cid].push({
+      role:'system', isSystem:true, system_kind:'deal_cancelled',
+      text: reason ? `Угоду скасовано. Причина: ${reason}` : 'Угоду скасовано.',
+      time: simNowHHMM(),
+    });
+    // Скидаємо стан угоди локально
+    S.deals[cid] = 'cancelled';
+    // Звільняємо рейс локально (галочка гасне, маршрут вільний)
+    const ord = S.orders.find(o => o.carrierId === cid);
+    if (ord) { ord.carrierId = null; ord.status = ord.clientFreightAgreed ? 'client_agreed' : 'new'; }
+    notify(data.fined ? 'Угоду скасовано. Штраф €50 (пізнє скасування)' : 'Угоду скасовано', 'warn');
+    if (data.fined && typeof checkCharges === 'function') checkCharges();
+    closeCancelDeal(cid);
+    if (S.module === 'chats') renderChatsSafe();
+    if (typeof renderOrders === 'function') renderOrders();
+    updateBadges();
+  } catch(e){ notify('Помилка зʼєднання', 'err'); }
 }
 
 function handleChatKey(event, cid, pfx){

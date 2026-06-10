@@ -349,10 +349,8 @@ router.post('/chats/:carrierId', STU, (req, res) => {
       try {
         handlePdDetection(session, req.params.carrierId, lastStudentMsg.text);
       } catch (e) { console.error('[pd-detect]', e.message); }
-      // ── №2: студент сам скасовує угоду з перевізником ──
-      try {
-        handleStudentCancelCarrier(session, req.params.carrierId, lastStudentMsg.text);
-      } catch (e) { console.error('[cancel-detect]', e.message); }
+      // №2: скасування угоди тепер через КНОПКУ (cancel-deal endpoint),
+      // не через детекцію слів — regex був ненадійний ("все пливло").
     }
   } catch(e){}
 
@@ -382,36 +380,63 @@ function upsertDeal(sessionId, letterId, role, counterpartyId, price, loadDate) 
 }
 
 // ── №2: студент скасовує угоду з перевізником ─────────────────
-// Детекція слів скасування у повідомленні СТУДЕНТА. Звільняє рейс (deal_status=
-// cancelled), і якщо < 24 сим-год до завантаження — ШТРАФ €50 СТУДЕНТУ (перевізник
-// штрафує за пізню відмову). Штрафування перевізника/замовника — окрема логіка
-// на майбутній деплой (записано в беклог).
-const STUDENT_CANCEL_REGEX = /відміня|відмовля(ємо|юся|юсь)|скасову(ємо|ю)|знімаємо рейс|зніма(ю|ємо)|розрива(ю|ємо)|відмовляюсь від|більше не потрібн/i;
+// ── №2/9/11/14: POST /chats/:carrierId/cancel-deal — скасування угоди КНОПКОЮ ──
+// Тільки ДО завантаження (рейс не loaded/in_transit). Звільняє рейс повністю:
+// галочка гасне, маршрут знову доступний для нового перевізника. Функціональне
+// повідомлення в чат. Штраф €50 студенту якщо < 24 сим-год до завантаження.
+router.post('/chats/:carrierId/cancel-deal', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
 
-function handleStudentCancelCarrier(session, carrierId, text) {
-  if (!STUDENT_CANCEL_REGEX.test(text || '')) return;
+  const carrierId = req.params.carrierId;
+  const reason = String(req.body?.reason || '').trim().slice(0, 300);
 
-  // Рейс цього перевізника з підтвердженою угодою
+  // Рейс цього перевізника з підтвердженою угодою, ДО завантаження
   const op = db.prepare(`
     SELECT * FROM order_progress
     WHERE session_id=? AND carrier_id=? AND carrier_agreed_at IS NOT NULL
-      AND state NOT IN ('closed','closed_completed','cancelled_by_client','unloaded')
     ORDER BY updated_at DESC LIMIT 1
   `).get(session.id, carrierId);
-  if (!op) return;
+  if (!op) return res.status(404).json({ error: 'no_active_deal' });
 
-  // Звільняємо рейс: чат → cancelled, session_deals carrier → cancelled
+  // №14: скасування тільки ДО завантаження. Якщо рейс уже в дорозі — не дозволяємо.
+  const LOADED_STATES = ['loaded','at_border','pd_requested','pd_sent','at_customs_dst','at_unloading','unloaded','closed','closed_completed'];
+  if (LOADED_STATES.includes(op.state)) {
+    return res.status(409).json({ error: 'already_loaded', message: 'Рейс уже завантажений — скасувати не можна.' });
+  }
+
+  // Звільняємо рейс
   db.prepare("UPDATE carrier_chats SET deal_status='cancelled' WHERE session_id=? AND carrier_id=?")
     .run(session.id, carrierId);
   try {
     db.prepare("UPDATE session_deals SET status='cancelled' WHERE session_id=? AND letter_id=? AND role='carrier'")
       .run(session.id, op.letter_id);
   } catch(e){}
-  // Скидаємо прив'язку перевізника на рейсі (рейс знову вільний для нового)
-  db.prepare("UPDATE order_progress SET carrier_id=NULL, carrier_agreed_at=NULL, carrier_freight=NULL WHERE id=?")
+  db.prepare("UPDATE order_progress SET carrier_id=NULL, carrier_agreed_at=NULL, carrier_freight=NULL, carrier_agreed_price=NULL, state='client_agreed' WHERE id=?")
     .run(op.id);
 
+  // Скасовуємо заплановані інциденти цього рейсу (щоб не писали по скасованому)
+  try {
+    db.prepare("UPDATE incidents SET state='cancelled' WHERE session_id=? AND letter_id=? AND state='pending'")
+      .run(session.id, op.letter_id);
+  } catch(e){}
+
+  // Функціональне повідомлення в чат перевізнику
+  const chat = db.prepare('SELECT messages FROM carrier_chats WHERE session_id=? AND carrier_id=?').get(session.id, carrierId);
+  if (chat) {
+    let msgs = []; try { msgs = JSON.parse(chat.messages || '[]'); } catch(e){}
+    msgs.push({
+      role: 'system', isSystem: true, system_kind: 'deal_cancelled',
+      text: reason ? `Угоду скасовано. Причина: ${reason}` : 'Угоду скасовано.',
+      time: null, ts: new Date().toISOString(),
+    });
+    db.prepare('UPDATE carrier_chats SET messages=? WHERE session_id=? AND carrier_id=?')
+      .run(JSON.stringify(msgs), session.id, carrierId);
+  }
+
   // Штраф €50 студенту якщо < 24 сим-год до завантаження
+  let fined = false;
   const loadDateStr = op.carrier_agreed_date || op.client_agreed_date;
   const sess = db.prepare('SELECT start_date, timer_day, timer_ms, student_id FROM sessions WHERE id=?').get(session.id);
   if (loadDateStr && sess) {
@@ -419,34 +444,38 @@ function handleStudentCancelCarrier(session, carrierId, text) {
       "SELECT 1 FROM order_charges WHERE session_id=? AND letter_id=? AND type='student_cancel_fine'"
     ).get(session.id, op.letter_id);
     if (!already) {
-      const parseD = (s) => { const [d,m,y]=s.split('.').map(Number); return new Date(y,m-1,d); };
-      const start = parseD(sess.start_date);
-      const load = parseD(loadDateStr);
-      const loadDayNum = Math.round((load - start) / 86400000) + 1;
-      const curDay = sess.timer_day || 1;
-      const SIM_HOUR_MS_REAL = 10 * 60 * 1000;
-      const curHourInDay = Math.min(12, Math.floor((sess.timer_ms || 0) / SIM_HOUR_MS_REAL));
-      const hoursLeft = (loadDayNum - curDay) * 12 - curHourInDay;
-      if (hoursLeft < 24 && hoursLeft > -12) {
-        const carrier = db.prepare('SELECT name FROM carriers WHERE id=?').get(carrierId);
-        const FINE = 50;
-        db.prepare(`INSERT INTO order_charges (id, session_id, letter_id, type, amount, reason, carrier_name)
-          VALUES (?,?,?,?,?,?,?)`)
-          .run(uuidv4(), session.id, op.letter_id, 'student_cancel_fine', FINE,
-               `Штраф €${FINE} за скасування менш ніж за 24 год до завантаження`, carrier?.name || '');
-        db.prepare('UPDATE sessions SET profit = COALESCE(profit,0) - ? WHERE id=?').run(FINE, session.id);
-        try {
-          incidentScheduler.addResumePoint({
-            sessionId: session.id, studentId: sess.student_id, letterId: op.letter_id,
-            type: 'student_cancel_fine', impact: -1, context: { fine: FINE, carrier: carrier?.name, hours_left: hoursLeft },
-          });
-        } catch(e){}
-      }
+      try {
+        const parseD = (s) => { const [d,m,y]=s.split('.').map(Number); return new Date(y,m-1,d); };
+        const start = parseD(sess.start_date);
+        const load = parseD(loadDateStr);
+        const loadDayNum = Math.round((load - start) / 86400000) + 1;
+        const curDay = sess.timer_day || 1;
+        const SIM_HOUR_MS_REAL = 10 * 60 * 1000;
+        const curHourInDay = Math.min(12, Math.floor((sess.timer_ms || 0) / SIM_HOUR_MS_REAL));
+        const hoursLeft = (loadDayNum - curDay) * 12 - curHourInDay;
+        if (hoursLeft < 24) {
+          const carrier = db.prepare('SELECT name FROM carriers WHERE id=?').get(carrierId);
+          const FINE = 50;
+          db.prepare(`INSERT INTO order_charges (id, session_id, letter_id, type, amount, reason, carrier_name)
+            VALUES (?,?,?,?,?,?,?)`)
+            .run(uuidv4(), session.id, op.letter_id, 'student_cancel_fine', FINE,
+                 `Штраф €${FINE} за скасування менш ніж за 24 год до завантаження`, carrier?.name || '');
+          db.prepare('UPDATE sessions SET profit = COALESCE(profit,0) - ? WHERE id=?').run(FINE, session.id);
+          fined = true;
+          try {
+            incidentScheduler.addResumePoint({
+              sessionId: session.id, studentId: sess.student_id, letterId: op.letter_id,
+              type: 'student_cancel_fine', impact: -1, context: { fine: FINE, carrier: carrier?.name, hours_left: hoursLeft },
+            });
+          } catch(e){}
+        }
+      } catch(e){}
     }
   }
-  /* version НЕ чіпаємо: подія доставляється через пошту/чат, version смикає тільки лектор */
-  console.log(`[student-cancel] рейс ${op.letter_id} звільнено від перевізника ${carrierId}`);
-}
+
+  console.log(`[cancel-deal] рейс ${op.letter_id} звільнено від ${carrierId}, штраф=${fined}`);
+  res.json({ ok: true, fined });
+});
 
 
 // ── Деплой 24b: детекція і перевірка ПД ──────────────────────
