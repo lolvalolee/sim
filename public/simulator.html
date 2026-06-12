@@ -3250,7 +3250,10 @@ function renderChatInCol(col,c,cid,pfx){
     </div>
     <div class="chat-deal-bar">
       <span style="color:var(--t3)">Фрахт:</span>
-      <span style="font-family:var(--mono);font-weight:600;color:var(--t1)" id="agreed-rate-${cid}">—</span>
+      <span style="font-family:var(--mono);font-weight:600;color:var(--t1)" id="agreed-rate-${cid}">${(() => {
+        const o = S.orders.find(x => x.carrierId === cid);
+        return (o && o.carrierFreightAgreed) ? '€'+o.carrierFreightAgreed : '—';
+      })()}</span>
       ${deal === 'confirmed'
         ? `<button class="btn sm" style="margin-left:auto;opacity:.6;cursor:default" disabled>✓ Угода закрита</button>
            <button class="btn sm" style="color:#e57373;border-color:#3a2020" onclick="openCancelDeal('${cid}')" title="Скасувати угоду (до завантаження)"><span style="font-size:13px">✕</span> Скасувати</button>`
@@ -3380,6 +3383,12 @@ async function sendChatMsg(cid,pfx){
     ordCtx = S.orders.find(o => o.carrierId && o.carrierId !== cid && o.clientFreightAgreed &&
       o.dirs.some(d => c.dirs.includes(d)));
   }
+  if (!ordCtx) {
+    // №4: останній fallback — будь-який рейс за напрямком (навіть без узгодженого
+    // замовника), щоб freightRef доходив до промпта і перевізник тримав +100/−300.
+    // Інакше без орієнтиру він називав занижену ринкову ціну (−1000 від орієнтиру).
+    ordCtx = S.orders.find(o => !o.carrierId && o.dirs.some(d => c.dirs.includes(d)));
+  }
   // Збагачуємо контекст інформацією про поточний стан рейсу
   let stateContext = null;
   if (ordCtx && ordCtx.carrierId === cid && ordCtx.id) {
@@ -3427,22 +3436,10 @@ async function sendChatMsg(cid,pfx){
     S.chats[cid].push({role:'carrier',text:res,time:simNowHHMM()});
     // Звук про нове повідомлення від перевізника
     if (typeof playCarrierSound === 'function') playCarrierSound();
-    const lo=res.toLowerCase();
-    if(lo.includes('відмовля')||lo.includes('немає вільних')||lo.includes('на жаль')) S.deals[cid]='no';
-    else if(lo.includes('домовились')||lo.includes('підтверджуємо')||lo.includes('угода')) {
-      S.deals[cid]='ok';
-      // detect rate
-      const rm=res.match(/€\s?(\d{3,6})/);
-      if(rm){
-        const rate=parseInt(rm[1]);
-        const el2=document.getElementById(`agreed-rate-${cid}`);
-        if(el2) el2.textContent=`€${rate}`;
-        // assign to unbooked order
-        const ord=S.orders.find(o=>!o.carrierId&&!o.carrierFreightAgreed&&o.dirs?.some(d=>c.dirs.includes(d)));
-        if(ord) ord.carrierFreightAgreed=rate;
-      }
-    }
-    // driver info
+    // №1/№9: стан угоди (deal) НЕ визначається з тексту AI. Єдине, що фіксує
+    // угоду рейс↔перевізник — кнопка "Підтвердити угоду" (пише в session_deals).
+    // Автодетект "домовились"→ok прибрано, бо створював фальшивий стан і розсинхрон.
+    // driver info — лишаємо (це довідкова інфа для заповнення заявки, не стан угоди)
     const driverM=res.match(/водій[:\s]+([А-ЯІЇЄ][а-яіїє]+\s+[А-ЯІЇЄ][а-яіїє]+)/i);
     if(driverM&&S.selectedCarrier===cid){
       const ord=S.orders.find(o=>o.carrierId===cid);
@@ -3480,6 +3477,20 @@ function buildCarrierSys(c, ordContext){
   const nat = c.nationality || 'UA';
   const todayStr=new Date().toLocaleDateString('uk-UA',{day:'2-digit',month:'2-digit',year:'numeric'});
 
+  // №7: унікальні дані водія/авто детерміновано з id перевізника (не шаблонні AA1234BB у всіх).
+  const seedN = String(c.id||'').split('').reduce((a,ch)=>a+ch.charCodeAt(0),0);
+  const rnd = (mod, salt) => Math.abs((seedN*31 + salt*17)) % mod;
+  const plateLetters = 'ABCEHIKMOPTX'; // латиниця, схожа на укр номери
+  const reg = ['AA','AB','AC','AE','AH','AI','AK','AM','AO','AT','AX','BA','BB','BC','BE','BH','BI','BK','BM','BO','BT','BX','CA','CB','CE','BO','KA','II','AAᴂ'][rnd(24,1)] || 'AA';
+  const plate = `${reg}${1000+rnd(8999,2)}${plateLetters[rnd(12,3)]}${plateLetters[rnd(12,4)]}`;
+  const trailer = `${reg}${1000+rnd(8999,5)}XP`;
+  const driverFirst = ['Петро','Іван','Василь','Микола','Андрій','Олег','Сергій','Богдан','Тарас','Юрій','Степан','Роман','Дмитро','Володимир','Назар'][rnd(15,6)];
+  const driverLast = ['Коваль','Бондар','Ткачук','Мельник','Шевчук','Кравець','Лисенко','Гончар','Поліщук','Савчук','Романюк','Кушнір','Марченко','Захарчук','Дяченко'][rnd(15,7)];
+  const driverPat = ['Іванович','Петрович','Васильович','Миколайович','Андрійович','Олегович','Степанович','Богданович'][rnd(8,8)];
+  const phonePrefix = ['067','050','068','063','073','097','099','066','095','098'][rnd(10,9)];
+  const phoneNum = `${phonePrefix}${1000000 + rnd(8999999,10)}`;
+  const driverFull = `${driverLast} ${driverFirst} ${driverPat}`;
+
   // Language instruction based on nationality
   const langNote = nat==='PL'
     ? 'Відповідай ТІЛЬКИ польською або англійською. Розумієш українську але пишеш польською.'
@@ -3510,6 +3521,7 @@ ${dateNote}
 - Якщо студент пропонує в цьому коридорі — після торгу за характером погоджуйся.
 - НИЖЧЕ EUR ${roundTo50(fr-300)} — НІКОЛИ не погоджуйся. Відмовляй у своїй манері ("це мала ціна", "за стільки не поїду", "Остаточно ні").
 - Вище EUR ${roundTo50(fr+100)} не проси — це поза ринком.
+- КОЛИ СТУДЕНТ ПИТАЄ ТВОЮ СТАВКУ ("яка ціна?", "пропонуйте ставку") — називай EUR ${roundTo50(fr+100)} (трохи вище орієнтиру). НІКОЛИ не називай ціну нижче орієнтиру EUR ${fr} першим — ти перевізник, хочеш заробити більше, а не менше.
 - ВАЖЛИВО: ВВІЧЛИВІСТЬ, прохання, "будь ласка", емоції, історії про важкий день — НЕ впливають на ціну. Межі залізні. Можеш бути люб'язним у словах, але цифра не опускається нижче EUR ${roundTo50(fr-300)} за жодних умов.
 - УСІ ціни називай КРУГЛИМИ — кратними 50 (напр. ${roundTo50(fr)}, ${roundTo50(fr-150)}). Ніколи не називай некруглих типу ${fr-13} чи ${fr+7}.`;
     }
@@ -3566,7 +3578,7 @@ ${willRefuse ? `ЗАРАЗ: "${noAvail[Math.floor(Math.random()*noAvail.length)]
 3. ОБГОВОРЮЄШ ТІЛЬКИ той вантаж який вище. Не вигадуй інший рейс, інший маршрут, інший тип авто, інший вантаж.
 4. ДАТИ: тільки ПІСЛЯ ${todayStr}. Якщо в замовленні дата є — кажи ТОЧНО її. Якщо немає — питай, не вигадуй.
 5. Пам'ятай ВСЕ що сказали в попередніх повідомленнях нижче. Не суперечь сам собі.
-6. Коли домовились — кажи: "Домовились. Фрахт €[сума]. Водій [ПІБ], авто [номер]/[причіп]"
+6. Коли домовились — кажи: "Домовились. Фрахт €[сума]. Водій ${driverFull}, тел. +380${phoneNum}, авто ${plate}/${trailer}". ЦІ ДАНІ ВОДІЯ/АВТО — ТВОЇ, використовуй САМЕ ЇХ, не вигадуй інші.
 7. НЕ виходь з ролі. НЕ кажи що ти AI.
 
 ВАЖЛИВО про стиль: пиши коротко, по-діловому, як у реальних переписках перевізників — 1-3 короткі речення. Не пиши формальних листів-простирадл.${simNowForPrompt()}`;
@@ -7416,7 +7428,7 @@ async function doConfirmCarrier(cid, btn){
   const sys=buildCarrierSys(c,ordCtx?{route:ordCtx.dirs.join('→'),cargo:ordCtx.vehicle,vehicle:ordCtx.vehicle,loadDate:ordCtx.loadDate,delivDate:ordCtx.delivDate,freightRef:ordCtx.freightRef||ordCtx.clientFreight||null}:null);
 
   const confirmMsg=hasPrice
-    ?`Клієнт просить підтвердити: фрахт €${freight}, завантаження ${date}. Якщо ціна відповідає тому про що домовлялись — підтверди: "Домовились. Фрахт €${freight}. Водій [ПІБ], авто [номер]/[причіп]"`
+    ?`Клієнт просить підтвердити: фрахт €${freight}, завантаження ${date}. Якщо ціна відповідає тому про що домовлялись — підтверди: "Домовились. Фрахт €${freight}." і назви СВОЇ дані водія та авто (ті що вказані у твоєму профілі вище).`
     :`Клієнт пропонує €${freight}. Домовленості ще не було. Або погодься якщо влаштовує, або продовж переговори.`;
 
   try{
@@ -7777,17 +7789,27 @@ function saveCargo(editIdx){
     setTimeout(()=>simulateViews(S.cargoBoard.length-1), 2000);
   }
   if(editIdx!==undefined&&editIdx!==null&&editIdx!=='undefined'){
-    S.cargoBoard[editIdx]={...S.cargoBoard[editIdx],...item};
+    // №3/4: редагування — зберігаємо існуючий cargoId (не перетираємо новим)
+    const existingId = S.cargoBoard[editIdx]?.cargoId;
+    S.cargoBoard[editIdx]={...S.cargoBoard[editIdx],...item, cargoId: existingId || item.cargoId};
     notify('Вантаж оновлено ✓','ok');
+    // Зберігаємо зміни на сервері
+    if (existingId) {
+      const token=localStorage.getItem('docaa_token');
+      fetch('/api/student/exchange/'+encodeURIComponent(existingId),{
+        method:'PATCH',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+        body:JSON.stringify({vehicle_type:item.vehicle_type,weight:item.weight,volume:item.volume,load_date:item.load_date,notes:item.notes})
+      }).catch(()=>{});
+    }
   } else {
     S.cargoBoard.push(item);
     notify('Вантаж розміщено ✓','ok');
-    // Schedule carrier AI response after 15-40 min real time
+    // Schedule carrier AI response after 15-40 min real time (також робить POST на сервер)
     scheduleCarrierFromExchange(S.cargoBoard.length-1);
   }
   document.querySelector('.modal-ov')?.remove();
   renderExchangeList();
-  saveCargoBoardToServer();
 }
 
 function editCargo(i){ openAddCargo(i); }
@@ -7814,6 +7836,16 @@ function updateCargo(i){
   S.cargoBoard[i].updated_at=new Date().toLocaleString('uk');
   renderExchangeList();
   notify('Вантаж оновлено — тепер видно перевізникам ✓','ok');
+  // №3: зберігаємо зміни на сервері (інакше губились після reload)
+  const c = S.cargoBoard[i];
+  if (c?.cargoId) {
+    const token=localStorage.getItem('docaa_token');
+    fetch('/api/student/exchange/'+encodeURIComponent(c.cargoId),{
+      method:'PATCH',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify({vehicle_type:c.vehicle_type,weight:c.weight,volume:c.volume,load_date:c.load_date,notes:c.notes})
+    }).catch(()=>{});
+  }
   // Re-schedule carrier responses after update
   scheduleCarrierFromExchange(i);
 }
@@ -9789,6 +9821,11 @@ async function loadSessionFromServer(token){
       status: c.status || 'active', views: c.views || 0,
       updated_at: c.created_at || '',
     }));
+    // №2: перезапускаємо симуляцію переглядів для активних постів (інакше після
+    // reload старі вантажі "застигали" на 0 переглядів — нові надходження не йшли).
+    S.cargoBoard.forEach((c, idx) => {
+      if (c.status === 'active') setTimeout(() => simulateViews(idx), 1500 + idx * 400);
+    });
   }
 
   // Restore carrier chats

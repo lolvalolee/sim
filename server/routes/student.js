@@ -1111,8 +1111,10 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     carrierName: carrier.person || carrier.name || 'Перевізник',
   });
 
-  // Виклик AI
-  let aiVerdict;
+  // Виклик AI — ТІЛЬКИ для генерації живої відповіді перевізника і виявлення
+  // невідповідностей (для резюме). Рішення approve/reject AI НЕ приймає:
+  // за моделлю системи угоду фіксує КНОПКА (студент відповідає за рішення).
+  let aiVerdict = { verdict: 'approve', mismatches: [], reply_message: '' };
   try {
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1128,19 +1130,20 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
         messages: [{ role: 'user', content: '[Перевір переписку і дай відповідь у JSON]' }],
       }),
     });
-    if (!aiRes.ok) {
-      const txt = await aiRes.text();
-      return res.status(502).json({ error: 'ai_error', details: txt.slice(0, 200) });
+    if (aiRes.ok) {
+      const data = await aiRes.json();
+      const aiText = (data.content && data.content[0] && data.content[0].text) || '';
+      const parsed = agreementChecker.parseAiVerdict(aiText);
+      // Беремо текст відповіді і невідповідності, але verdict ЗАВЖДИ approve
+      aiVerdict.mismatches = parsed.mismatches || [];
+      aiVerdict.reply_message = parsed.reply_message || '';
     }
-    const data = await aiRes.json();
-    const aiText = (data.content && data.content[0] && data.content[0].text) || '';
-    aiVerdict = agreementChecker.parseAiVerdict(aiText);
-  } catch (e) {
-    return res.status(502).json({ error: 'ai_unavailable', details: String(e).slice(0, 200) });
-  }
+  } catch (e) { /* AI недоступний — підтверджуємо детерміновано */ }
 
-  const { verdict, mismatches, reply_message } = aiVerdict;
-  const isApprove = verdict === 'approve';
+  // №1/№9: КНОПКА завжди підтверджує угоду. mismatches (невідповідності ціни/
+  // маршруту проти переписки) — навчальний фідбек у резюме, НЕ блокування.
+  const { mismatches, reply_message } = aiVerdict;
+  const isApprove = true;
 
   // Додаємо повідомлення перевізника у чат
   const now = new Date().toISOString();
@@ -1224,14 +1227,18 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     }
     // №9/11: фіксуємо угоду перевізника в session_deals (заміна → перезапис)
     upsertDeal(session.id, letterId, 'carrier', carrierId, parseFloat(price), date);
-  } else {
-    logOrderEvent(session.id, letterId, 'carrier_confirm_rejected', {
-      verdict,
-      mismatches,
-      carrier_id: carrierId,
-      attempted_price: parseFloat(price),
-      attempted_date: date,
-    });
+
+    // Навчальний фідбек: якщо AI помітив невідповідності ціни/маршруту проти
+    // переписки — пишемо в resume (не блокуємо угоду, студент має право вирішувати).
+    if (Array.isArray(mismatches) && mismatches.length) {
+      try {
+        incidentScheduler.addResumePoint({
+          sessionId: session.id, studentId: req.user.id, letterId,
+          type: 'carrier_deal_mismatch', impact: -1,
+          context: { mismatches, price: parseFloat(price), date },
+        });
+      } catch(e){}
+    }
   }
 
   // Resume: поєднання джерел (база + біржа).
@@ -1346,7 +1353,7 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
   }
 
   res.json({
-    verdict,
+    verdict: 'approve',
     mismatches: mismatches || [],
     message: newMsg,
     approved: isApprove,
@@ -2443,6 +2450,23 @@ router.post('/exchange/post', STU, (req, res) => {
   } catch(e){}
 
   res.json({ ok: true, cargo_id: cargoId, responders });
+});
+
+// №3: PATCH /api/student/exchange/:cargoId — оновлення полів біржового поста
+// (інакше зміни — напр. вписав "т" до ваги — губились після reload).
+router.patch('/exchange/:cargoId', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { vehicle_type, weight, volume, load_date, notes } = req.body || {};
+  try {
+    db.prepare(`UPDATE cargo_board SET
+      vehicle_type=COALESCE(?,vehicle_type), weight=COALESCE(?,weight),
+      volume=COALESCE(?,volume), load_date=COALESCE(?,load_date), notes=COALESCE(?,notes)
+      WHERE id=? AND session_id=?`)
+      .run(vehicle_type ?? null, weight ?? null, volume ?? null, load_date ?? null, notes ?? null,
+           req.params.cargoId, session.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'update_failed' }); }
 });
 
 // №6: DELETE /api/student/exchange/:cargoId — видалення біржового поста.
