@@ -3000,6 +3000,20 @@ ${customsIn ? `• Митниця розмитнення: ${customsIn}` : ''}
 НІКОЛИ не вигадуй нові адреси або маршрути.
 Якщо студент згадав ІНШИЙ маршрут — це ЙОГО помилка, спокійно виправ:
 "У нас же ${route}, ви помилились?"
+${(() => {
+  // №2: формат адреси за країною призначення (AI не має давати польську вулицю в Італії)
+  const cc = (ord.dirs && ord.dirs[ord.dirs.length-1]) || '';
+  const fmt = {
+    UA:'вул. (українською)', PL:'ul. (польською)', DE:'straße (німецькою)',
+    IT:'via/viale/piazza (італійською)', FR:'rue/avenue (французькою)', ES:'calle (іспанською)',
+    GB:'Street/Road (англійською)', NL:'straat (нідерландською)', CZ:'(чеською)', SK:'(словацькою)',
+    AT:'straße (німецькою)', RO:'strada (румунською)', BG:'(болгарською)', GR:'(грецькою)',
+    PT:'rua (португальською)', SE:'gatan (шведською)', NO:'(норвезькою)', LT:'g. (литовською)',
+    LV:'(латиською)', EE:'(естонською)', CH:'(німецькою/французькою)', BE:'(фр./нідерл.)',
+  }[cc];
+  if (!fmt) return '';
+  return `\nЯкщо ДАЄШ адресу розвантаження і її нема в даних — використовуй формат країни призначення (${cc}): ${fmt}. НЕ змішуй формати різних країн (напр. не давай польську "ul." для Італії).`;
+})()}
 
 ТИП ТЗ (м'яко, можна обговорювати):
 • Основний: ${vehicle}
@@ -3903,7 +3917,21 @@ function renderApplicationRow(a){
     'completed': { cls: 'done', label: 'Виконана' },
     'cancelled': { cls: 'cancel', label: 'Скасована' },
   };
-  const status = statusMap[a.status] || statusMap['new'];
+  // №1: статус "В ДОРОЗІ" обчислюється за сим-датою — якщо дата завантаження
+  // настала (≤ поточна сим-дата) і рейс не скасований/виконаний. Раніше статус
+  // лишався "НОВА" бо брався статично з БД і не оновлювався за часом.
+  let effStatus = a.status || 'new';
+  if (effStatus === 'new' && a.load_date) {
+    try {
+      const [d,m,y] = a.load_date.split('.').map(Number);
+      const loadD = new Date(y, m-1, d);
+      const curSimDate = addDays(S.startDate, (S.timerDay||1) - 1); // ДД.ММ.РРРР
+      const [cd,cm,cy] = curSimDate.split('.').map(Number);
+      const curD = new Date(cy, cm-1, cd);
+      if (loadD <= curD) effStatus = 'in_transit';
+    } catch(e){}
+  }
+  const status = statusMap[effStatus] || statusMap['new'];
 
   // Перевіряємо чи можна надсилати заявку перевізнику
   // Умови: угода закрита з обома. Кнопка АКТИВНА аж поки рейс не ВИКОНАНА/СКАСОВАНА

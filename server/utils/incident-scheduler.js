@@ -81,9 +81,8 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
     loadingStartedAt = nowPlus(simHoursToMs(2));
   }
 
-  const inc = scenariosLib.SIM_INTERVALS;
-
-  // A (сим-час): сим-день завантаження відносно start_date сесії
+  // A (сим-час): абсолютна сим-година завантаження від старту сесії.
+  // 12 сим-год = 1 день. loadSimHourAbs = (loadSimDay-1)*12 (завантаження зранку дня).
   const sess = db.prepare('SELECT start_date FROM sessions WHERE id=?').get(sessionId);
   let loadSimDay = 1;
   try {
@@ -96,14 +95,23 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
       }
     }
   } catch (e) {}
+  const loadSimHourAbs = (loadSimDay - 1) * 12; // абсолютна сим-година завантаження
 
-  // Загальна функція додавання інциденту
+  // Загальна функція додавання інциденту.
   function add(type, baseTime, deltaHours, payload = {}) {
     const id = uuidv4();
     const scheduledAt = new Date(new Date(baseTime).getTime() + simHoursToMs(deltaHours)).toISOString();
-    // target_sim_day: день завантаження + скільки повних сим-днів додає дельта (12 сим-год/день)
-    const targetSimDay = loadSimDay + Math.floor((deltaHours || 0) / 12);
-    const payloadWithTarget = { ...payload, target_sim_day: targetSimDay };
+    // №3: target по абсолютній сим-годині — рахуємо скільки СИМ-ГОДИН від моменту
+    // завантаження до цього етапу (з реального інтервалу scheduledAt − loadingStartedAt).
+    // Так етапи рознесені в сим-часі і не вистрілюють усі разом.
+    let simHoursFromLoad = 0;
+    try {
+      const ms = new Date(scheduledAt).getTime() - new Date(loadingStartedAt).getTime();
+      simHoursFromLoad = Math.max(0, ms / simHoursToMs(1)); // реальні ms → сим-години
+    } catch (e) {}
+    const targetSimHourAbs = loadSimHourAbs + simHoursFromLoad;
+    const targetSimDay = loadSimDay + Math.floor(simHoursFromLoad / 12);
+    const payloadWithTarget = { ...payload, target_sim_day: targetSimDay, target_sim_hour_abs: targetSimHourAbs };
     db.prepare(`
       INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id, type, state, scheduled_at, payload_json)
       VALUES (?,?,?,?,?,?,?,'pending',?,?)
@@ -478,7 +486,7 @@ function runDueIncidents(sessionIdFilter) {
   // Перевіряємо що session активна (Деплой 24a баг 7: пропускаємо сесії на паузі)
   let firedCount = 0;
   for (const inc of pending) {
-    const session = db.prepare(`SELECT status, paused, timer_day, start_date FROM sessions WHERE id=?`).get(inc.session_id);
+    const session = db.prepare(`SELECT status, paused, timer_day, timer_ms, start_date FROM sessions WHERE id=?`).get(inc.session_id);
     if (!session || session.status === 'stopped') {
       db.prepare(`UPDATE incidents SET state='cancelled', fired_at=? WHERE id=?`).run(now, inc.id);
       continue;
@@ -487,16 +495,23 @@ function runDueIncidents(sessionIdFilter) {
     if (session.paused) {
       continue;
     }
-    // ── A (сим-час): подія не настає раніше за свою сим-дату ──
-    // Інцидент має target_sim_day (сим-день, коли він має статись). Якщо студентів
-    // сим-день ще не досяг — НЕ стріляємо (інакше "розвантажився" раніше завантаження).
-    // Захищає від розсинхрону "cron за реальним часом vs студент за сим-часом".
+    // ── A (сим-час): подія не настає раніше за свою сим-годину ──
+    // Кожен етап має target_sim_hour_abs (абсолютна сим-година від старту, коли має
+    // статись). Поточна сим-година сесії = (timer_day-1)*12 + година в дні.
+    // Якщо студент ще не дійшов — НЕ стріляємо. Це рознесло етапи рейсу в часі
+    // (раніше всі вистрілювали разом, бо звіряли лише день).
     let payload = {}; try { payload = JSON.parse(inc.payload_json || '{}'); } catch(e){}
-    if (payload.target_sim_day != null) {
-      const curDay = session.timer_day || 1;
-      if (curDay < payload.target_sim_day) {
-        continue; // студент ще не дійшов до сим-дня події — чекаємо
+    const SIM_HOUR_MS_REAL = 10 * 60 * 1000; // 1 сим-год = 10 хв реальних
+    const DAY_MIN_REAL = 120; // 120 хв реальних = 1 сим-день = 12 сим-год
+    const curDay = session.timer_day || 1;
+    const hourInDay = Math.min(12, Math.floor((session.timer_ms || 0) % (DAY_MIN_REAL*60*1000) / SIM_HOUR_MS_REAL));
+    const curSimHourAbs = (curDay - 1) * 12 + hourInDay;
+    if (payload.target_sim_hour_abs != null) {
+      if (curSimHourAbs < payload.target_sim_hour_abs) {
+        continue; // студент ще не дійшов до сим-години події — чекаємо
       }
+    } else if (payload.target_sim_day != null) {
+      if (curDay < payload.target_sim_day) continue; // fallback для старих інцидентів
     }
     try {
       fireIncident(inc);
