@@ -7961,21 +7961,33 @@ async function initExchangeResponder(responder, cargo){
   S.contactedCarriers.add(cid);
 
   const carrier = S.carriers.find(c=>c.id===cid) || {name:responder.name, person:responder.person};
+  // №біржа: передаємо freightRef — БЕЗ нього межі торгу не діяли і перевізник
+  // скидав 3500→1900. Тепер коридор ref−300…ref+100 застосовується і на біржі.
+  const exFreightRef = responder.freight_ref || null;
+  // Зберігаємо ref на рейсі (для подальших повідомлень торгу в чаті)
+  if (exFreightRef) {
+    const ordMatch = S.orders.find(o => o.dirs?.some(d => (carrier.dirs||'').includes(d)));
+    if (ordMatch && !ordMatch.freightRef) ordMatch.freightRef = exFreightRef;
+  }
   const sys = buildCarrierSys(carrier, {
     route: cargo.route, cargo: cargo.vehicle_type,
     vehicle: cargo.vehicle_type,
     loadDate: cargo.load_date||'уточнюється', delivDate:'',
+    freightRef: exFreightRef,
   });
 
   // Роль: дає ціну або питає деталі
+  // №біржа: перевізник ВІДГУКНУВСЯ на цей вантаж — отже маршрут ЙОГО, він на нього
+  // їздить. Не дозволяємо відмовлятись "я туди не їжджу" після торгу (була така діра).
+  const dirNote = `ВАЖЛИВО: ти САМ відгукнувся на цей вантаж (${cargo.route}) — отже ти ТОЧНО возиш цим напрямком. НІКОЛИ не кажи "я туди не їжджу" чи "це не мій напрямок" — це суперечить тому, що ти відгукнувся. Якщо домовитесь по ціні — береш рейс.`;
   let prompt;
   if(responder.gives_price && responder.start_price>0){
     const readyNote = responder.readiness==='ready'
       ? 'Ти готовий взяти вантаж, налаштований позитивно.'
       : 'Ти зацікавився, але ще придивляєшся.';
-    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. ${readyNote} Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і одразу назви свою ціну ${roundTo50(responder.start_price)} EUR. УСІ ціни кратні 50, не називай некруглих. Дуже коротко, як у Viber.`;
+    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}${cargo.load_date?', завантаження '+cargo.load_date:''}. ${readyNote} ${dirNote} Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і одразу назви свою ціну ${roundTo50(responder.start_price)} EUR. УСІ ціни кратні 50, не називай некруглих. Дуже коротко, як у Viber.`;
   } else {
-    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}. Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і запитай деталі (точна адреса / вага / коли вантажити / яка ціна). Ціну поки НЕ називай. Дуже коротко, як у Viber.`;
+    prompt = `Ти побачив на біржі вантаж: ${cargo.route}, ${cargo.vehicle_type}${cargo.weight?', '+cargo.weight:''}. ${dirNote} Напиши ПЕРШЕ коротке повідомлення експедитору — привітайся, скажи що бачив вантаж на біржі і запитай деталі (точна адреса / вага / коли вантажити / яка ціна). Ціну поки НЕ називай. Дуже коротко, як у Viber.`;
   }
 
   try{

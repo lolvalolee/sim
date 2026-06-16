@@ -2372,9 +2372,34 @@ router.post('/exchange/post', STU, (req, res) => {
 
   // Визначаємо напрямки рейсу для підбору (з letter якщо є, інакше з route-тексту)
   let dirsNeeded = [];
+  let baseFreight = 0;
+  let matchedLetter = null;
   if (letter_id) {
-    const letter = db.prepare('SELECT dirs FROM letters WHERE id=?').get(letter_id);
-    if (letter) { try { dirsNeeded = JSON.parse(letter.dirs || '[]'); } catch(e){} }
+    const letter = db.prepare('SELECT dirs, freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(letter_id);
+    if (letter) {
+      try { dirsNeeded = JSON.parse(letter.dirs || '[]'); } catch(e){}
+      baseFreight = letter.freight_amount || (((letter.carrier_range_min||0) + (letter.carrier_range_max||0)) / 2) || 0;
+      matchedLetter = letter;
+    }
+  }
+  // Якщо листа нема — пробуємо знайти за маршрутом (щоб напрямок і орієнтир усе одно були)
+  if (!matchedLetter && route) {
+    try {
+      const allLetters = db.prepare('SELECT dirs, load_address, unload_address, freight_amount, carrier_range_min, carrier_range_max FROM letters').all();
+      const routeLow = route.toLowerCase();
+      const found = allLetters.find(l => {
+        const a = (l.load_address||'').toLowerCase(), b = (l.unload_address||'').toLowerCase();
+        // груба відповідність міст із маршруту
+        return routeLow.split(/[→\-–—]/).every(part => {
+          const p = part.trim(); if (!p) return true;
+          return a.includes(p) || b.includes(p);
+        });
+      });
+      if (found) {
+        try { dirsNeeded = JSON.parse(found.dirs || '[]'); } catch(e){}
+        baseFreight = found.freight_amount || (((found.carrier_range_min||0)+(found.carrier_range_max||0))/2) || 0;
+      }
+    } catch(e){}
   }
 
   // Підбираємо біржових перевізників (for_exchange=1)
@@ -2404,25 +2429,19 @@ router.post('/exchange/post', STU, (req, res) => {
   const count = Math.min(shuffled.length, 1 + Math.floor(Math.random() * 4)); // 1-4
   const picks = shuffled.slice(0, count);
 
-  // Орієнтир ціни — з листа (середній фрахт) якщо є
-  let baseFreight = 0;
-  if (letter_id) {
-    const l = db.prepare('SELECT freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(letter_id);
-    if (l) baseFreight = l.freight_amount || ((l.carrier_range_min + l.carrier_range_max) / 2) || 0;
-  }
-
-  // Призначаємо ролі і ціни
-  // Перші 2 (parity) → дають ціну, решта → питають деталі
+  // Призначаємо ролі і ціни. Орієнтир (baseFreight) визначено вище — з листа або
+  // за маршрутом. start_price ТІЛЬКИ в коридорі ref … ref+100 (не довільний —
+  // раніше offset давав 3500 при орієнтирі ~1700).
   const responders = picks.map((c, i) => {
     const givesPrice = i < 2; // перші 2 дають ціну, решта питають
-    // Розкид ціни від personality: tough/aggressive дорожче, local/flaky дешевше
-    let priceOffset = 0;
     const pers = c.personality || 'local';
-    if (['tough','aggressive','pushy','bargainer'].includes(pers)) priceOffset = 50 + Math.random()*150; // дорожчі
-    else if (['local','flaky','unreliable'].includes(pers)) priceOffset = -(50 + Math.random()*200); // дешевші
-    else priceOffset = -100 + Math.random()*200; // середні
-    const startPrice = baseFreight > 0 ? Math.round(baseFreight + priceOffset) : 0;
-    // Зацікавленість: ~3 "цікавляться", ~2 "готові погодитись" — рандомно
+    // Перша ставка перевізника: трохи вище орієнтиру (як він і хоче — заробити).
+    // tough — ближче до +100, local — ближче до ref. Завжди в межах ref … ref+100.
+    let topUp = 100;
+    if (['local','flaky','unreliable'].includes(pers)) topUp = 50;
+    else if (['tough','aggressive','pushy','bargainer'].includes(pers)) topUp = 100;
+    else topUp = 75;
+    const startPrice = baseFreight > 0 ? Math.round((baseFreight + topUp) / 50) * 50 : 0;
     const readiness = Math.random() < 0.4 ? 'ready' : 'interested';
     return {
       carrier_id: c.id,
@@ -2434,6 +2453,7 @@ router.post('/exchange/post', STU, (req, res) => {
       personality: pers,
       gives_price: givesPrice,
       start_price: startPrice,
+      freight_ref: baseFreight || null, // №біржа: орієнтир для меж торгу на фронті
       readiness,
       wave: i < 2 ? 1 : 2, // перша хвиля 1-2, друга решта
     };
