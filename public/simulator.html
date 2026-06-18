@@ -2801,6 +2801,33 @@ async function sendEmailReply(orderId){
   }
   const sys=buildClientSys(em,ord);
   const hist=em.replies.filter(r=>!r.loading).map(r=>({role:r.role==='student'?'user':'assistant',content:r.text}));
+  // ── B: ДЕТЕРМІНОВАНИЙ ТОРГ ЗАМОВНИКА (цифру рахує КОД) ──
+  // Замовник платить студенту, готовий до ref+300. Код тримає згоду в коридорі
+  // ref…ref+300 і дає AI жорстку директиву — назвати саме цю цифру.
+  const cref = ord?.freightRef || ord?.clientFreight || 0;
+  if (cref > 0 && !ord.freightFixed) {
+    if (ord.clientNegoOffer == null) ord.clientNegoOffer = clientFirstOffer(cref);
+    const lastStudent = [...hist].reverse().find(m=>m.role==='user');
+    const studentAsk = extractOfferNum(lastStudent?.content);
+    const r = clientNextOffer(cref, ord.clientNegoOffer, studentAsk);
+    ord.clientNegoOffer = r.offer;
+    const ceil = roundTo50(cref + 300);
+    let dir;
+    if (r.action === 'agree') {
+      dir = `\n[ТОРГ — СУВОРА ДИРЕКТИВА: погодься на EUR ${r.offer}. Назви САМЕ цю цифру і підтверди. Не називай іншу.]`;
+    } else if (r.action === 'hold') {
+      dir = `\n[ТОРГ — СУВОРА ДИРЕКТИВА: твоя СТЕЛЯ EUR ${r.offer} (вище не платиш). Скажи що це максимум, остаточно. Назви САМЕ EUR ${r.offer}.]`;
+    } else {
+      dir = `\n[ТОРГ — СУВОРА ДИРЕКТИВА: підніми трохи — запропонуй EUR ${r.offer} (не вище). Назви САМЕ цю цифру. Твоя стеля EUR ${ceil}.]`;
+    }
+    hist.push({ role:'user', content: dir });
+    try {
+      const token=localStorage.getItem('docaa_token');
+      fetch(`/api/student/orders/${ord.id}/nego`,{method:'PATCH',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+        body:JSON.stringify({client_nego_offer:r.offer})}).catch(()=>{});
+    } catch(e){}
+  }
   try{
     const res=await callClaude(sys,hist);
     em.replies=em.replies.filter(r=>!r.loading);
@@ -3428,21 +3455,42 @@ async function sendChatMsg(cid,pfx){
     tripState: stateContext, // ← новий блок
   } : null);
   // №5: обмежуємо історію торгу — щоб серія старих відмов не "твердила" AI.
-  // Беремо останні 12 повідомлень (свіжий контекст торгу).
   let fullHist=S.chats[cid].filter(m=>!m.loading);
   let hist=fullHist.slice(-12).map(m=>({role:m.role==='student'?'user':'assistant',content:m.text}));
-  // №5: якщо остання пропозиція студента в прийнятному коридорі (−300..+100 від орієнтиру)
-  // — даємо AI сигнал-перебивач, щоб попередні відмови не блокували згоду.
+
+  // ── B: ДЕТЕРМІНОВАНИЙ ТОРГ ПЕРЕВІЗНИКА (цифру рахує КОД) ──
+  // Код тримає nego_offer на рейсі, рахує наступну ставку в коридорі ref−300…ref+100
+  // і дає AI ЖОРСТКУ директиву: назви саме цю цифру. AI не вигадує число.
   const fref = ordCtx?.freightRef || ordCtx?.clientFreight || 0;
-  if (fref > 0) {
-    const lastStudent = [...fullHist].reverse().find(m=>m.role==='student');
-    const pm = lastStudent?.text?.match(/(\d{3,6})/);
-    if (pm) {
-      const offered = parseInt(pm[1]);
-      if (offered >= fref-300 && offered <= fref+100) {
-        hist.push({ role:'user', content:`[Система: запропонована ціна €${offered} у прийнятному діапазоні. Попередні відмови стосувались інших цифр — оціни цю пропозицію свіжо, без упередження.]` });
-      }
+  let negoDirective = '';
+  if (fref > 0 && ordCtx) {
+    const pers = c.personality || 'local';
+    // Поточна ставка перевізника (стан торгу на рейсі)
+    if (ordCtx.carrierNegoOffer == null) {
+      ordCtx.carrierNegoOffer = carrierFirstOffer(fref, pers);
     }
+    const lastStudent = [...fullHist].reverse().find(m=>m.role==='student');
+    const studentOffer = extractOfferNum(lastStudent?.text);
+    const r = carrierNextOffer(fref, ordCtx.carrierNegoOffer, studentOffer, pers);
+    ordCtx.carrierNegoOffer = r.offer; // оновлюємо стан
+    const floor = roundTo50(fref - 300);
+    if (r.action === 'agree') {
+      negoDirective = `\n[ТОРГ — СУВОРА ДИРЕКТИВА: погодься на ціну EUR ${r.offer}. Назви САМЕ цю цифру і підтверди угоду. Не називай іншу.]`;
+    } else if (r.action === 'hold') {
+      negoDirective = `\n[ТОРГ — СУВОРА ДИРЕКТИВА: твоя ОСТАТОЧНА ціна EUR ${r.offer} (нижче не можеш). Скажи що це остаточно, нижче не підеш. Назви САМЕ EUR ${r.offer}, жодної іншої цифри.]`;
+    } else {
+      negoDirective = `\n[ТОРГ — СУВОРА ДИРЕКТИВА: трохи поступись — назви EUR ${r.offer} (не нижче). Назви САМЕ цю цифру, жодної іншої. Мінімум твій EUR ${floor}.]`;
+    }
+    // persist ставки перевізника (reload не скине торг)
+    try {
+      const token=localStorage.getItem('docaa_token');
+      fetch(`/api/student/orders/${ordCtx.id}/nego`,{method:'PATCH',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+        body:JSON.stringify({carrier_id:cid, carrier_nego_offer:r.offer})}).catch(()=>{});
+    } catch(e){}
+  }
+  if (negoDirective) {
+    hist.push({ role:'user', content: negoDirective });
   }
   try{
     const res=await callClaude(sys,hist);
@@ -3679,12 +3727,15 @@ function renderChats(){
     return { c, msgs, last, lastTs, unread };
   });
 
-  // Сортування: чати з повідомленнями за датою desc, без повідомлень внизу
+  // Сортування: №7 — непрочитані (нові відгуки) ЗАВЖДИ зверху, далі за часом desc.
+  // Раніше сортувалось лише за часом доби (parseTimeStr без дати), тому новий
+  // відгук о 18:13 опинявся нижче за старий 10:15 — виправлено пріоритетом unread.
   contactedWithMeta.sort((a, b) => {
+    if ((a.unread > 0) !== (b.unread > 0)) return a.unread > 0 ? -1 : 1; // непрочитані зверху
     if (a.lastTs === 0 && b.lastTs === 0) return 0;
-    if (a.lastTs === 0) return 1;  // a без повідомлень → внизу
+    if (a.lastTs === 0) return 1;
     if (b.lastTs === 0) return -1;
-    return b.lastTs - a.lastTs;     // нові зверху
+    return b.lastTs - a.lastTs;
   });
 
   const sb=document.getElementById('chats-sb');
@@ -4167,6 +4218,55 @@ function onAccRateInput(appId){
 function roundTo50(n){
   const v = Number(n)||0;
   return Math.round(v/50)*50;
+}
+
+// ── B: ДЕТЕРМІНОВАНИЙ ТОРГ (цифру рахує КОД, не AI) ──
+// Коридори від freight_ref: перевізник ref−300…ref+100, замовник ref…ref+300.
+// Крок поступки 50/100 за характером. Макс комісія 600, пробити неможливо.
+function _negStep(pers){
+  const p=(pers||'local').toLowerCase();
+  if(['tough','aggressive','pushy','bargainer'].includes(p)) return 50;   // впертий — малий крок
+  if(['local','flaky','unreliable','friendly'].includes(p)) return 100;   // поступливий
+  return Math.random()<0.5?50:100;
+}
+function carrierFirstOffer(ref,pers){
+  const p=(pers||'local').toLowerCase();
+  let up;
+  if(['tough','aggressive','pushy','bargainer'].includes(p)) up=100;
+  else if(['local','flaky','unreliable','friendly'].includes(p)) up=50;
+  else up=Math.random()<0.5?50:100;
+  return roundTo50(ref+up);
+}
+// current — поточна ставка перевізника; studentOffer — скільки пропонує студент.
+function carrierNextOffer(ref,current,studentOffer,pers){
+  const floor=roundTo50(ref-300);
+  if(studentOffer!=null && studentOffer>=current) return {offer:current,action:'agree'};
+  if(studentOffer!=null && studentOffer>=floor) return {offer:roundTo50(studentOffer),action:'agree'};
+  const next=roundTo50(current-_negStep(pers));
+  if(next<=floor) return {offer:floor,action:'hold'};
+  return {offer:next,action:'concede'};
+}
+function clientFirstOffer(ref){ return roundTo50(ref); }
+// current — поточна згода замовника; studentAsk — скільки просить студент.
+function clientNextOffer(ref,current,studentAsk){
+  const ceil=roundTo50(ref+300);
+  if(studentAsk!=null && studentAsk<=current) return {offer:roundTo50(studentAsk),action:'agree'};
+  if(studentAsk!=null && studentAsk<=ceil){
+    const next=roundTo50(current+_negStep('local'));
+    if(next>=studentAsk) return {offer:roundTo50(studentAsk),action:'agree'};
+    return {offer:next,action:'concede'};
+  }
+  if(current>=ceil) return {offer:ceil,action:'hold'};
+  const next=roundTo50(current+_negStep('local'));
+  if(next>=ceil) return {offer:ceil,action:'hold'};
+  return {offer:next,action:'concede'};
+}
+function extractOfferNum(text){
+  if(!text) return null;
+  const m=String(text).replace(/\s/g,'').match(/(\d{3,5})/);
+  if(!m) return null;
+  const v=parseInt(m[1],10);
+  return (v<100||v>50000)?null:v;
 }
 
 // №1: прибирає порожні дужки "Місто ()" → "Місто" (дані seed мали порожній код країни)
@@ -4908,12 +5008,12 @@ async function openApplicationForm(applicationId, draftIdToOpen){
     const r = await fetch('/api/student/clients', { headers: { 'Authorization': 'Bearer ' + token }});
     S.allClients = r.ok ? await r.json() : [];
   } catch(e) { S.allClients = S.allClients || []; }
-  if (!S.allCarriers) {
-    try {
-      const r = await fetch('/api/student/all-carriers', { headers: { 'Authorization': 'Bearer ' + token }});
-      S.allCarriers = r.ok ? await r.json() : [];
-    } catch(e) { S.allCarriers = []; }
-  }
+  // №6: ЗАВЖДИ дозавантажуємо перевізників (не "лише якщо порожньо") — інакше при
+  // race поле перевізника лишалось порожнім, хоч було заповнене.
+  try {
+    const r = await fetch('/api/student/all-carriers', { headers: { 'Authorization': 'Bearer ' + token }});
+    if (r.ok) S.allCarriers = await r.json();
+  } catch(e) { S.allCarriers = S.allCarriers || []; }
 
   let existing = null;
   if (applicationId) {
@@ -9776,6 +9876,7 @@ async function loadSessionFromServer(token){
       freightMax: letter.freight_max||null,
       carrierFreightAgreed: op.carrier_freight||null,
       carrierId: op.carrier_id||null,
+      clientNegoOffer: op.client_nego_offer != null ? op.client_nego_offer : null, // B: persist торгу замовника
       carrierPlate: op.carrier_plate||null,
       carrierDriverName: op.carrier_driver||null,
       // Поля заявки (clientRequestVariant)
@@ -9872,8 +9973,12 @@ async function loadSessionFromServer(token){
   data.carrier_chats.forEach(chat=>{
     S.chats[chat.carrier_id]=chat.messages;
     S.deals[chat.carrier_id]=chat.deal_status||'none';
-    // Add to contacted if there's any chat record (even empty) — they once initiated contact
     S.contactedCarriers.add(chat.carrier_id);
+    // B: відновлюємо стан торгу перевізника (reload не скидає ставку)
+    if (chat.nego_offer != null) {
+      const ord = S.orders.find(o => o.carrierId === chat.carrier_id);
+      if (ord) ord.carrierNegoOffer = chat.nego_offer;
+    }
   });
 
   // Load carriers from server

@@ -400,9 +400,26 @@ router.post('/chats/:carrierId/cancel-deal', STU, (req, res) => {
   `).get(session.id, carrierId);
   if (!op) return res.status(404).json({ error: 'no_active_deal' });
 
-  // №14: скасування тільки ДО завантаження. Якщо рейс уже в дорозі — не дозволяємо.
+  // №14: скасування тільки ДО завантаження. №1 (fix): головний критерій —
+  // СИМ-ДАТА завантаження. Якщо вона ще НЕ настала, рейс фізично не може бути
+  // завантажений — дозволяємо скасування незалежно від op.state (бо state міг
+  // помилково стати 'loaded' через старий інцидент).
   const LOADED_STATES = ['loaded','at_border','pd_requested','pd_sent','at_customs_dst','at_unloading','unloaded','closed','closed_completed'];
-  if (LOADED_STATES.includes(op.state)) {
+  let loadDatePassed = false;
+  const loadStr = op.carrier_agreed_date || op.client_agreed_date;
+  const sessForDate = db.prepare('SELECT start_date, timer_day FROM sessions WHERE id=?').get(session.id);
+  if (loadStr && sessForDate && sessForDate.start_date) {
+    try {
+      const [d,m,y] = loadStr.split('.').map(Number);
+      const [sd,sm,sy] = sessForDate.start_date.split('.').map(Number);
+      const loadD = new Date(y,m-1,d);
+      const startD = new Date(sy,sm-1,sd);
+      const loadDayNum = Math.round((loadD - startD)/86400000) + 1;
+      loadDatePassed = (sessForDate.timer_day || 1) >= loadDayNum;
+    } catch(e){}
+  }
+  // Блокуємо скасування ТІЛЬКИ якщо сим-дата завантаження настала І стан loaded
+  if (loadDatePassed && LOADED_STATES.includes(op.state)) {
     return res.status(409).json({ error: 'already_loaded', message: 'Рейс уже завантажений — скасувати не можна.' });
   }
 
@@ -815,18 +832,20 @@ router.post('/orders/:letterId/confirm-client', STU, async (req, res) => {
   if (!letter) return res.status(404).json({ error: 'letter_not_found' });
 
   // №11 (A): захист від абсурдних сум ("мільйони"). Орієнтир — freight_ref з v2
-  // або freight_amount. Стеля = 2× орієнтиру (широкий коридор зберігає право на
-  // помилку, але блокує дописані зайві цифри типу 2000000).
+  // №4: раніше блокувало >2×ref ("нереальна ціна"), але це заважало легітимній
+  // домовленості — якщо замовник ПОГОДИВ ціну в чаті, система має пропустити.
+  // Детермінований торг (B) уже не дає замовнику погодити вище ref+300, тож тут
+  // блокуємо лише явний абсурд (дописані зайві нулі: >10× орієнтиру).
   {
     let ref = 0;
     try {
       const v2 = db.prepare('SELECT freight_ref FROM letters_v2 WHERE letter_id=?').get(letterId);
       ref = (v2 && v2.freight_ref) || letter.freight_amount || 0;
     } catch(e){ ref = letter.freight_amount || 0; }
-    if (ref > 0 && parseFloat(price) > ref * 2) {
+    if (ref > 0 && parseFloat(price) > ref * 10) {
       return res.status(400).json({
         error: 'price_unrealistic',
-        message: `Сума €${parseFloat(price)} нереальна для цього рейсу. Перевірте — можливо зайві цифри.`,
+        message: `Сума €${parseFloat(price)} явно помилкова (зайві цифри). Перевірте.`,
       });
     }
   }
@@ -2144,6 +2163,28 @@ router.post('/orders/:letterId/submit-certificate', STU, (req, res) => {
   });
 
   res.json(result);
+});
+
+// B: PATCH /api/student/orders/:letterId/nego — зберегти стан торгу
+// (поточна ставка перевізника/замовника), щоб reload не скидав торг.
+router.patch('/orders/:letterId/nego', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { carrier_nego_offer, client_nego_offer, carrier_id } = req.body || {};
+  try {
+    const op = db.prepare('SELECT id FROM order_progress WHERE session_id=? AND letter_id=?')
+      .get(session.id, req.params.letterId);
+    if (op) {
+      if (client_nego_offer != null)
+        db.prepare('UPDATE order_progress SET client_nego_offer=? WHERE id=?').run(client_nego_offer, op.id);
+    }
+    // ставка перевізника — в carrier_chats цього перевізника
+    if (carrier_id != null && carrier_nego_offer != null) {
+      db.prepare('UPDATE carrier_chats SET nego_offer=? WHERE session_id=? AND carrier_id=?')
+        .run(carrier_nego_offer, session.id, carrier_id);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'nego_save_failed' }); }
 });
 
 // GET /api/student/orders/:letterId/trip-state
