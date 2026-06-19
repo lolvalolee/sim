@@ -2165,6 +2165,25 @@ router.post('/orders/:letterId/submit-certificate', STU, (req, res) => {
   res.json(result);
 });
 
+// Варіант 2: PATCH /api/student/chats/:carrierId/lock — закріпити рейс за чатом
+// (внутрішнє, студент не бачить; для правильних цін/деталей). Закріплення ≠ угода.
+router.patch('/chats/:carrierId/lock', STU, (req, res) => {
+  const session = getSession(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  const { letter_id } = req.body || {};
+  try {
+    const chat = db.prepare('SELECT id FROM carrier_chats WHERE session_id=? AND carrier_id=?')
+      .get(session.id, req.params.carrierId);
+    if (chat) {
+      db.prepare('UPDATE carrier_chats SET locked_letter_id=? WHERE id=?').run(letter_id || null, chat.id);
+    } else {
+      db.prepare("INSERT INTO carrier_chats (id,session_id,carrier_id,messages,deal_status,locked_letter_id) VALUES (?,?,?,'[]','talk',?)")
+        .run(uuidv4(), session.id, req.params.carrierId, letter_id || null);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'lock_failed' }); }
+});
+
 // B: PATCH /api/student/orders/:letterId/nego — зберегти стан торгу
 // (поточна ставка перевізника/замовника), щоб reload не скидав торг.
 router.patch('/orders/:letterId/nego', STU, (req, res) => {
