@@ -8,6 +8,7 @@ const followupScheduler = require('../utils/followup-scheduler');
 const incidentScheduler = require('../utils/incident-scheduler');
 const incidentScenarios = require('../utils/incident-scenarios');
 const documentChecker = require('../utils/document-checker');
+const routeMatcher = require('../utils/route-matcher');
 
 const STU = requireAuth(['student']);
 
@@ -2419,47 +2420,43 @@ router.post('/exchange/post', STU, (req, res) => {
   const { route, vehicle_type, weight, volume, load_date, notes, letter_id } = req.body;
   if (!route) return res.status(400).json({ error: 'route_required' });
 
-  // Зберігаємо пост у cargo_board
+  // Зберігаємо пост у cargo_board (letter_id — прив'язка до рейсу)
   const cargoId = uuidv4();
   try {
     db.prepare(`
-      INSERT INTO cargo_board (id, session_id, student_id, route, vehicle_type, weight, volume, load_date, notes, status)
-      VALUES (?,?,?,?,?,?,?,?,?,'active')
-    `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '');
+      INSERT INTO cargo_board (id, session_id, student_id, route, vehicle_type, weight, volume, load_date, notes, status, letter_id)
+      VALUES (?,?,?,?,?,?,?,?,?,'active',?)
+    `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '', letter_id || null);
   } catch (e) {
     console.error('cargo_board insert:', e.message);
   }
 
-  // Визначаємо напрямки рейсу для підбору (з letter якщо є, інакше з route-тексту)
+  // Визначаємо напрямки рейсу для підбору (з letter_id або fallback-матчинг маршруту)
   let dirsNeeded = [];
   let baseFreight = 0;
   let matchedLetter = null;
+  let resolvedLetterId = letter_id || null;
+
   if (letter_id) {
-    const letter = db.prepare('SELECT dirs, freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(letter_id);
+    const letter = db.prepare('SELECT id, dirs, freight_amount, carrier_range_min, carrier_range_max, load_address, unload_address FROM letters WHERE id=?').get(letter_id);
     if (letter) {
-      try { dirsNeeded = JSON.parse(letter.dirs || '[]'); } catch(e){}
-      baseFreight = letter.freight_amount || (((letter.carrier_range_min||0) + (letter.carrier_range_max||0)) / 2) || 0;
+      dirsNeeded = routeMatcher.parseDirs(letter);
+      baseFreight = routeMatcher.freightRefForLetter(db, letter);
       matchedLetter = letter;
     }
   }
-  // Якщо листа нема — пробуємо знайти за маршрутом (щоб напрямок і орієнтир усе одно були)
+  // Fallback: матчинг міст (кирилиця/латиниця, аліаси) — без letter_id на фронті
   if (!matchedLetter && route) {
     try {
-      const allLetters = db.prepare('SELECT dirs, load_address, unload_address, freight_amount, carrier_range_min, carrier_range_max FROM letters').all();
-      const routeLow = route.toLowerCase();
-      const found = allLetters.find(l => {
-        const a = (l.load_address||'').toLowerCase(), b = (l.unload_address||'').toLowerCase();
-        // груба відповідність міст із маршруту
-        return routeLow.split(/[→\-–—]/).every(part => {
-          const p = part.trim(); if (!p) return true;
-          return a.includes(p) || b.includes(p);
-        });
-      });
+      const allLetters = db.prepare('SELECT id, dirs, load_address, unload_address, freight_amount, carrier_range_min, carrier_range_max FROM letters').all();
+      const found = routeMatcher.matchLetterByRoute(route, allLetters);
       if (found) {
-        try { dirsNeeded = JSON.parse(found.dirs || '[]'); } catch(e){}
-        baseFreight = found.freight_amount || (((found.carrier_range_min||0)+(found.carrier_range_max||0))/2) || 0;
+        dirsNeeded = routeMatcher.parseDirs(found);
+        baseFreight = routeMatcher.freightRefForLetter(db, found);
+        matchedLetter = found;
+        resolvedLetterId = found.id;
       }
-    } catch(e){}
+    } catch (e) {}
   }
 
   // Підбираємо біржових перевізників (for_exchange=1)
@@ -2473,8 +2470,8 @@ router.post('/exchange/post', STU, (req, res) => {
   const matching = exchangeCarriers.filter(c => {
     let cdirs = []; try { cdirs = JSON.parse(c.dirs || '[]'); } catch(e){}
     let ctypes = []; try { ctypes = JSON.parse(c.vehicle_types || '[]'); } catch(e){}
-    // Напрямок: якщо знаємо dirsNeeded — хоч одна спільна; інакше пропускаємо фільтр
-    const dirOk = dirsNeeded.length === 0 || dirsNeeded.some(d => cdirs.includes(d));
+    // Напрямок: БЕЗ dirsNeeded — не підбираємо (раніше лазівка давала невідповідних перевізників)
+    const dirOk = dirsNeeded.length > 0 && dirsNeeded.some(d => cdirs.includes(d));
     // Тип ТЗ: хоч один збігається
     const typeOk = ctypes.some(t => t.toLowerCase().includes(vt) || vt.includes(t.toLowerCase()));
     return dirOk && typeOk;
@@ -2523,13 +2520,13 @@ router.post('/exchange/post', STU, (req, res) => {
   try {
     incidentScheduler.addResumePoint({
       sessionId: session.id, studentId: req.user.id,
-      letterId: letter_id || null,
+      letterId: resolvedLetterId || null,
       type: 'used_exchange', impact: 0,
       context: { route, responders: responders.length },
     });
   } catch(e){}
 
-  res.json({ ok: true, cargo_id: cargoId, responders });
+  res.json({ ok: true, cargo_id: cargoId, letter_id: resolvedLetterId || null, responders });
 });
 
 // №3: PATCH /api/student/exchange/:cargoId — оновлення полів біржового поста

@@ -4277,6 +4277,44 @@ function clientNextOffer(ref,current,studentAsk){
   if(next>=ceil) return {offer:ceil,action:'hold'};
   return {offer:next,action:'concede'};
 }
+// Аліаси міст для matchOrderByRoute (синхронно з server/utils/route-matcher.js)
+const _CITY_ALIASES = {
+  'айзенах':['eisenach'],'eisenach':['айзенах'],
+  'житомир':['zhytomyr'],'вінер нойштадт':['wiener neustadt'],'wiener neustadt':['вінер нойштадт'],
+  'брюссель':['brussels','bruxelles'],'brussels':['брюссель'],
+  'клевань':['klevan'],'сараєво':['sarajevo'],'шяуляй':['siauliai'],
+  'утрехт':['utrecht'],'варшава':['warsaw','warszawa'],'warsaw':['варшава'],
+  'київ':['kyiv','kiev'],'kyiv':['київ'],'львів':['lviv'],'одеса':['odesa'],
+  'дубно':['dubno'],'аліканте':['alicante'],'білефельд':['bielefeld'],'тлумач':['tlumach'],
+};
+const _ROUTE_STOP = new Set(['про','рейс','вантаж','маршрут','можете','взяти','перевезти','доброго','день','який','яка','ціна','авто','тент','реф','для','будь','ласка','можу','скільки','коли','адреса','вага','de','ua','pl','it','fr','nl','sk','lt','es','at','be']);
+
+function _normCityTok(s){
+  return String(s||'').toLowerCase().replace(/[()]/g,' ').replace(/[^\p{L}\p{N}\s\-']/gu,' ').replace(/\s+/g,' ').trim();
+}
+function _expandCityTok(t){
+  const out=new Set([t]);
+  (_CITY_ALIASES[t]||[]).forEach(a=>out.add(_normCityTok(a)));
+  for(const [k,vals] of Object.entries(_CITY_ALIASES)){
+    if(t.includes(k)||k.includes(t)){ out.add(k); vals.forEach(v=>out.add(_normCityTok(v))); }
+  }
+  return [...out];
+}
+function _cityTokensFromRouteText(text){
+  if(!text) return [];
+  const parts=_normCityTok(text).split(/[→\-–—,]/).map(p=>p.trim()).filter(Boolean);
+  const tokens=new Set();
+  for(const part of parts){
+    const cleaned=part.replace(/\([a-z]{2}\)/gi,' ').replace(/\b[a-z]{2}\b/gi,' ').trim();
+    (cleaned.match(/[\p{L}][\p{L}\-']{2,}/gu)||[]).forEach(w=>{
+      if(_ROUTE_STOP.has(w)) return;
+      _expandCityTok(w).forEach(a=>{ if(a.length>=3) tokens.add(a); });
+    });
+    if(cleaned.length>=4&&!_ROUTE_STOP.has(cleaned)) _expandCityTok(cleaned).forEach(a=>tokens.add(a));
+  }
+  return [...tokens];
+}
+
 function extractOfferNum(text){
   if(!text) return null;
   const m=String(text).replace(/\s/g,'').match(/(\d{3,5})/);
@@ -4286,34 +4324,29 @@ function extractOfferNum(text){
 }
 
 // Варіант 2: знайти рейс за маршрутом, який назвав студент у повідомленні.
-// Детерміновано (за містами), НЕ AI. Повертає ord або null.
-// c — перевізник (для звуження за напрямком якщо текст неоднозначний).
+// Детерміновано (за містами + аліаси), НЕ AI. Повертає ord або null.
 function matchOrderByRoute(text, c){
   if(!text) return null;
-  const low = text.toLowerCase();
-  // Кандидати: рейси без перевізника АБО вже цього перевізника
+  const cityWords = _cityTokensFromRouteText(text);
+  if(!cityWords.length) return null;
   const candidates = (S.orders||[]).filter(o => !o.carrierId || o.carrierId === c?.id);
-  // Витягуємо "слова-міста" з тексту (українські/латинські, від 3 літер)
-  const cityWords = (low.match(/[a-zа-яіїєґ'\-]{3,}/gi) || [])
-    .filter(w => !['про','рейс','вантаж','маршрут','можете','взяти','перевезти','доброго','день','який','яка','ціна','авто','тент','реф','для','будь','ласка','можу','скільки','коли','адреса','вага'].includes(w));
   let best = null, bestScore = 0;
   for(const o of candidates){
-    const la = (o.loadAddress||'').toLowerCase();
-    const ua = (o.unloadAddress||'').toLowerCase();
+    const la = _normCityTok(o.loadAddress||'');
+    const ua = _normCityTok(o.unloadAddress||'');
     const dirs = (Array.isArray(o.dirs)?o.dirs.join(' '):(o.dirs||'')).toLowerCase();
     const hay = la + ' ' + ua + ' ' + dirs;
     let score = 0;
     for(const w of cityWords){
       if(hay.includes(w)) score++;
     }
-    // Бонус якщо збіглись і відправлення, і призначення
     const fromHit = cityWords.some(w => la.includes(w));
     const toHit = cityWords.some(w => ua.includes(w));
-    if(fromHit && toHit) score += 2;
+    if(fromHit && toHit) score += 3;
+    else if(fromHit || toHit) score += 1;
     if(score > bestScore){ bestScore = score; best = o; }
   }
-  // Потрібен хоча б 1 чіткий збіг міста (інакше не вгадуємо навмання)
-  return bestScore >= 1 ? best : null;
+  return bestScore >= 2 ? best : null;
 }
 
 // №1: прибирає порожні дужки "Місто ()" → "Місто" (дані seed мали порожній код країни)
@@ -7896,6 +7929,34 @@ function renderExchangeList(){
   </div>`;
 }
 
+function exchangeOrderOptions(selectedId){
+  return (S.orders||[]).filter(o=>!getOrderStateInfo(o).disabled).map((ord,i)=>{
+    const route=extractRouteFromAddresses(ord.loadAddress,ord.unloadAddress);
+    const sel=ord.id===selectedId?' selected':'';
+    return `<option value="${ord.id}"${sel}>№${i+1} ${escapeHtml(route)}</option>`;
+  }).join('');
+}
+
+function onExchangeLetterPick(){
+  const sel=document.getElementById('cb-letter')?.value;
+  if(!sel) return;
+  const ord=S.orders.find(o=>o.id===sel);
+  if(!ord) return;
+  const routeEl=document.getElementById('cb-route');
+  if(routeEl) routeEl.value=extractRouteFromAddresses(ord.loadAddress,ord.unloadAddress);
+  const veh=document.getElementById('cb-vehicle');
+  if(veh && ord.vehicle){
+    const v=ord.vehicle.toLowerCase();
+    for(const opt of veh.options){
+      if(opt.text.toLowerCase().includes(v.split(/[\s,]/)[0])||v.includes(opt.text.toLowerCase().split(' ')[0])){
+        veh.value=opt.text; break;
+      }
+    }
+  }
+  const dateEl=document.getElementById('cb-date');
+  if(dateEl && ord.loadDate && !dateEl.value) dateEl.value=ord.loadDate;
+}
+
 function openAddCargo(editIdx){
   const isEdit = editIdx !== undefined;
   const existing = isEdit ? (S.cargoBoard||[])[editIdx] : {};
@@ -7906,8 +7967,15 @@ function openAddCargo(editIdx){
     <div class="modal-title">${isEdit?'Редагувати вантаж':'Розмістити вантаж на біржу'}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:16px">
       <div style="grid-column:1/-1">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Рейс з листа *</label>
+        <select id="cb-letter" onchange="onExchangeLetterPick()" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none">
+          <option value="">— Оберіть рейс —</option>
+          ${exchangeOrderOptions(existing.letter_id||'')}
+        </select>
+      </div>
+      <div style="grid-column:1/-1">
         <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Маршрут *</label>
-        <input id="cb-route" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="Наприклад: Київ → Варшава" value="${existing.route||''}">
+        <input id="cb-route" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="Наприклад: Айзенах → Житомир" value="${existing.route||''}">
       </div>
       <div>
         <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Тип авто *</label>
@@ -7943,10 +8011,16 @@ function openAddCargo(editIdx){
 }
 
 function saveCargo(editIdx){
+  const letterId=document.getElementById('cb-letter')?.value||'';
   const route=document.getElementById('cb-route')?.value.trim();
+  if(!letterId && (editIdx===undefined||editIdx===null||editIdx==='undefined')){
+    notify('Оберіть рейс зі списку','err');return;
+  }
   if(!route){notify('Введіть маршрут','err');return;}
+  const existing = (editIdx!==undefined&&editIdx!==null&&editIdx!=='undefined') ? (S.cargoBoard||[])[editIdx] : {};
   const item={
     cargoId: 'cb_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), // №4: стабільний id
+    letter_id: letterId || existing.letter_id || null,
     route,
     vehicle_type:document.getElementById('cb-vehicle')?.value||'Тент',
     load_date:document.getElementById('cb-date')?.value||'',
@@ -8035,13 +8109,12 @@ function saveCargoBoardToServer(){ /* deprecated — синхронізація 
 async function scheduleCarrierFromExchange(cargoIdx){
   const cargo=S.cargoBoard?.[cargoIdx]; if(!cargo) return;
   const token=localStorage.getItem('docaa_token');
-  // Знаходимо letter_id якщо цей вантаж пов'язаний з рейсом (за маршрутом)
-  let letterId = null;
-  const matchOrd = S.orders?.find(o => {
-    const r = (o.dirs||[]).join(' ').toLowerCase();
-    return cargo.route && r && cargo.route.toLowerCase().includes((o.dirs?.[0]||'').toLowerCase());
-  });
-  if (matchOrd) letterId = matchOrd.id;
+  // letter_id з поста (обов'язковий при створенні) або fallback-матчинг маршруту
+  let letterId = cargo.letter_id || null;
+  if (!letterId && cargo.route) {
+    const matched = matchOrderByRoute(cargo.route, null);
+    if (matched) letterId = matched.id;
+  }
 
   try {
     const resp = await fetch('/api/student/exchange/post', {
@@ -8059,6 +8132,10 @@ async function scheduleCarrierFromExchange(cargoIdx){
     });
     if(!resp.ok) return;
     const data = await resp.json();
+    // Зберігаємо letter_id з сервера (може уточнити через fallback-матчинг)
+    if (data.letter_id && S.cargoBoard?.[cargoIdx]) {
+      S.cargoBoard[cargoIdx].letter_id = data.letter_id;
+    }
     // №6: прив'язуємо серверний cargo_id до локального поста (для коректного DELETE)
     if (data.cargo_id && S.cargoBoard?.[cargoIdx]) {
       S.cargoBoard[cargoIdx].cargoId = data.cargo_id;
@@ -8108,19 +8185,32 @@ async function initExchangeResponder(responder, cargo){
   S.contactedCarriers.add(cid);
 
   const carrier = S.carriers.find(c=>c.id===cid) || {name:responder.name, person:responder.person};
-  // №біржа: передаємо freightRef — БЕЗ нього межі торгу не діяли і перевізник
-  // скидав 3500→1900. Тепер коридор ref−300…ref+100 застосовується і на біржі.
   const exFreightRef = responder.freight_ref || null;
-  // Зберігаємо ref на рейсі (для подальших повідомлень торгу в чаті)
-  if (exFreightRef) {
-    const ordMatch = S.orders.find(o => o.dirs?.some(d => (carrier.dirs||'').includes(d)));
-    if (ordMatch && !ordMatch.freightRef) ordMatch.freightRef = exFreightRef;
+  // Закріплюємо чат за рейсом поста (Варіант 2) — щоб торг B мав fref
+  if (!S.chatLockedLetter) S.chatLockedLetter = {};
+  const lockId = cargo.letter_id || (cargo.route ? matchOrderByRoute(cargo.route, carrier)?.id : null);
+  if (lockId) {
+    S.chatLockedLetter[cid] = lockId;
+    const ordMatch = S.orders.find(o => o.id === lockId);
+    if (ordMatch && exFreightRef) {
+      ordMatch.freightRef = ordMatch.freightRef || exFreightRef;
+      if (ordMatch.carrierNegoOffer == null && responder.start_price > 0) {
+        ordMatch.carrierNegoOffer = roundTo50(responder.start_price);
+      }
+    }
+    try {
+      const token=localStorage.getItem('docaa_token');
+      fetch(`/api/student/chats/${cid}/lock`,{method:'PATCH',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+        body:JSON.stringify({letter_id:lockId})}).catch(()=>{});
+    } catch(e){}
   }
+  const ordCtx = lockId ? S.orders.find(o => o.id === lockId) : null;
   const sys = buildCarrierSys(carrier, {
     route: cargo.route, cargo: cargo.vehicle_type,
     vehicle: cargo.vehicle_type,
     loadDate: cargo.load_date||'уточнюється', delivDate:'',
-    freightRef: exFreightRef,
+    freightRef: exFreightRef || ordCtx?.freightRef || ordCtx?.clientFreight || null,
   });
 
   // Роль: дає ціну або питає деталі
@@ -10004,6 +10094,7 @@ async function loadSessionFromServer(token){
   if (Array.isArray(data.cargo_board)) {
     S.cargoBoard = data.cargo_board.map(c => ({
       cargoId: c.id, // серверний id як стабільний ключ
+      letter_id: c.letter_id || null,
       route: c.route, vehicle_type: c.vehicle_type, weight: c.weight,
       volume: c.volume, load_date: c.load_date, notes: c.notes,
       status: c.status || 'active', views: c.views || 0,
