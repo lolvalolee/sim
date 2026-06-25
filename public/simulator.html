@@ -7978,34 +7978,6 @@ function renderExchangeList(){
   </div>`;
 }
 
-function exchangeOrderOptions(selectedId){
-  return (S.orders||[]).filter(o=>!getOrderStateInfo(o).disabled).map((ord,i)=>{
-    const route=extractRouteFromAddresses(ord.loadAddress,ord.unloadAddress);
-    const sel=ord.id===selectedId?' selected':'';
-    return `<option value="${ord.id}"${sel}>№${i+1} ${escapeHtml(route)}</option>`;
-  }).join('');
-}
-
-function onExchangeLetterPick(){
-  const sel=document.getElementById('cb-letter')?.value;
-  if(!sel) return;
-  const ord=S.orders.find(o=>o.id===sel);
-  if(!ord) return;
-  const routeEl=document.getElementById('cb-route');
-  if(routeEl) routeEl.value=extractRouteFromAddresses(ord.loadAddress,ord.unloadAddress);
-  const veh=document.getElementById('cb-vehicle');
-  if(veh && ord.vehicle){
-    const v=ord.vehicle.toLowerCase();
-    for(const opt of veh.options){
-      if(opt.text.toLowerCase().includes(v.split(/[\s,]/)[0])||v.includes(opt.text.toLowerCase().split(' ')[0])){
-        veh.value=opt.text; break;
-      }
-    }
-  }
-  const dateEl=document.getElementById('cb-date');
-  if(dateEl && ord.loadDate && !dateEl.value) dateEl.value=ord.loadDate;
-}
-
 function openAddCargo(editIdx){
   const isEdit = editIdx !== undefined;
   const existing = isEdit ? (S.cargoBoard||[])[editIdx] : {};
@@ -8014,17 +7986,11 @@ function openAddCargo(editIdx){
   mo.onclick=e=>{if(e.target===mo)mo.remove();};
   mo.innerHTML=`<div class="modal-box" style="max-width:500px">
     <div class="modal-title">${isEdit?'Редагувати вантаж':'Розмістити вантаж на біржу'}</div>
+    <p style="font-size:12px;color:var(--t3);margin:-8px 0 14px;line-height:1.45">Введіть дані з листа замовника самостійно. Маршрут має збігатися з одним із ваших рейсів.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:16px">
       <div style="grid-column:1/-1">
-        <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Рейс з листа *</label>
-        <select id="cb-letter" onchange="onExchangeLetterPick()" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none">
-          <option value="">— Оберіть рейс —</option>
-          ${exchangeOrderOptions(existing.letter_id||'')}
-        </select>
-      </div>
-      <div style="grid-column:1/-1">
         <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Маршрут *</label>
-        <input id="cb-route" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="Наприклад: Айзенах → Житомир" value="${existing.route||''}">
+        <input id="cb-route" class="form-input" style="width:100%;background:var(--bg3);border:1px solid var(--b2);color:var(--t1);font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:var(--r);outline:none" placeholder="Наприклад: Суми → Краків" value="${existing.route||''}">
       </div>
       <div>
         <label style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--t3);font-weight:600;display:block;margin-bottom:4px">Тип авто *</label>
@@ -8060,16 +8026,17 @@ function openAddCargo(editIdx){
 }
 
 function saveCargo(editIdx){
-  const letterId=document.getElementById('cb-letter')?.value||'';
   const route=document.getElementById('cb-route')?.value.trim();
-  if(!letterId && (editIdx===undefined||editIdx===null||editIdx==='undefined')){
-    notify('Оберіть рейс зі списку','err');return;
-  }
   if(!route){notify('Введіть маршрут','err');return;}
+  const matched = matchOrderByRoute(route, null);
+  if(!matched && (editIdx===undefined||editIdx===null||editIdx==='undefined')){
+    notify('Маршрут не збігається з жодним рейсом з листів. Вкажіть міста завантаження та розвантаження','err');
+    return;
+  }
   const existing = (editIdx!==undefined&&editIdx!==null&&editIdx!=='undefined') ? (S.cargoBoard||[])[editIdx] : {};
   const item={
     cargoId: 'cb_' + Date.now() + '_' + Math.random().toString(36).slice(2,6), // №4: стабільний id
-    letter_id: letterId || existing.letter_id || null,
+    letter_id: matched?.id || existing.letter_id || null,
     route,
     vehicle_type:document.getElementById('cb-vehicle')?.value||'Тент',
     load_date:document.getElementById('cb-date')?.value||'',
@@ -8158,28 +8125,32 @@ function saveCargoBoardToServer(){ /* deprecated — синхронізація 
 async function scheduleCarrierFromExchange(cargoIdx){
   const cargo=S.cargoBoard?.[cargoIdx]; if(!cargo) return;
   const token=localStorage.getItem('docaa_token');
-  // letter_id з поста (обов'язковий при створенні) або fallback-матчинг маршруту
-  let letterId = cargo.letter_id || null;
-  if (!letterId && cargo.route) {
-    const matched = matchOrderByRoute(cargo.route, null);
-    if (matched) letterId = matched.id;
-  }
+  const localCargoId = cargo.cargoId;
 
   try {
     const resp = await fetch('/api/student/exchange/post', {
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body: JSON.stringify({
+      body:JSON.stringify({
         route: cargo.route,
         vehicle_type: cargo.vehicle_type,
         weight: cargo.weight,
         volume: cargo.volume,
         load_date: cargo.load_date,
         notes: cargo.notes,
-        letter_id: letterId,
       }),
     });
-    if(!resp.ok) return;
+    if(!resp.ok){
+      let errMsg = 'Не вдалося розмістити вантаж на біржі';
+      try {
+        const err = await resp.json();
+        if (err.error === 'route_no_match') errMsg = err.message || errMsg;
+      } catch(e){}
+      notify(errMsg,'err');
+      S.cargoBoard = (S.cargoBoard||[]).filter(c => c.cargoId !== localCargoId);
+      renderExchangeList();
+      return;
+    }
     const data = await resp.json();
     // Зберігаємо letter_id з сервера (може уточнити через fallback-матчинг)
     if (data.letter_id && S.cargoBoard?.[cargoIdx]) {

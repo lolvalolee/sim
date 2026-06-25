@@ -3,6 +3,8 @@ const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
+const { normalizeLetterOffsets } = require('../server/utils/letter-offsets');
+
 const db = new Database(process.env.DB_PATH || './data/simulator.db');
 
 // Перевіряємо чи вже є листи
@@ -343,15 +345,16 @@ const insert = db.prepare(`
 `);
 
 const insertMany = db.transaction((letters) => {
-  for (const l of letters) {
+  letters.forEach((l, i) => {
+    const off = normalizeLetterOffsets(i);
     insert.run(
       uuidv4(), l.code, l.type, l.country, l.from_name, l.company, l.email_addr,
       l.subject, l.body, l.missing, l.vehicle, l.dirs,
       l.freight_fixed ? 1 : 0, l.freight_amount || null, l.freight_min || null, l.freight_max || null,
       l.carrier_range_min, l.carrier_range_max, l.distance,
-      l.load_day_offset, l.deliv_day_offset
+      off.load_day_offset, off.deliv_day_offset
     );
-  }
+  });
 });
 
 insertMany(LETTERS);

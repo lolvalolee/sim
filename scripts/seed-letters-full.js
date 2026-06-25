@@ -8,6 +8,8 @@ const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
+const { normalizeLetterOffsets } = require('../server/utils/letter-offsets');
+
 const db = new Database(process.env.DB_PATH || './data/simulator.db');
 db.pragma('foreign_keys = ON');
 
@@ -50,18 +52,19 @@ const ins = db.prepare(`
 `);
 
 const insertAll = db.transaction(arr=>{
-  for(const l of arr){
+  arr.forEach((l, i)=>{
+    const off = normalizeLetterOffsets(i);
     ins.run(
       uuidv4(),l.code,l.type,l.country,l.from_name,l.company,l.email_addr,
       l.subject,l.body,JSON.stringify(l.missing),l.vehicle,JSON.stringify(l.dirs),
       l.freight_fixed?1:0, l.freight_amount, l.freight_min, l.freight_max,
       l.c_min, l.c_max, l.distance,
-      l.load_day_offset, l.deliv_day_offset,
+      off.load_day_offset, off.deliv_day_offset,
       l.difficulty, l.task_hint,
       l.has_photo?1:0, l.photo_file,
       l.contract_number, l.incoterms, l.scenario, l.attachment_type
     );
-  }
+  });
 });
 
 const LETTERS = [

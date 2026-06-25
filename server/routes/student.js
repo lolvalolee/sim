@@ -2485,46 +2485,50 @@ router.post('/exchange/post', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
 
-  const { route, vehicle_type, weight, volume, load_date, notes, letter_id } = req.body;
+  const { route, vehicle_type, weight, volume, load_date, notes } = req.body;
   if (!route) return res.status(400).json({ error: 'route_required' });
 
-  // Зберігаємо пост у cargo_board (letter_id — прив'язка до рейсу)
+  // Матчинг маршруту лише до листів набору студента (студент вводить дані сам)
+  let dirsNeeded = [];
+  let baseFreight = 0;
+  let matchedLetter = null;
+  let resolvedLetterId = null;
+
+  const assignment = session.assignment_id
+    ? db.prepare('SELECT letter_ids FROM assignments WHERE id=?').get(session.assignment_id)
+    : null;
+  let assignmentLetterIds = [];
+  try { assignmentLetterIds = JSON.parse(assignment?.letter_ids || '[]'); } catch (e) {}
+
+  const assignmentLetters = assignmentLetterIds
+    .map(id => db.prepare('SELECT id, dirs, load_address, unload_address, freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(id))
+    .filter(Boolean);
+
+  try {
+    const found = routeMatcher.matchLetterByRoute(route, assignmentLetters);
+    if (found) {
+      dirsNeeded = routeMatcher.parseDirs(found);
+      baseFreight = routeMatcher.freightRefForLetter(db, found);
+      matchedLetter = found;
+      resolvedLetterId = found.id;
+    }
+  } catch (e) {}
+
+  if (!matchedLetter) {
+    return res.status(400).json({
+      error: 'route_no_match',
+      message: 'Маршрут не збігається з жодним рейсом з ваших листів. Вкажіть міста завантаження та розвантаження (напр. Суми → Краків).',
+    });
+  }
+
   const cargoId = uuidv4();
   try {
     db.prepare(`
       INSERT INTO cargo_board (id, session_id, student_id, route, vehicle_type, weight, volume, load_date, notes, status, letter_id)
       VALUES (?,?,?,?,?,?,?,?,?,'active',?)
-    `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '', letter_id || null);
+    `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '', resolvedLetterId);
   } catch (e) {
     console.error('cargo_board insert:', e.message);
-  }
-
-  // Визначаємо напрямки рейсу для підбору (з letter_id або fallback-матчинг маршруту)
-  let dirsNeeded = [];
-  let baseFreight = 0;
-  let matchedLetter = null;
-  let resolvedLetterId = letter_id || null;
-
-  if (letter_id) {
-    const letter = db.prepare('SELECT id, dirs, freight_amount, carrier_range_min, carrier_range_max, load_address, unload_address FROM letters WHERE id=?').get(letter_id);
-    if (letter) {
-      dirsNeeded = routeMatcher.parseDirs(letter);
-      baseFreight = routeMatcher.freightRefForLetter(db, letter);
-      matchedLetter = letter;
-    }
-  }
-  // Fallback: матчинг міст (кирилиця/латиниця, аліаси) — без letter_id на фронті
-  if (!matchedLetter && route) {
-    try {
-      const allLetters = db.prepare('SELECT id, dirs, load_address, unload_address, freight_amount, carrier_range_min, carrier_range_max FROM letters').all();
-      const found = routeMatcher.matchLetterByRoute(route, allLetters);
-      if (found) {
-        dirsNeeded = routeMatcher.parseDirs(found);
-        baseFreight = routeMatcher.freightRefForLetter(db, found);
-        matchedLetter = found;
-        resolvedLetterId = found.id;
-      }
-    } catch (e) {}
   }
 
   // Підбираємо біржових перевізників (for_exchange=1)
