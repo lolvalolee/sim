@@ -192,6 +192,20 @@ const CLIENT_TEXTS = {
     'У нас вантаж стоїть. Авто буде? Розкажіть що з рейсом.',
   ],
 
+  // Розбіжність дат: у замовника раніше ніж у перевізника (клієнт 27, перевізник 28)
+  date_mismatch_client_waiting: [
+    'Доброго дня. Сьогодні дата завантаження — де машина? Чому ще не на місці?',
+    'У нас сьогодні завантаження. Де авто? Водій не виходить на зв\'язок.',
+    'Сьогодні має бути завантаження — що з рейсом? Чекаємо машину.',
+  ],
+
+  // Розбіжність дат: у перевізника раніше ніж у замовника (перевізник 27, клієнт 28)
+  date_mismatch_carrier_waiting: [
+    'На місці завантаження. Вантаж не готовий — коли буде?',
+    'Приїхали, склад каже вантаж ще не готовий. Що робимо?',
+    'Ми на завантаженні, але вантаж не віддають. Уточніть, будь ласка.',
+  ],
+
   // M — Реакція замовника на простій: відмова (для торгу №1)
   simple_client_refuse: [
     'Простій не з нашої вини. Не платимо.',
@@ -405,6 +419,8 @@ function textPoolForType(type) {
     'client_docs_ok_after_fix': CLIENT_TEXTS.docs_ok_after_fix,
     'client_delivery_confirmed': CLIENT_TEXTS.delivery_confirmed,
     'client_where_is_truck': CLIENT_TEXTS.where_is_truck,
+    'client_date_mismatch': CLIENT_TEXTS.date_mismatch_client_waiting,
+    'carrier_date_mismatch': CARRIER_TEXTS.date_mismatch_carrier_waiting,
     'client_simple_refuse': CLIENT_TEXTS.simple_client_refuse,
     'client_simple_partial': CLIENT_TEXTS.simple_client_partial,
     'client_simple_agree': CLIENT_TEXTS.simple_client_agree,
@@ -415,6 +431,7 @@ function textPoolForType(type) {
 // Канал доставки (carrier=чат, client=пошта)
 function channelForType(type) {
   if (type.startsWith('client_')) return 'client';
+  if (type === 'carrier_date_mismatch') return 'carrier';
   if (type.startsWith('at_border_clear') || type === 'at_border_need_pd') return 'carrier';
   return 'carrier';
 }

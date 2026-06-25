@@ -9,6 +9,7 @@ const incidentScheduler = require('../utils/incident-scheduler');
 const incidentScenarios = require('../utils/incident-scenarios');
 const documentChecker = require('../utils/document-checker');
 const routeMatcher = require('../utils/route-matcher');
+const simTime = require('../utils/sim-time');
 
 const STU = requireAuth(['student']);
 
@@ -24,9 +25,8 @@ function assignScenariosIfNeeded(letterIds) {
 
   // Чи вже призначені сценарії і хвилі?
   const scenariosDone = letters.every(l => l.scenario_id != null);
-  // Хвилі вважаємо призначеними лише якщо є хоч один лист з appear_day > 1
-  // (бо коректний розподіл 4+2+2 завжди дає листи на день 2 і 3)
-  const wavesDone = letters.some(l => (l.appear_day || 1) > 1);
+  // Хвилі вважаємо призначеними якщо є лист з appear_half=2 (4+2+2 на д1/д2)
+  const wavesDone = letters.some(l => (l.appear_half || 1) === 2);
 
   // Якщо і сценарії, і хвилі вже є — нічого не робимо
   if (scenariosDone && wavesDone) return;
@@ -97,31 +97,60 @@ function assignScenariosIfNeeded(letterIds) {
   console.log(`[scenarios] Призначено сценарії: ${letters.map((l, i) => `${l.id.slice(0,8)}=R${assignments[i]}`).join(', ')}`);
 }
 
-// Призначення appear_day — хвилі листів 4+2+2
-// День 1: перші 4, День 2: +2, День 3: +2
-// (для кількості != 8 — пропорційно ~50/25/25)
+// Призначення appear_day / appear_half — хвилі 4+2+2
+// День 1 зі старту: 4 листи
+// День 2 зранку (9:00): +2
+// День 2 друга половина (15:00): +2
 function assignAppearDays(letters) {
-  const updDay = db.prepare('UPDATE letters SET appear_day=? WHERE id=?');
+  const updDay = db.prepare('UPDATE letters SET appear_day=?, appear_half=? WHERE id=?');
   const n = letters.length;
-  let waves;
+  let plan;
   if (n === 8) {
-    waves = [4, 2, 2];
+    plan = [
+      { day: 1, half: 1 }, { day: 1, half: 1 }, { day: 1, half: 1 }, { day: 1, half: 1 },
+      { day: 2, half: 1 }, { day: 2, half: 1 },
+      { day: 2, half: 2 }, { day: 2, half: 2 },
+    ];
   } else {
     const d1 = Math.ceil(n * 0.5);
-    const d2 = Math.ceil((n - d1) / 2);
-    const d3 = n - d1 - d2;
-    waves = [d1, d2, d3];
+    const d2m = Math.ceil((n - d1) / 2);
+    const d2a = n - d1 - d2m;
+    plan = [];
+    for (let i = 0; i < d1; i++) plan.push({ day: 1, half: 1 });
+    for (let i = 0; i < d2m; i++) plan.push({ day: 2, half: 1 });
+    for (let i = 0; i < d2a; i++) plan.push({ day: 2, half: 2 });
   }
-  let idx = 0;
-  for (let day = 1; day <= waves.length; day++) {
-    for (let k = 0; k < waves[day - 1]; k++) {
-      if (idx < letters.length) {
-        updDay.run(day, letters[idx].id);
-        idx++;
-      }
-    }
+  for (let i = 0; i < letters.length; i++) {
+    const p = plan[i] || { day: 1, half: 1 };
+    updDay.run(p.day, p.half, letters[i].id);
   }
-  console.log(`[scenarios] Хвилі листів (appear_day): ${waves.join('+')}`);
+  console.log(`[scenarios] Хвилі листів: 4+2+2 (appear_day/half), n=${n}`);
+}
+
+function maybeScheduleDateMismatch(session, letterId) {
+  const op = db.prepare('SELECT * FROM order_progress WHERE session_id=? AND letter_id=?')
+    .get(session.id, letterId);
+  if (!op?.client_agreed_date || !op?.carrier_agreed_date) return;
+  if (op.client_agreed_date === op.carrier_agreed_date) return;
+
+  const letter = db.prepare('SELECT scenario_id FROM letters WHERE id=?').get(letterId);
+  const chat = op.carrier_id
+    ? db.prepare('SELECT id FROM carrier_chats WHERE session_id=? AND carrier_id=?').get(session.id, op.carrier_id)
+    : null;
+
+  try {
+    incidentScheduler.scheduleDateMismatchIncidents({
+      sessionId: session.id,
+      studentId: session.student_id,
+      letterId,
+      clientDate: op.client_agreed_date,
+      carrierDate: op.carrier_agreed_date,
+      carrierChatId: chat?.id || null,
+      scenarioId: letter?.scenario_id || null,
+    });
+  } catch (e) {
+    console.error('[date-mismatch] schedule error:', e.message);
+  }
 }
 
 // ── GET SESSION (or create new) ───────────────────────────────
@@ -133,8 +162,8 @@ router.get('/session', STU, (req, res) => {
   const group = db.prepare('SELECT id,start_date,started_at,rates,idle_pause_min FROM groups WHERE id=?').get(member.group_id);
   if (!group) return res.status(404).json({ error: 'Group not found.' });
 
-  // Якщо група ще не стартувала — повертаємо заглушку (200 OK, не помилка)
-  if (!group.started_at) {
+  // Симуляція ще не доступна: група не стартована АБО start_date у майбутньому
+  if (!group.started_at || simTime.isRealDateBeforeToday(group.start_date)) {
     return res.json({
       not_started: true,
       start_date: group.start_date || null,
@@ -149,11 +178,11 @@ router.get('/session', STU, (req, res) => {
     if (!assignment) return res.status(404).json({ error: 'No assignment. Contact your lecturer.' });
 
     const startDate = group.start_date;
-    const groupRates = group.rates || '[41.5,41.65,41.8,41.7,41.9]';
+    const groupRates = group.rates || '[41.5,41.65,41.8,41.7,41.9,42.05,41.95,42.1]';
     const id = uuidv4();
     const version = new Date().toISOString();
 
-    db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date,rates,version) VALUES (?,?,?,?,?,?)`)
+    db.prepare(`INSERT INTO sessions (id,student_id,assignment_id,start_date,rates,version,sim_clock_at,last_heartbeat_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))`)
       .run(id, req.user.id, assignment.id, startDate, groupRates, version);
 
     session = db.prepare('SELECT * FROM sessions WHERE id=?').get(id);
@@ -163,8 +192,11 @@ router.get('/session', STU, (req, res) => {
     return res.status(403).json({ error: 'session_stopped', message: 'Вашу сесію зупинив лектор. Зверніться до лектора.' });
   }
 
-  // Перевірка завершення симуляції (5 днів пройшло)
-  if ((session.timer_day || 1) > 5) {
+  // Синхронізуємо сим-час на сервері (джерело істини)
+  const clock = simTime.syncSessionTime(session.id, { heartbeat: true });
+  session = db.prepare('SELECT * FROM sessions WHERE student_id=?').get(req.user.id);
+
+  if (clock?.ended || (session.timer_day || 1) > simTime.SIM_DAYS_MAX) {
     return res.json({
       ended: true,
       profit: session.profit || 0,
@@ -180,9 +212,9 @@ router.get('/session', STU, (req, res) => {
   assignScenariosIfNeeded(letterIds);
 
   const letters = letterIds
-    .map(lid => db.prepare('SELECT * FROM letters WHERE id=?').get(lid))
-    .filter(Boolean)
-    .map(l => {
+    .map((lid, letterIndex) => {
+      const l = db.prepare('SELECT * FROM letters WHERE id=?').get(lid);
+      if (!l) return null;
       // Знаходимо параметри клієнта (місто) для зручності UI
       const client = l.client_id ? db.prepare('SELECT city FROM clients WHERE id=?').get(l.client_id) : null;
       let parsedDirs = [];
@@ -196,8 +228,7 @@ router.get('/session', STU, (req, res) => {
       let v2 = null;
       try {
         v2 = db.prepare('SELECT * FROM letters_v2 WHERE letter_id=?').get(l.id) || null;
-      } catch (e) { v2 = null; } // таблиці ще нема — працюємо без v2
-      // Ціна за даними ODS: фіксована тільки якщо завдання НЕ "погодити фрахт"
+      } catch (e) { v2 = null; }
       let priceVisible = !!l.freight_fixed;
       if (v2) {
         const negotiate = /погодити фрахт/i.test(v2.hidden_task || '') || /погодити фрахт/i.test(v2.data_required || '');
@@ -213,8 +244,12 @@ router.get('/session', STU, (req, res) => {
         to_city: toCity,
         v2,
         price_visible: priceVisible ? 1 : 0,
+        appear_half: l.appear_half || 1,
+        // Перші 4 листи: завантаження +2 сим-дні від start_date
+        effective_load_offset: letterIndex < 4 ? 2 : (l.load_day_offset || 4),
       };
-    });
+    })
+    .filter(Boolean);
 
   // Load threads and chats
   const emailThreads = db.prepare('SELECT * FROM email_threads WHERE session_id=?').all(session.id);
@@ -227,11 +262,17 @@ router.get('/session', STU, (req, res) => {
       status: session.status,
       timer_ms: session.timer_ms,
       timer_day: session.timer_day,
+      sim_hour: clock?.sim_hour ?? 9,
+      sim_min: clock?.sim_min ?? 0,
+      sim_date: clock?.sim_date ?? session.start_date,
+      paused: clock?.paused ?? !!session.paused,
+      auto_paused: clock?.auto_paused ?? !!session.auto_paused,
       start_date: session.start_date,
       profit: session.profit,
       rates: JSON.parse(session.rates),
       version: session.version || '',
       idle_pause_min: group.idle_pause_min != null ? group.idle_pause_min : null,
+      sim_days_max: simTime.SIM_DAYS_MAX,
     },
     letters,
     email_threads: emailThreads.map(t => ({ ...t, messages: JSON.parse(t.messages) })),
@@ -252,6 +293,8 @@ router.get('/session/version', STU, (req, res) => {
   const session = db.prepare('SELECT id, version, status FROM sessions WHERE student_id=?').get(req.user.id);
   if (!session) return res.json({ exists: false });
 
+  try { simTime.syncSessionTime(session.id, { heartbeat: true }); } catch (e) {}
+
   // Швидкий запуск інцидентів для цієї сесії (миттєвість при polling)
   try { incidentScheduler.runDueIncidents(session.id); } catch (e) {}
   try { incidentScheduler.runDueDocumentChecks(session.id); } catch (e) {}
@@ -265,17 +308,39 @@ router.get('/session/version', STU, (req, res) => {
   });
 });
 
+// GET /api/student/session/time — легкий poll сим-годинника (сервер = джерело істини)
+router.get('/session/time', STU, (req, res) => {
+  const session = db.prepare('SELECT id, status FROM sessions WHERE student_id=?').get(req.user.id);
+  if (!session) return res.status(404).json({ error: 'No session' });
+  if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
+
+  const clock = simTime.syncSessionTime(session.id, { heartbeat: true });
+  if (!clock) return res.status(404).json({ error: 'No session' });
+
+  if (clock.ended) {
+    return res.json({ ended: true, timer_day: clock.timer_day });
+  }
+
+  try { incidentScheduler.runDueIncidents(session.id); } catch (e) {}
+
+  res.json({ ok: true, clock });
+});
+
 // ── SAVE STATE (heartbeat every 30s) ─────────────────────────
 router.post('/session/save', STU, (req, res) => {
-  const { timer_ms, timer_day, profit } = req.body;
+  const { profit } = req.body;
   const session = db.prepare('SELECT id,status FROM sessions WHERE student_id=?').get(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
   if (session.status === 'stopped') return res.status(403).json({ error: 'session_stopped' });
 
-  db.prepare('UPDATE sessions SET timer_ms=?, timer_day=?, profit=? WHERE id=?')
-    .run(timer_ms || 0, timer_day || 1, profit || 0, session.id);
+  simTime.syncSessionTime(session.id, { heartbeat: true });
 
-  res.json({ ok: true });
+  if (profit != null) {
+    db.prepare('UPDATE sessions SET profit=? WHERE id=?').run(profit || 0, session.id);
+  }
+
+  const clock = simTime.getSessionClock(session.id);
+  res.json({ ok: true, clock });
 });
 
 // ── EMAIL THREAD ──────────────────────────────────────────────
@@ -1047,6 +1112,7 @@ router.post('/orders/:letterId/confirm-client', STU, async (req, res) => {
     });
     // №9/11: фіксуємо угоду в session_deals (джерело істини для перевірок)
     upsertDeal(session.id, letterId, 'client', null, parseFloat(price), date);
+    maybeScheduleDateMismatch(session, letterId);
   } else {
     // reject — у журнал теж пишемо для дебагу
     logOrderEvent(session.id, letterId, 'client_confirm_rejected', {
@@ -1370,6 +1436,8 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
     } catch (e) {
       console.error('scheduleInitialIncidents error:', e.message);
     }
+
+    maybeScheduleDateMismatch(session, letterId);
   }
 
   res.json({
@@ -2979,7 +3047,7 @@ router.post('/session/pause', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'no_session' });
   try {
-    db.prepare('UPDATE sessions SET paused=1, paused_at=datetime(\'now\') WHERE id=?').run(session.id);
+    simTime.pauseSession(session.id, { auto: false });
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -2988,25 +3056,23 @@ router.post('/session/resume', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'no_session' });
   try {
-    // Зміщуємо всі pending інциденти на тривалість паузи
     const sess = db.prepare('SELECT paused_at FROM sessions WHERE id=?').get(session.id);
     if (sess?.paused_at) {
       const pausedAt = new Date(sess.paused_at + 'Z').getTime();
       const now = Date.now();
       const elapsedMs = now - pausedAt;
       if (elapsedMs > 0) {
-        // SQLite datetime — зсуваємо на elapsedMs мілісекунд
         const shiftSec = Math.floor(elapsedMs / 1000);
         db.prepare(`
           UPDATE incidents
           SET scheduled_at = datetime(scheduled_at, '+' || ? || ' seconds')
           WHERE session_id=? AND state='pending'
         `).run(shiftSec, session.id);
-        console.log(`[session/resume] Зсунуто інциденти на ${shiftSec}с (пауза)`);
       }
     }
-    db.prepare('UPDATE sessions SET paused=0, paused_at=NULL WHERE id=?').run(session.id);
-    res.json({ ok: true });
+    simTime.resumeSession(session.id);
+    const clock = simTime.getSessionClock(session.id);
+    res.json({ ok: true, clock });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

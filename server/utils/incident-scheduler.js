@@ -48,6 +48,106 @@ function nowPlus(ms) {
   return new Date(Date.now() + ms).toISOString();
 }
 
+function parseDmy(dmy) {
+  const p = String(dmy || '').split('.');
+  if (p.length !== 3) return null;
+  const d = new Date(+p[2], +p[1] - 1, +p[0]);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+function compareDmy(a, b) {
+  const da = parseDmy(a);
+  const db = parseDmy(b);
+  if (!da || !db) return 0;
+  const ta = da.getTime();
+  const tb = db.getTime();
+  if (ta < tb) return -1;
+  if (ta > tb) return 1;
+  return 0;
+}
+
+function dmyToSimDay(startDmy, targetDmy) {
+  const start = parseDmy(startDmy);
+  const target = parseDmy(targetDmy);
+  if (!start || !target) return 1;
+  start.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  return Math.max(1, Math.round((target - start) / 86400000) + 1);
+}
+
+/** Розбіжність дат після Confirm: клієнт 27 / перевізник 28 або навпаки */
+function scheduleDateMismatchIncidents({
+  sessionId, studentId, letterId, clientDate, carrierDate, carrierChatId, scenarioId,
+}) {
+  if (!sessionId || !letterId || !clientDate || !carrierDate) return;
+  if (clientDate === carrierDate) return;
+
+  const cmp = compareDmy(clientDate, carrierDate);
+  if (cmp === 0) return;
+
+  const existing = db.prepare(`
+    SELECT 1 FROM incidents
+    WHERE session_id=? AND letter_id=? AND type IN ('client_date_mismatch','carrier_date_mismatch')
+      AND state IN ('pending','triggered')
+    LIMIT 1
+  `).get(sessionId, letterId);
+  if (existing) return;
+
+  const sess = db.prepare('SELECT start_date FROM sessions WHERE id=?').get(sessionId);
+  if (!sess?.start_date) return;
+
+  const id = uuidv4();
+  const nowIso = new Date().toISOString();
+
+  if (cmp < 0) {
+    // Замовник раніше: у день clientDate пише «де машина?»
+    const simDay = dmyToSimDay(sess.start_date, clientDate);
+    const targetSimHourAbs = (simDay - 1) * 12 + 1; // ~10:00 сим
+    db.prepare(`
+      INSERT INTO incidents (id, session_id, student_id, letter_id, scenario_id, type, state, scheduled_at, payload_json)
+      VALUES (?,?,?,?,?,?,'pending',?,?)
+    `).run(
+      id, sessionId, studentId, letterId, scenarioId || null,
+      'client_date_mismatch', nowIso,
+      JSON.stringify({
+        client_date: clientDate,
+        carrier_date: carrierDate,
+        target_sim_day: simDay,
+        target_sim_hour_abs: targetSimHourAbs,
+      })
+    );
+    console.log(`[incident-sched] date-mismatch: client ${clientDate} < carrier ${carrierDate} → client пише день ${simDay}`);
+  } else {
+    // Перевізник раніше: у день carrierDate пише «на місці, вантаж не готовий»
+    const simDay = dmyToSimDay(sess.start_date, carrierDate);
+    const targetSimHourAbs = (simDay - 1) * 12 + 1;
+    db.prepare(`
+      INSERT INTO incidents (id, session_id, student_id, letter_id, scenario_id, type, state, scheduled_at, payload_json)
+      VALUES (?,?,?,?,?,?,'pending',?,?)
+    `).run(
+      uuidv4(), sessionId, studentId, letterId, scenarioId || null,
+      'carrier_date_mismatch', nowIso,
+      JSON.stringify({
+        client_date: clientDate,
+        carrier_date: carrierDate,
+        carrier_chat_id: carrierChatId || null,
+        target_sim_day: simDay,
+        target_sim_hour_abs: targetSimHourAbs,
+      })
+    );
+    console.log(`[incident-sched] date-mismatch: carrier ${carrierDate} < client ${clientDate} → carrier пише день ${simDay}`);
+  }
+
+  try {
+    addResumePoint({
+      sessionId, studentId, letterId,
+      type: 'date_mismatch_scheduled',
+      impact: -1,
+      context: { client_date: clientDate, carrier_date: carrierDate },
+    });
+  } catch (e) {}
+}
+
 // ────────────────────────────────────────────────────────────
 // Планування початкових інцидентів при підтвердженні угоди
 // ────────────────────────────────────────────────────────────
@@ -513,6 +613,18 @@ function runDueIncidents(sessionIdFilter) {
     } else if (payload.target_sim_day != null) {
       if (curDay < payload.target_sim_day) continue; // fallback для старих інцидентів
     }
+
+    // Не «завантажились» раніше дати завантаження перевізника
+    if (inc.type === 'loaded_ok') {
+      const op = db.prepare('SELECT carrier_agreed_date FROM order_progress WHERE session_id=? AND letter_id=?')
+        .get(inc.session_id, inc.letter_id);
+      const loadDmy = op?.carrier_agreed_date;
+      if (loadDmy && session.start_date) {
+        const loadDay = dmyToSimDay(session.start_date, loadDmy);
+        if (curDay < loadDay) continue;
+      }
+    }
+
     try {
       fireIncident(inc);
       firedCount++;
@@ -1074,6 +1186,7 @@ function scheduleReactiveIfNotInformed({ sessionId, studentId, letterId, scenari
 
 module.exports = {
   scheduleInitialIncidents,
+  scheduleDateMismatchIncidents,
   scheduleReactiveIncidentsCarrierRefused,
   scheduleReactiveIfNotInformed,
   cancelReactiveIncidents,

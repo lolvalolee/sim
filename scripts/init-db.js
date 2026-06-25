@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   timer_day       INTEGER NOT NULL DEFAULT 1,
   start_date      TEXT NOT NULL,       -- simulation start date DD.MM.YYYY
   profit          REAL NOT NULL DEFAULT 0,
-  rates           TEXT NOT NULL DEFAULT '[41.5,41.65,41.8,41.7,41.9]',
+  rates           TEXT NOT NULL DEFAULT '[41.5,41.65,41.8,41.7,41.9,42.05,41.95,42.1]',
   state_json      TEXT NOT NULL DEFAULT '{}'  -- full sim state
 );
 

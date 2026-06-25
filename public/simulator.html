@@ -1665,14 +1665,16 @@ input[type="number"].form-input, .form-input[type="number"] { font-family: var(-
 // ================================================================
 const CFG = {
   targetProfit: 1000,
-  totalDays: 5,
+  totalDays: 8,
+  simDaysMax: 8,
   dayDuration: 120,     // хвилин реального часу = 1 день симуляції
-  dayStartHour: 9,      // сим-день починається о 9:00
-  dayEndHour: 21,       // сим-день закінчується о 21:00 (12 сим-годин)
-  inactivityThreshold: 300, // секунд (5 хв автопаузи)
+  dayStartHour: 9,
+  dayEndHour: 21,
+  afternoonSimHour: 15, // друга половина сим-дня (хвиля листів)
+  inactivityThreshold: 300,
   profanityBlock: true,
   currency: '€',
-  startDate: null,      // встановлюється при старті
+  startDate: null,
 };
 
 const STOP_WORDS = ['хуй','пизда','блядь','єбать','їбать','сука','нахуй','fuck','shit','bitch','cunt','asshole'];
@@ -1688,7 +1690,7 @@ const BORDER_CROSSINGS = {
 };
 
 // Курс євро по днях (лектор вводить)
-const DEFAULT_RATES = [41.50, 41.65, 41.80, 41.70, 41.90];
+const DEFAULT_RATES = [41.50, 41.65, 41.80, 41.70, 41.90, 42.05, 41.95, 42.10];
 
 // ================================================================
 // 8 ЗАМОВЛЕНЬ
@@ -2127,6 +2129,7 @@ const S = {
   paused: false,
   lastTick: null,
   timerInterval: null,
+  clockTickInterval: null,
   inactivityTimer: null,
 };
 
@@ -2141,48 +2144,93 @@ S.emails = S.orders.map(o=>({
 }));
 
 // ================================================================
-// TIMER
+// TIMER — сервер = джерело істини (sync через /session/time)
 // ================================================================
+function isLetterVisible(em){
+  const day = em.appearDay || 1;
+  const half = em.appearHalf || 1;
+  const td = S.timerDay || 1;
+  const sh = S.simHour != null ? S.simHour : CFG.dayStartHour;
+  if (td > day) return true;
+  if (td < day) return false;
+  if (half === 1) return true;
+  if (half === 2) return sh >= CFG.afternoonSimHour;
+  return true;
+}
+
+function applyServerClock(clock){
+  if (!clock) return;
+  S.timerMs = clock.timer_ms || 0;
+  S.timerDay = clock.timer_day || 1;
+  S.simHour = clock.sim_hour != null ? clock.sim_hour : CFG.dayStartHour;
+  S.simMin = clock.sim_min != null ? clock.sim_min : 0;
+  S.serverClockAt = Date.now();
+  const simDate = clock.sim_date || addDays(S.startDate, S.timerDay - 1);
+  const el_day = document.getElementById('timer-day');
+  const el_date = document.getElementById('timer-date');
+  const el_clock = document.getElementById('timer-clock');
+  if (el_day) el_day.textContent = `День ${S.timerDay}/${CFG.totalDays}`;
+  if (el_date) el_date.textContent = simDate;
+  if (el_clock) el_clock.textContent = `${String(S.simHour).padStart(2,'0')}:${String(S.simMin).padStart(2,'0')}`;
+  if (clock.paused && !S.paused) {
+    S.paused = true;
+    S.autoPaused = !!clock.auto_paused;
+    document.getElementById('timer-dot')?.classList.add('paused');
+    updatePauseBtn();
+    showPauseOverlay(S.autoPaused ? 'Немає активності 15 хв — симуляцію призупинено' : null);
+  }
+}
+
+async function pollServerClock(){
+  const token = localStorage.getItem('docaa_token');
+  if (!token || !S.sessionId) return;
+  try {
+    const r = await fetch('/api/student/session/time', { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.ended) { showEnded?.(S.profit); return; }
+    const prevDay = S.timerDay;
+    const prevVisible = (S.emails || []).filter(isLetterVisible).length;
+    applyServerClock(data.clock);
+    const nowVisible = (S.emails || []).filter(isLetterVisible).length;
+    if (S.timerDay > prevDay) {
+      CAL_SELECTED_DAY_IDX = null;
+      onNewSimDay(S.timerDay);
+      if (S.module === 'email') renderEmailList();
+      updateBadges();
+    } else if (nowVisible > prevVisible) {
+      if (S.module === 'email') renderEmailList();
+      updateBadges();
+    }
+    checkEvents();
+    updateRatesDisplay();
+    checkAutoComplete();
+  } catch (e) {}
+}
+
 function startTimer(){
-  if(S.timerStarted) return;
-  S.timerStarted=true; S.lastTick=Date.now();
-  S.timerInterval=setInterval(tickTimer,1000);
+  if (S.timerStarted) return;
+  S.timerStarted = true;
+  pollServerClock();
+  S.timerInterval = setInterval(pollServerClock, 2000);
+  S.clockTickInterval = setInterval(tickTimer, 1000);
   resetInactivity();
 }
+
 function tickTimer(){
-  if(S.paused) return;
-  const now=Date.now(); S.timerMs+=now-S.lastTick; S.lastTick=now;
-  const totalMin=S.timerMs/60000;
-  const prevDay=S.timerDay;
-  S.timerDay=Math.floor(totalMin/CFG.dayDuration)+1;
-  // Якщо день симуляції змінився
-  if(prevDay !== S.timerDay && S.timerDay > prevDay) {
-    CAL_SELECTED_DAY_IDX = null;
-    onNewSimDay(S.timerDay);
-    if(S.module==='email') renderEmailList();
-    updateBadges();
+  // Лише плавна інтерполяція хвилин між poll (секунди), день/год — з сервера
+  if (S.paused || !S.serverClockAt) return;
+  const driftMs = Date.now() - S.serverClockAt;
+  if (driftMs > 2500) return;
+  const span = CFG.dayEndHour - CFG.dayStartHour;
+  const minInDay = ((S.timerMs || 0) + driftMs) / 60000 % CFG.dayDuration;
+  const dayFrac = minInDay / CFG.dayDuration;
+  const simHourFloat = CFG.dayStartHour + dayFrac * span;
+  const simMin = Math.floor((simHourFloat - Math.floor(simHourFloat)) * 60);
+  const el_clock = document.getElementById('timer-clock');
+  if (el_clock && S.simHour != null) {
+    el_clock.textContent = `${String(S.simHour).padStart(2,'0')}:${String(simMin).padStart(2,'0')}`;
   }
-
-  // Обчислюємо симуляційну годину (9:00–21:00 за CFG.dayDuration хв реального часу)
-  const minInDay = totalMin % CFG.dayDuration;            // 0..120 хв реал у межах дня
-  const dayFrac = minInDay / CFG.dayDuration;             // 0..1 частка дня
-  const simSpanHours = CFG.dayEndHour - CFG.dayStartHour; // 12 сим-год
-  const simHourFloat = CFG.dayStartHour + dayFrac * simSpanHours;
-  const simHour = Math.floor(simHourFloat);
-  const simMin = Math.floor((simHourFloat - simHour) * 60);
-  S.simHour = simHour;
-  S.simMin = simMin;
-
-  const simDate=addDays(S.startDate, S.timerDay-1);
-  const el_day=document.getElementById('timer-day');
-  const el_date=document.getElementById('timer-date');
-  const el_clock=document.getElementById('timer-clock');
-  if(el_day) el_day.textContent=`День ${S.timerDay}`;
-  if(el_date) el_date.textContent=simDate;
-  if(el_clock) el_clock.textContent=`${String(simHour).padStart(2,'0')}:${String(simMin).padStart(2,'0')}`;
-  checkEvents();
-  updateRatesDisplay();
-  checkAutoComplete();
 }
 
 // Авто-завершення: коли всі рейси закриті (done/cancelled) і всі листи з'явились
@@ -2190,9 +2238,9 @@ let _autoCompleteShown = false;
 function checkAutoComplete(){
   if(_autoCompleteShown) return;
   if(!S.orders || S.orders.length===0) return;
-  // Усі листи мають вже з'явитись (минув останній день хвилі)
-  const maxAppearDay = Math.max(...S.emails.map(e=>e.appearDay||1), 1);
-  if(S.timerDay < maxAppearDay) return;
+  // Усі листи мають вже з'явитись (хвилі 4+2+2)
+  const allVisible = (S.emails || []).every(isLetterVisible);
+  if (!allVisible) return;
   // Чи студент взагалі почав роботу (є хоч одна угода/заявка)?
   const anyEngaged = S.orders.some(o=>o.carrierId || o.clientFreightAgreed || o.status==='done');
   if(!anyEngaged) return;
@@ -2238,15 +2286,14 @@ function pauseTimer(){
   fetch('/api/student/session/pause', { method:'POST', headers:{'Authorization':'Bearer '+token} }).catch(()=>{});
 }
 function resumeTimer(){
-  S.paused=false; S.lastTick=Date.now();
-  S.manualPause=false;
+  S.paused=false; S.autoPaused=false;
   document.getElementById('timer-dot')?.classList.remove('paused');
   updatePauseBtn();
   hidePauseOverlay();
   resetInactivity();
-  // Деплой 24a баг 7: повідомляємо сервер що пауза закінчилась
   const token = localStorage.getItem('docaa_token');
-  fetch('/api/student/session/resume', { method:'POST', headers:{'Authorization':'Bearer '+token} }).catch(()=>{});
+  fetch('/api/student/session/resume', { method:'POST', headers:{'Authorization':'Bearer '+token} })
+    .then(r=>r.json()).then(d=>{ if(d.clock) applyServerClock(d.clock); pollServerClock(); }).catch(()=>{});
 }
 // Ручна пауза — знімається тільки кнопкою/оверлеєм
 function toggleManualPause(){
@@ -2262,7 +2309,7 @@ function updatePauseBtn(){
   if(btn) btn.textContent = S.paused ? '▶' : '⏸';
 }
 // Оверлей-заглушка під час паузи — блокує весь інтерфейс
-function showPauseOverlay(){
+function showPauseOverlay(subtitle){
   if(document.getElementById('pause-overlay')) return;
   const ov=document.createElement('div');
   ov.id='pause-overlay';
@@ -2271,7 +2318,7 @@ function showPauseOverlay(){
     <div style="text-align:center;user-select:none">
       <div style="font-size:54px;margin-bottom:14px">⏸</div>
       <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px">Симуляцію призупинено</div>
-      <div style="font-size:14px;color:#aaa;margin-bottom:24px">Час, перевізники й замовники зупинені</div>
+      <div style="font-size:14px;color:#aaa;margin-bottom:24px">${subtitle || 'Час, перевізники й замовники зупинені'}</div>
       <button id="pause-resume-btn" style="background:var(--acc,#FFBE63);border:none;border-radius:10px;padding:13px 32px;cursor:pointer;color:#000;font-family:inherit;font-size:15px;font-weight:600">▶ Продовжити роботу</button>
     </div>
   `;
@@ -2375,7 +2422,7 @@ function go(mod){
 function unlock(id){document.getElementById('n-'+id)?.classList.remove('locked');}
 
 function updateBadges(){
-  const visibleEmails=(S.emails||[]).filter(e=>(e.appearDay||1)<=(S.timerDay||1));
+  const visibleEmails=(S.emails||[]).filter(e=>isLetterVisible(e));
   const unread=visibleEmails.filter(e=>e.unread).length;
   const eb=document.getElementById('badge-email');
   if(eb){
@@ -2620,7 +2667,7 @@ function renderEmailList(filter){
   const el=document.getElementById('email-list'); if(!el) return;
   const f=filter||document.querySelector('.flt.on')?.getAttribute('data-f')||'all';
   // Показуємо лише листи день появи яких вже настав (хвилі 4+2+2)
-  const visible=S.emails.filter(e=>(e.appearDay||1)<=(S.timerDay||1));
+  const visible=S.emails.filter(e=>isLetterVisible(e));
   const list=f==='all'?visible:visible.filter(e=>e.type===f);
   el.innerHTML=list.map(e=>{
     const ord=S.orders.find(o=>o.id===e.orderId);
@@ -2874,7 +2921,7 @@ function simNowForPrompt(){
   const h = S.simHour != null ? S.simHour : 9;
   const m = S.simMin != null ? S.simMin : 0;
   const simDate = addDays(S.startDate, day-1);
-  return `\nПОТОЧНИЙ ЧАС СИМУЛЯЦІЇ: День ${day}, ${simDate}, ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}. Робочий день 9:00-21:00. Враховуй час: вранці бадьоро, ввечері втомлено, пізно — можеш сказати що завтра продовжимо.`;
+  return `\nПОТОЧНИЙ ЧАС СИМУЛЯЦІЇ: День ${day}, ${simDate}, ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}. Робочий день 9:00-21:00. Це ЄДИНИЙ час для всіх (замовники, перевізники, система). Враховуй час: вранці бадьоро, ввечері втомлено, пізно — можеш сказати що завтра продовжимо.`;
 }
 
 // Блок стану рейсу для AI (cross-context) — спільний для замовника і перевізника
@@ -2914,7 +2961,7 @@ function buildClientSys(em, ord){
   const scenario = ord.scenario || em.scenario || 'agree';
   const freight = ord.clientFreightAgreed || ord.clientFreight || ord.freightAmount || ord.freightMax || ord.freightMin || 0;
   const incoterms = ord.incoterms || em.incoterms || '';
-  const todayStr = new Date().toLocaleDateString('uk-UA',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const todayStr = addDays(S.startDate, (S.timerDay || 1) - 1);
 
   // ── ЖОРСТКІ ДАНІ (з БД, AI не може змінити) ──
   const route = (ord.dirs && ord.dirs.length) ? `${ord.dirs[0]} → ${ord.dirs[ord.dirs.length-1]}` : '?';
@@ -3054,6 +3101,7 @@ ${exwText}
 
 ДАТА ЗАВАНТАЖЕННЯ (м'яко):
 Спочатку дата ${ord.loadDate}. Можна обговорити перенесення на 1-2 дні, якщо студент попросить.
+ПРАВИЛО ЧАСУ: СЬОГОДНІ сим-календар = ${todayStr}. НЕ кажи що вантаж уже завантажено/в дорозі, якщо дата завантаження пізніша за сьогодні. Після кнопки «Підтвердити» дата фіксується.
 
 КОРДОН (м'яко):
 Студент може запропонувати інший пункт перетину — погоджуйся якщо доцільно для маршруту.
@@ -3586,7 +3634,8 @@ function buildCarrierSys(c, ordContext){
 Вантаж: ${ordContext.cargo||''}
 Кузов потрібен: ${ordContext.vehicle||''}
 ${dateNote}
-Дата доставки: ${ordContext.delivDate||'уточнюється'}`;
+Дата доставки: ${ordContext.delivDate||'уточнюється'}
+ПРАВИЛО ЧАСУ: СЬОГОДНІ сим-календар = ${addDays(S.startDate,(S.timerDay||1)-1)}. НЕ кажи що вже завантажився/у дорозі, якщо дата завантаження ПІЗНІША за сьогодні. Якщо студент повідомив іншу дату — орієнтуйся на неї в переписці, але після кнопки «Підтвердити» дата фіксується в системі.`;
 
     // Деплой 25 (фікс 2): торг перевізника СТРОГО в межах −300/+100 від орієнтиру.
     // Характер (персона) визначає МАНЕРУ торгу, цифри — МЕЖІ.
@@ -6779,7 +6828,7 @@ function renderAdmin(){
           <div style="font-size:11px;color:var(--t3);margin-top:3px">Підтверджено</div>
         </div>
         <div style="text-align:center;padding:14px;background:var(--bg3);border:1px solid var(--b1);border-radius:var(--r)">
-          <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--t1)">День ${S.timerDay}/5</div>
+          <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--t1)">День ${S.timerDay}/${CFG.totalDays}</div>
           <div style="font-size:11px;color:var(--t3);margin-top:3px">Поточний день</div>
         </div>
       </div>
@@ -8574,7 +8623,7 @@ function saveOrdersToServer(){
   fetch('/api/student/session/save',{
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-    body:JSON.stringify({timer_ms:S.timerMs,timer_day:S.timerDay,profit:S.profit,orders:S.savedOrders})
+    body:JSON.stringify({profit:S.profit})
   }).catch(()=>{});
 }
 
@@ -9967,18 +10016,22 @@ async function loadSessionFromServer(token){
     throw new Error('ended');
   }
 
-  // Apply session state
+  // Apply session state (серверний сим-час)
   S.timerMs=data.session.timer_ms||0;
   S.timerDay=data.session.timer_day||1;
-  // №14: інтервал автопаузи з налаштування групи (null = без паузи)
+  S.simHour=data.session.sim_hour!=null?data.session.sim_hour:CFG.dayStartHour;
+  S.simMin=data.session.sim_min!=null?data.session.sim_min:0;
+  S.paused=!!data.session.paused;
+  S.autoPaused=!!data.session.auto_paused;
+  if(data.session.sim_days_max) CFG.totalDays=CFG.simDaysMax=data.session.sim_days_max;
   S.idlePauseMin = data.session.idle_pause_min != null ? data.session.idle_pause_min : null;
-  // №5: реальний момент, що відповідає timer_ms=0 (для конверсії ts повідомлень у сим-час)
   S.sessionStartReal = Date.now() - S.timerMs;
   S.profit=data.session.profit||0;
   S.rates=data.session.rates||DEFAULT_RATES.slice();
   S.sessionId=data.session.id;
   S.sessionVersion=data.session.version||'';
   S.startDate=new Date();
+  S.serverClockAt=Date.now();
 
   // Очищення СТАРИХ чернеток (з попередніх сесій/студентів) і показ актуальних
   try {
@@ -10002,7 +10055,7 @@ async function loadSessionFromServer(token){
       id: letter.id,
       dirs: letter.dirs,
       vehicle: letter.vehicle,
-      loadDate: addDays(S.startDate, letter.load_day_offset||4),
+      loadDate: op.client_agreed_date || addDays(S.startDate, letter.effective_load_offset ?? letter.load_day_offset ?? 4),
       delivDate: addDays(S.startDate, letter.deliv_day_offset||8),
       status: op.status||'new',
       clientFreightAgreed: op.client_freight||null,
@@ -10056,6 +10109,7 @@ async function loadSessionFromServer(token){
       incoterms: letter.incoterms||'',
       scenario: letter.scenario||'agree',
       appearDay: letter.appear_day || 1,
+      appearHalf: letter.appear_half || 1,
       email: {
         from: letter.from_name,
         company: letter.company,
@@ -10064,7 +10118,7 @@ async function loadSessionFromServer(token){
         subject: letter.subject,
         time: '09:00',
         bodyText: (composedBody || letter.body || '')
-          .replace('{loadDate}', addDays(S.startDate, letter.load_day_offset||4))
+          .replace('{loadDate}', addDays(S.startDate, letter.effective_load_offset ?? letter.load_day_offset ?? 4))
           .replace('{delivDate}', addDays(S.startDate, letter.deliv_day_offset||8)),
         missing: letter.missing||[],
         type: letter.type,
@@ -10085,6 +10139,7 @@ async function loadSessionFromServer(token){
       incoterms: o.incoterms||'',
       scenario: o.scenario||'agree',
       appearDay: o.appearDay || 1,
+      appearHalf: o.appearHalf || 1,
       unread: (!thread||thread.messages.length===0) && !_readEmails.has(o.id),
       replies: thread?thread.messages:[],
     };
@@ -10168,10 +10223,21 @@ async function loadSessionFromServer(token){
     }
   }
 
-  // Update UI
-  const simDate=addDays(S.startDate,S.timerDay-1);
-  document.getElementById('timer-date').textContent=simDate;
-  document.getElementById('timer-day').textContent='День '+S.timerDay+'/5';
+  // Update UI (серверний сим-час)
+  applyServerClock({
+    timer_ms: S.timerMs,
+    timer_day: S.timerDay,
+    sim_hour: S.simHour,
+    sim_min: S.simMin,
+    sim_date: addDays(S.startDate, S.timerDay - 1),
+    paused: S.paused,
+    auto_paused: S.autoPaused,
+  });
+  if (S.paused) {
+    document.getElementById('timer-dot')?.classList.add('paused');
+    updatePauseBtn();
+    showPauseOverlay(S.autoPaused ? 'Немає активності 15 хв — симуляцію призупинено' : null);
+  }
   updateRatesDisplay();
   updateBadges();
 }
@@ -10235,7 +10301,7 @@ function showEnded(profit){
       <div class="stub-card">
         <div class="stub-icon">🏁</div>
         <div class="stub-title">Симуляція завершена</div>
-        <div class="stub-sub">5 днів роботи минули</div>
+        <div class="stub-sub">${CFG.totalDays} днів роботи минули</div>
         <div class="stub-date">€${profit||0}</div>
         <div class="stub-divider"></div>
         <div class="stub-hint">Зверніться до лектора за резюме і аналізом вашої роботи.</div>
@@ -10283,11 +10349,11 @@ function startAutosave(token){
     if(!S.sessionId) return;
     if(document.hidden) return; // не пуляти у фоні
 
-    // Save timer and profit
+    // Save profit + heartbeat (сим-час на сервері)
     fetch('/api/student/session/save',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify({timer_ms:S.timerMs,timer_day:S.timerDay,profit:S.profit})
+      body:JSON.stringify({profit:S.profit})
     }).catch(()=>{});
 
     // Легка перевірка версії
@@ -10355,7 +10421,7 @@ async function reloadSession(){
     await fetch('/api/student/session/save',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify({timer_ms:S.timerMs,timer_day:S.timerDay,profit:S.profit})
+      body:JSON.stringify({profit:S.profit})
     }).catch(()=>{});
   }
   location.reload();
@@ -10715,7 +10781,7 @@ function showNewDayModal(dayNum) {
     rateStr = `Курс EUR/UAH сьогодні: <strong style="color:var(--acc)">${Number(S.rates[dayNum-1]).toFixed(2)} ₴</strong>`;
   }
   // Чи є нові листи цього дня
-  const newLetters = (S.emails || []).filter(e => (e.appearDay || 1) === dayNum).length;
+  const newLetters = (S.emails || []).filter(e => (e.appearDay || 1) === dayNum && (e.appearHalf || 1) === 1).length;
   const lettersStr = newLetters > 0
     ? `<div style="font-size:13px;color:var(--t1);margin-top:10px">📬 Нових запитів: <strong>${newLetters}</strong></div>`
     : '';

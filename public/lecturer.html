@@ -268,7 +268,7 @@ html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--san
     <div class="form-group">
       <label class="form-label">Дата старту симуляції</label>
       <input class="form-input" id="new-group-start" type="date">
-      <div style="font-size:11px;color:var(--t3);margin-top:4px">Симуляція буде працювати 5 днів від цієї дати</div>
+      <div style="font-size:11px;color:var(--t3);margin-top:4px">Симуляція буде працювати 8 днів від цієї дати</div>
     </div>
     <div class="form-group">
       <label class="form-label">Примітки (необов'язково)</label>
@@ -310,7 +310,7 @@ html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--san
 <div id="modal-rates" class="modal-ov" style="display:none" onclick="if(event.target===this)this.style.display='none'">
   <div class="modal-box">
     <div class="modal-title">Курси EUR/UAH</div>
-    <p class="modal-desc" style="margin-bottom:14px">5 курсів на 5 днів симуляції. Студенти бачать у календарі.</p>
+    <p class="modal-desc" style="margin-bottom:14px">8 курсів на 8 днів симуляції. Студенти бачать у календарі.</p>
     <div id="rates-form" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px"></div>
     <div class="modal-actions">
       <button class="btn primary" style="flex:1" onclick="saveRatesModal()">💾 Зберегти</button>
@@ -468,7 +468,7 @@ function renderGroupDetail(){
         </div>
         <div class="gc-stat">
           <div class="gc-stat-label">Серед. день</div>
-          <div class="gc-stat-val">${avgDay}/5</div>
+          <div class="gc-stat-val">${avgDay}/8</div>
         </div>
         <div class="gc-stat">
           <div class="gc-stat-label">Серед. прибуток</div>
@@ -516,11 +516,11 @@ function renderStudentCards(){
     let dotCls = 'not-started';
     if(status==='active') dotCls='active';
     else if(status==='stopped') dotCls='stopped';
-    else if(status==='completed' || (st.timer_day && st.timer_day>5)) dotCls='done';
+    else if(status==='completed' || (st.timer_day && st.timer_day>8)) dotCls='done';
 
-    const isComplete = (st.timer_day || 0) > 5;
+    const isComplete = (st.timer_day || 0) > 8;
     const profit = st.profit ? '€'+st.profit : (status==='not-started'?'—':'€0');
-    const day = st.timer_day ? `${st.timer_day} / 5` : '—';
+    const day = st.timer_day ? `${st.timer_day} / 8` : '—';
     const orders = '—'; // буде завантажено в expand
 
     return `<div class="st-card" id="stc-${st.id}">
@@ -621,7 +621,7 @@ async function renderStudentDetail(studentId, data){
           <div>Середня маржа: <strong style="color:var(--acc)">${m.avg_margin_pct}%</strong></div>
           <div>Імейл-тредів: <strong style="color:var(--t1)">${m.email_threads}</strong></div>
           <div>Чатів з перевізниками: <strong style="color:var(--t1)">${m.carrier_chats}</strong></div>
-          <div>Поточний день: <strong style="color:var(--t1)">${m.timer_day}/5</strong></div>
+          <div>Поточний день: <strong style="color:var(--t1)">${m.timer_day}/8</strong></div>
         </div>
       </div>
     </div>
@@ -640,7 +640,7 @@ async function renderResumeBlock(studentId, isComplete){
       <div class="resume-block">
         <div class="resume-empty">
           🔒 Резюме недоступне
-          <div class="resume-empty-hint">Доступне після завершення симуляції (5 днів пройдено або всі 8 рейсів закрито)</div>
+          <div class="resume-empty-hint">Доступне після завершення симуляції (8 днів пройдено або всі 8 рейсів закрито)</div>
         </div>
       </div>`;
     return;
@@ -819,16 +819,18 @@ async function resetWholeGroup(groupId){
 }
 
 async function openRatesModal(groupId){
-  let rates=[41.5,41.65,41.8,41.7,41.9];
+  let rates=[41.5,41.65,41.8,41.7,41.9,42.05,41.95,42.1];
   try{
     const r = await api('GET',`/groups/${groupId}/rates`);
-    if(r && Array.isArray(r.rates) && r.rates.length===5) rates=r.rates;
+    if(r && Array.isArray(r.rates) && r.rates.length){
+      rates = rates.map((v,i)=>Number(r.rates[i]) || v);
+    }
   }catch(e){}
 
   const modal = document.getElementById('modal-rates');
   if(modal){
     modal.querySelector('.modal-title').textContent = `Курси EUR/UAH — ${STATE.selectedGroup.name}`;
-    modal.querySelector('#rates-form').innerHTML = [1,2,3,4,5].map((d,i)=>`
+    modal.querySelector('#rates-form').innerHTML = [1,2,3,4,5,6,7,8].map((d,i)=>`
       <div style="display:flex;align-items:center;gap:12px;padding:6px 0">
         <div style="width:64px;font-size:13px;font-weight:500">День ${d}</div>
         <input id="rate-modal-${d}" type="number" step="0.01" class="form-input" style="width:120px" value="${rates[i].toFixed(2)}">
@@ -842,8 +844,8 @@ async function openRatesModal(groupId){
 async function saveRatesModal(){
   const modal = document.getElementById('modal-rates');
   const groupId = modal.dataset.groupId;
-  const rates = [1,2,3,4,5].map(d=>parseFloat(document.getElementById('rate-modal-'+d)?.value||0));
-  if(rates.some(r=>!r||r<10)){ notify('Введіть правильні курси для всіх 5 днів (>= 10)','err'); return; }
+  const rates = [1,2,3,4,5,6,7,8].map(d=>parseFloat(document.getElementById('rate-modal-'+d)?.value||0));
+  if(rates.some(r=>!r||r<10)){ notify('Введіть правильні курси для всіх 8 днів (>= 10)','err'); return; }
   try{
     await api('POST',`/groups/${groupId}/rates`,{rates});
     notify('Курси збережено ✓','ok');
@@ -1036,7 +1038,7 @@ async function loadGroupProgress(groupId){
               <td style="font-weight:500">${st.name}</td>
               <td style="color:var(--t3)">${st.email}</td>
               <td><span class="tag ${stTag}">${stLbl}</span></td>
-              <td style="font-family:var(--mono)">${st.timer_day||'-'}/5</td>
+              <td style="font-family:var(--mono)">${st.timer_day||'-'}/8</td>
               <td class="r" style="color:${(st.profit||0)>=totalTarget?'var(--grn)':'var(--t1)'}">€${st.profit||0}</td>
               <td class="r">${pct}%</td>
               <td style="width:120px"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div></td>
@@ -1090,7 +1092,7 @@ async function viewStudentProgress(studentId){
           <div style="font-size:10px;color:var(--t3);margin-top:2px">Прибуток</div>
         </div>
         <div style="background:var(--bg3);border:1px solid var(--b1);border-radius:var(--r);padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--t1)">День ${data.session?.timer_day||1}/5</div>
+          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--t1)">День ${data.session?.timer_day||1}/8</div>
           <div style="font-size:10px;color:var(--t3);margin-top:2px">Поточний день</div>
         </div>
         <div style="background:var(--bg3);border:1px solid var(--b1);border-radius:var(--r);padding:10px;text-align:center">
@@ -1204,14 +1206,14 @@ async function renderRates(){
 }
 
 async function loadRatesForGroup(groupId){
-  let rates=[41.5,41.65,41.8,41.7,41.9]; // default
+  let rates=[41.5,41.65,41.8,41.7,41.9,42.05,41.95,42.1]; // default
   try{
     const r=await api('GET',`/groups/${groupId}/rates`);
-    if(r && Array.isArray(r.rates) && r.rates.length===5) rates=r.rates;
+    if(r && Array.isArray(r.rates) && r.rates.length) rates = rates.map((v,i)=>Number(r.rates[i]) || v);
   }catch(e){}
   const cont=document.getElementById('rates-inputs');
   if(!cont) return;
-  cont.innerHTML=[1,2,3,4,5].map((d,i)=>`
+  cont.innerHTML=[1,2,3,4,5,6,7,8].map((d,i)=>`
     <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--b1)">
       <div style="width:64px;font-size:13px;font-weight:500">День ${d}</div>
       <input id="rate-${d}" type="number" step="0.01" class="form-input" style="width:120px" value="${rates[i].toFixed(2)}">
@@ -1225,8 +1227,8 @@ function onRatesGroupChange(groupId){
 }
 
 async function saveRates(){
-  const rates=[1,2,3,4,5].map(d=>parseFloat(document.getElementById('rate-'+d)?.value||0));
-  if(rates.some(r=>!r||r<10)){ notify('Введіть правильні курси для всіх 5 днів (>= 10)','err'); return; }
+  const rates=[1,2,3,4,5,6,7,8].map(d=>parseFloat(document.getElementById('rate-'+d)?.value||0));
+  if(rates.some(r=>!r||r<10)){ notify('Введіть правильні курси для всіх 8 днів (>= 10)','err'); return; }
   if(!STATE.ratesGroupId){ notify('Спочатку оберіть групу','err'); return; }
   try{
     await api('POST',`/groups/${STATE.ratesGroupId}/rates`,{rates});
