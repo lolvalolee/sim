@@ -31,10 +31,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type','Authorization'],
 }));
 
-// Global rate limiter
+// Global rate limiter (prod: RATE_LIMIT_MAX=5000 у .env)
+const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX || '300', 10);
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: Number.isFinite(rateLimitMax) && rateLimitMax > 0 ? rateLimitMax : 300,
   message: { error: 'Too many requests' }
 }));
 
