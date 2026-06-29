@@ -128,6 +128,13 @@ function parseDirs(letter) {
   try { return JSON.parse(letter.dirs || '[]'); } catch (e) { return []; }
 }
 
+/** Перевізник підходить лише якщо має ВСІ країни маршруту листа (IT+UA, не лише UA). */
+function carrierMatchesLetterDirs(carrierDirs, letterDirs) {
+  if (!Array.isArray(letterDirs) || letterDirs.length === 0) return false;
+  if (!Array.isArray(carrierDirs) || carrierDirs.length === 0) return false;
+  return letterDirs.every(d => carrierDirs.includes(d));
+}
+
 function freightRefForLetter(db, letter) {
   if (!letter) return 0;
   const v2 = db.prepare('SELECT freight_ref FROM letters_v2 WHERE letter_id=?').get(letter.id);
@@ -142,6 +149,7 @@ module.exports = {
   extractCityTokens,
   matchLetterByRoute,
   parseDirs,
+  carrierMatchesLetterDirs,
   freightRefForLetter,
   scoreLetterMatch,
 };

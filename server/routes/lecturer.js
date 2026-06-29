@@ -127,7 +127,7 @@ router.patch('/students/:studentId/assignment', LEC, (req, res) => {
   if (add_letter_id && !ids.includes(add_letter_id)) ids.push(add_letter_id);
   if (remove_letter_id) ids = ids.filter(id => id !== remove_letter_id);
 
-  db.prepare('UPDATE assignments SET letter_ids=? WHERE id=?').run(JSON.stringify(ids), a.id);
+  db.prepare('UPDATE assignments SET letter_ids=?, letter_waves=NULL WHERE id=?').run(JSON.stringify(ids), a.id);
   res.json({ ok: true, letter_ids: ids });
 });
 

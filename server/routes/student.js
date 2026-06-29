@@ -16,24 +16,26 @@ const STU = requireAuth(['student']);
 // ── Призначення сценаріїв (1-8) для 8 листів сесії ──────────────
 // Викликається при кожному GET /session — але реально щось робить
 // тільки коли scenario_id ще не призначені (одноразово на сесію/призначення).
-function assignScenariosIfNeeded(letterIds) {
+function assignScenariosIfNeeded(letterIds, assignmentId) {
   if (!letterIds || letterIds.length === 0) return;
 
   const letters = letterIds
     .map(lid => db.prepare('SELECT id, dirs, client_id, scenario_id, appear_day FROM letters WHERE id=?').get(lid))
     .filter(Boolean);
 
-  // Чи вже призначені сценарії і хвилі?
   const scenariosDone = letters.every(l => l.scenario_id != null);
-  // Хвилі вважаємо призначеними якщо є лист з appear_half=2 (4+2+2 на д1/д2)
-  const wavesDone = letters.some(l => (l.appear_half || 1) === 2);
 
-  // Якщо і сценарії, і хвилі вже є — нічого не робимо
-  if (scenariosDone && wavesDone) return;
+  let savedWaves = null;
+  if (assignmentId) {
+    const row = db.prepare('SELECT letter_waves FROM assignments WHERE id=?').get(assignmentId);
+    try { savedWaves = JSON.parse(row?.letter_waves || 'null'); } catch (e) { savedWaves = null; }
+  }
+  const wavesOk = savedWaves && letterIds.every(id => savedWaves[id]?.day != null);
 
-  // Якщо сценарії вже є але хвилі НІ — призначаємо лише хвилі (скидання групи)
-  if (scenariosDone && !wavesDone) {
-    assignAppearDays(letters);
+  if (scenariosDone && wavesOk) return;
+
+  if (scenariosDone && !wavesOk) {
+    assignAppearDays(letterIds, assignmentId);
     return;
   }
 
@@ -92,39 +94,53 @@ function assignScenariosIfNeeded(letterIds) {
   }
 
   // Призначаємо хвилі появи листів
-  assignAppearDays(letters);
+  assignAppearDays(letterIds, assignmentId);
 
   console.log(`[scenarios] Призначено сценарії: ${letters.map((l, i) => `${l.id.slice(0,8)}=R${assignments[i]}`).join(', ')}`);
 }
 
-// Призначення appear_day / appear_half — хвилі 4+2+2
-// День 1 зі старту: 4 листи
-// День 2 зранку (9:00): +2
-// День 2 друга половина (15:00): +2
-function assignAppearDays(letters) {
-  const updDay = db.prepare('UPDATE letters SET appear_day=?, appear_half=? WHERE id=?');
-  const n = letters.length;
-  let plan;
+function buildWavePlan(n) {
   if (n === 8) {
-    plan = [
+    return [
       { day: 1, half: 1 }, { day: 1, half: 1 }, { day: 1, half: 1 }, { day: 1, half: 1 },
       { day: 2, half: 1 }, { day: 2, half: 1 },
       { day: 2, half: 2 }, { day: 2, half: 2 },
     ];
-  } else {
-    const d1 = Math.ceil(n * 0.5);
-    const d2m = Math.ceil((n - d1) / 2);
-    const d2a = n - d1 - d2m;
-    plan = [];
-    for (let i = 0; i < d1; i++) plan.push({ day: 1, half: 1 });
-    for (let i = 0; i < d2m; i++) plan.push({ day: 2, half: 1 });
-    for (let i = 0; i < d2a; i++) plan.push({ day: 2, half: 2 });
   }
-  for (let i = 0; i < letters.length; i++) {
+  const d1 = Math.ceil(n * 0.5);
+  const d2m = Math.ceil((n - d1) / 2);
+  const d2a = n - d1 - d2m;
+  const plan = [];
+  for (let i = 0; i < d1; i++) plan.push({ day: 1, half: 1 });
+  for (let i = 0; i < d2m; i++) plan.push({ day: 2, half: 1 });
+  for (let i = 0; i < d2a; i++) plan.push({ day: 2, half: 2 });
+  return plan;
+}
+
+function parseAssignmentWaves(assignmentId) {
+  if (!assignmentId) return null;
+  const row = db.prepare('SELECT letter_waves FROM assignments WHERE id=?').get(assignmentId);
+  if (!row?.letter_waves) return null;
+  try { return JSON.parse(row.letter_waves); } catch (e) { return null; }
+}
+
+// Хвилі 4+2+2 — зберігаємо на assignment (порядок letter_ids), не лише глобально на letters
+function assignAppearDays(letterIds, assignmentId) {
+  const plan = buildWavePlan(letterIds.length);
+  const waves = {};
+  letterIds.forEach((id, i) => {
     const p = plan[i] || { day: 1, half: 1 };
-    updDay.run(p.day, p.half, letters[i].id);
+    waves[id] = p;
+  });
+  if (assignmentId) {
+    db.prepare('UPDATE assignments SET letter_waves=? WHERE id=?').run(JSON.stringify(waves), assignmentId);
   }
-  console.log(`[scenarios] Хвилі листів: 4+2+2 (appear_day/half), n=${n}`);
+  const updDay = db.prepare('UPDATE letters SET appear_day=?, appear_half=? WHERE id=?');
+  letterIds.forEach((id, i) => {
+    const p = plan[i] || { day: 1, half: 1 };
+    updDay.run(p.day, p.half, id);
+  });
+  console.log(`[scenarios] Хвилі листів: 4+2+2 (assignment), n=${letterIds.length}`);
 }
 
 function maybeScheduleDateMismatch(session, letterId) {
@@ -209,7 +225,9 @@ router.get('/session', STU, (req, res) => {
   const letterIds = JSON.parse(assignment?.letter_ids || '[]');
 
   // Призначаємо scenario_id для листів цієї сесії якщо ще не призначені
-  assignScenariosIfNeeded(letterIds);
+  assignScenariosIfNeeded(letterIds, assignment?.id);
+
+  const assignmentWaves = parseAssignmentWaves(assignment?.id);
 
   const letters = letterIds
     .map((lid, letterIndex) => {
@@ -244,7 +262,8 @@ router.get('/session', STU, (req, res) => {
         to_city: toCity,
         v2,
         price_visible: priceVisible ? 1 : 0,
-        appear_half: l.appear_half || 1,
+        appear_day: assignmentWaves?.[l.id]?.day ?? l.appear_day ?? 1,
+        appear_half: assignmentWaves?.[l.id]?.half ?? l.appear_half ?? 1,
         // Перші 4 листи: завантаження +2 сим-дні від start_date
         effective_load_offset: letterIndex < 4 ? 2 : (l.load_day_offset || 4),
       };
@@ -2539,14 +2558,12 @@ router.post('/exchange/post', STU, (req, res) => {
     FROM carriers WHERE active=1 AND COALESCE(for_exchange,0)=1
   `).all();
 
-  // Фільтр за напрямком (хоча б одна спільна країна) і типом ТЗ
+  // Фільтр: перевізник покриває всі країни маршруту листа + тип ТЗ
   const vt = (vehicle_type || 'Тент').toLowerCase().split(' ')[0];
   const matching = exchangeCarriers.filter(c => {
     let cdirs = []; try { cdirs = JSON.parse(c.dirs || '[]'); } catch(e){}
     let ctypes = []; try { ctypes = JSON.parse(c.vehicle_types || '[]'); } catch(e){}
-    // Напрямок: БЕЗ dirsNeeded — не підбираємо (раніше лазівка давала невідповідних перевізників)
-    const dirOk = dirsNeeded.length > 0 && dirsNeeded.some(d => cdirs.includes(d));
-    // Тип ТЗ: хоч один збігається
+    const dirOk = dirsNeeded.length > 0 && routeMatcher.carrierMatchesLetterDirs(cdirs, dirsNeeded);
     const typeOk = ctypes.some(t => t.toLowerCase().includes(vt) || vt.includes(t.toLowerCase()));
     return dirOk && typeOk;
   });
