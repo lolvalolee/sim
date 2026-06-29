@@ -27,6 +27,21 @@ function timerMsToParts(timerMs) {
   return { timer_day: timerDay, sim_hour: simHour, sim_min: simMin };
 }
 
+/** Абсолютна сим-година від старту сесії (0 = 9:00 дня 1) — для інцидентів */
+function timerMsToSimHourAbs(timerMs) {
+  const msInDay = (timerMs || 0) % DAY_MS_REAL;
+  const hourInDay = Math.min(12, Math.floor(msInDay / SIM_HOUR_MS_REAL));
+  const timerDay = Math.max(1, Math.floor((timerMs || 0) / DAY_MS_REAL) + 1);
+  return (timerDay - 1) * 12 + hourInDay;
+}
+
+function syncActiveSessions() {
+  const rows = db.prepare(`SELECT id FROM sessions WHERE status='active' AND COALESCE(paused,0)=0`).all();
+  for (const { id } of rows) {
+    try { syncSessionTime(id, { heartbeat: false }); } catch (e) { /* ignore */ }
+  }
+}
+
 function addDaysDmy(startDmy, days) {
   const p = String(startDmy || '').split('.');
   if (p.length !== 3) return startDmy;
@@ -173,11 +188,14 @@ module.exports = {
   SIM_DAYS_MAX,
   AUTO_PAUSE_MS,
   AFTERNOON_SIM_HOUR,
+  DAY_START_HOUR,
   timerMsToParts,
+  timerMsToSimHourAbs,
   simCalendarDate,
   isRealDateBeforeToday,
   isLetterVisible,
   syncSessionTime,
+  syncActiveSessions,
   getSessionClock,
   pauseSession,
   resumeSession,

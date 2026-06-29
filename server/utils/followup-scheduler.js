@@ -1,18 +1,16 @@
 // server/utils/followup-scheduler.js
 // Планувальник нагадувань "де заявка?" від перевізника.
 //
-// Логіка:
-// При підтвердженні угоди з перевізником → плануємо 3 тригери:
-//   1. +1 година симуляції від моменту підтвердження
-//   2. наступний робочий день (ранок ~9:30) симуляції
-//   3. день перед завантаженням
+// При підтвердженні угоди з перевізником → 3 тригери:
+//   1. +1 сим-година від підтвердження
+//   2. наступний сим-день (~9:30)
+//   3. день перед завантаженням (~14:00)
 //
-// Кожен тригер спрацьовує ТІЛЬКИ якщо заявка ще не надіслана.
-// При надсиланні заявки — усі тригери цього application скасовуються.
+// Працює з або без рядка applications (letter_id + carrier_id).
 
 const { v4: uuidv4 } = require('uuid');
+const simTime = require('./sim-time');
 
-// Тексти нагадувань
 const TEXTS_1HOUR = [
   'Коли очікувати заявку?',
   'Зможете прислати заявку ще сьогодні?',
@@ -38,152 +36,94 @@ function pickRandomText(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-// Обчислюємо реальний час спрацювання тригера.
-// У симуляції 1 день = 36 хв реального часу (CFG.dayDuration на клієнті).
-// 1 година симуляції = 1.5 хв реального часу.
-// Сесія має start_date (date старту симуляції) + момент створення сесії.
-//
-// Параметри:
-//   confirmedAtMs — реальний timestamp (Date.now()) коли підтвердили угоду
-//   loadDateStr   — дата завантаження "DD.MM.YYYY" з заявки
-//   sessionStartDateStr — дата старту симуляції "DD.MM.YYYY"
-//
-// Повертає об'єкт із трьома timestamps для трьох тригерів.
-function calculateTriggerTimes({ confirmedAtMs, loadDateStr, sessionStartDateStr }) {
-  const SIM_DAY_MS = 36 * 60 * 1000;            // 1 симуляційний день = 36 хв
-  const SIM_HOUR_MS = SIM_DAY_MS / 24;           // 1 симуляційна година = 1.5 хв
-
-  const trigger1Hour = confirmedAtMs + SIM_HOUR_MS;
-
-  // Обчислюємо симуляційну дату на момент підтвердження
-  // та реальні timestamps для "наступний день ранок 9:30" і "day-1 перед завантаженням"
-  let trigger_next_day = null;
-  let trigger_day_minus_1 = null;
-
-  try {
-    const parseDate = (s) => {
-      const [d, m, y] = s.split('.').map(Number);
-      return new Date(y, m - 1, d);
-    };
-    const startDate = parseDate(sessionStartDateStr);
-    const loadDate = parseDate(loadDateStr);
-    const sessionStartMs = confirmedAtMs - Math.floor((confirmedAtMs - confirmedAtMs) / SIM_DAY_MS) * SIM_DAY_MS;
-    // Spravdi нам потрібен момент створення сесії, а не confirmed.
-    // Але ми не маємо його тут — буде передано окремо.
-    // Поки що використовуємо confirmedAtMs як приблизне базою.
-
-    // Інша логіка: знаходимо коли в реальному часі настане "наступний день після confirmedAt"
-    // Тобто плюс той час від confirmedAt який потрібен щоб симуляційний день змінився на 1.
-    // Простіше: confirmedAtMs + SIM_DAY_MS (приблизно)
-    trigger_next_day = confirmedAtMs + SIM_DAY_MS;
-
-    // День перед завантаженням:
-    // Скільки симуляційних днів від confirmedAt до loadDate?
-    const confirmedSimDate = new Date(startDate);
-    confirmedSimDate.setTime(startDate.getTime()); // початок
-    // Це приблизно — для точності треба знати на якому симуляційному дні було confirmedAt.
-    // Передамо це з контексту вище.
-  } catch (e) {
-    trigger_next_day = confirmedAtMs + SIM_DAY_MS;
-    trigger_day_minus_1 = null;
-  }
-
-  return {
-    trigger_1hour: trigger1Hour,
-    trigger_next_day: trigger_next_day,
-    trigger_day_minus_1: trigger_day_minus_1,
-  };
+function parseDmy(s) {
+  const [d, m, y] = String(s || '').split('.').map(Number);
+  if (!d || !m || !y) return null;
+  return new Date(y, m - 1, d);
 }
 
-// Краща версія обчислення часів — приймає всі потрібні параметри
-function calculateTriggerTimesV2({ confirmedAtMs, sessionCreatedMs, currentSimDay, loadDateStr, sessionStartDateStr, simDayDurationMs = 36 * 60 * 1000 }) {
-  const SIM_HOUR_MS = simDayDurationMs / 24;
+function dmyToSimDay(startDmy, targetDmy) {
+  const start = parseDmy(startDmy);
+  const target = parseDmy(targetDmy);
+  if (!start || !target) return 1;
+  start.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  return Math.max(1, Math.round((target - start) / 86400000) + 1);
+}
 
-  // Тригер 1: +1 година симуляції
+function calculateTriggerTimes({ session, loadDateStr, confirmedAtMs }) {
+  const DAY_MS = simTime.DAY_MS_REAL;
+  const SIM_HOUR_MS = simTime.SIM_HOUR_MS_REAL;
+  const sessionCreatedMs = session.created_at
+    ? new Date(session.created_at).getTime()
+    : confirmedAtMs;
+  const timerMs = session.timer_ms || 0;
+  const parts = simTime.timerMsToParts(timerMs);
+
   const trigger_1hour = confirmedAtMs + SIM_HOUR_MS;
-
-  // Симуляційні дати
-  const parseDate = (s) => {
-    const [d, m, y] = s.split('.').map(Number);
-    return new Date(y, m - 1, d);
-  };
 
   let trigger_next_day = null;
   let trigger_day_minus_1 = null;
 
   try {
-    const startDate = parseDate(sessionStartDateStr);
-    const loadDate = parseDate(loadDateStr);
+    const loadSimDay = dmyToSimDay(session.start_date, loadDateStr);
 
-    // Скільки симуляційних днів між стартом сесії і датою завантаження
-    const daysUntilLoad = Math.floor((loadDate - startDate) / (24 * 60 * 60 * 1000));
+    // Наступний сим-день, ~9:30 (0.5 сим-год від початку дня)
+    trigger_next_day = sessionCreatedMs
+      + parts.timer_day * DAY_MS
+      + (0.5 / 12) * DAY_MS;
 
-    // На якому симуляційному дні зараз?
-    // currentSimDay (1..5) — передається з клієнту або обчислюється
-    // або беремо з confirmedAtMs - sessionCreatedMs
-
-    const elapsedMs = confirmedAtMs - sessionCreatedMs;
-    const elapsedSimDays = elapsedMs / simDayDurationMs; // 0..5
-    const currentDayFractional = elapsedSimDays;
-
-    // Тригер "наступний день ранок ~9:30":
-    // наступний симуляційний день після поточного, точка ~9:30 = 0.4 від дня
-    const nextDayInt = Math.floor(currentDayFractional) + 1;
-    // зміщення від 0:00 наступного дня до 9:30 = (9.5/24) * SIM_DAY_MS
-    const morningOffsetMs = (9.5 / 24) * simDayDurationMs;
-    const nextDayStartMs = sessionCreatedMs + nextDayInt * simDayDurationMs;
-    trigger_next_day = nextDayStartMs + morningOffsetMs;
-
-    // Тригер "день перед завантаженням":
-    // Якщо завантаження на симуляційний день daysUntilLoad,
-    // то day-1 — це симуляційний день (daysUntilLoad - 1) о 14:00 (середина другої половини)
-    if (daysUntilLoad >= 1) {
-      const dayBeforeIdx = daysUntilLoad - 1; // 0-based
-      const afternoonOffsetMs = (14 / 24) * simDayDurationMs;
-      trigger_day_minus_1 = sessionCreatedMs + dayBeforeIdx * simDayDurationMs + afternoonOffsetMs;
+    // День перед завантаженням, ~14:00 (5 сим-год від початку дня)
+    if (loadSimDay >= 2) {
+      trigger_day_minus_1 = sessionCreatedMs
+        + (loadSimDay - 2) * DAY_MS
+        + (5 / 12) * DAY_MS;
     }
 
-    // Якщо trigger_next_day >= trigger_day_minus_1 — пропускаємо next_day (він вже після day-1)
     if (trigger_next_day && trigger_day_minus_1 && trigger_next_day >= trigger_day_minus_1) {
       trigger_next_day = null;
     }
-    // Якщо trigger_day_minus_1 < trigger_1hour — пропускаємо
     if (trigger_day_minus_1 && trigger_day_minus_1 <= trigger_1hour) {
       trigger_day_minus_1 = null;
     }
-  } catch(e) {
-    console.error('Помилка обчислення triggers:', e.message);
+    // Минуле — не плануємо
+    const now = confirmedAtMs;
+    if (trigger_next_day && trigger_next_day < now) trigger_next_day = null;
+    if (trigger_day_minus_1 && trigger_day_minus_1 < now) trigger_day_minus_1 = null;
+  } catch (e) {
+    console.error('[followups] calculateTriggerTimes:', e.message);
   }
 
-  return {
-    trigger_1hour,
-    trigger_next_day,
-    trigger_day_minus_1,
-  };
+  return { trigger_1hour, trigger_next_day, trigger_day_minus_1 };
 }
 
-// Планує нагадування при підтвердженні угоди
-function scheduleFollowups({ db, session, application, carrierId, sessionStartDateStr, loadDateStr, simDayDurationMs = 36 * 60 * 1000 }) {
-  if (!application?.id || !carrierId) return;
+function syntheticAppId(sessionId, letterId, carrierId) {
+  return `letter:${sessionId}:${letterId}:${carrierId}`;
+}
+
+function isSyntheticAppId(id) {
+  return String(id || '').startsWith('letter:');
+}
+
+function scheduleFollowups({
+  db, session, application, letterId, carrierId, sessionStartDateStr, loadDateStr,
+}) {
+  if (!carrierId || !letterId) return;
 
   const confirmedAtMs = Date.now();
-  // Беремо moment створення сесії
-  const sessionCreatedMs = session.created_at
-    ? new Date(session.created_at).getTime()
-    : confirmedAtMs - simDayDurationMs * 3; // fallback - припускаємо 3 дні минуло
+  const appId = application?.id || syntheticAppId(session.id, letterId, carrierId);
 
-  const times = calculateTriggerTimesV2({
+  const times = calculateTriggerTimes({
+    session,
+    loadDateStr: loadDateStr || sessionStartDateStr,
     confirmedAtMs,
-    sessionCreatedMs,
-    loadDateStr,
-    sessionStartDateStr,
-    simDayDurationMs,
   });
 
-  // Скасовуємо попередні (на випадок переузгодження)
-  db.prepare(
-    'UPDATE application_followups SET cancelled=1 WHERE application_id=? AND fired=0'
-  ).run(application.id);
+  db.prepare(`
+    UPDATE application_followups SET cancelled=1
+    WHERE fired=0 AND cancelled=0 AND session_id=? AND carrier_id=?
+      AND (application_id=? OR letter_id=?)
+  `).run(session.id, carrierId, appId, letterId);
 
   const triggers = [
     { type: '1hour', ts: times.trigger_1hour },
@@ -193,32 +133,51 @@ function scheduleFollowups({ db, session, application, carrierId, sessionStartDa
 
   for (const t of triggers) {
     db.prepare(`INSERT INTO application_followups
-      (id, application_id, session_id, student_id, carrier_id, trigger_type, scheduled_at)
-      VALUES (?,?,?,?,?,?,?)`)
+      (id, application_id, session_id, student_id, carrier_id, letter_id, trigger_type, scheduled_at)
+      VALUES (?,?,?,?,?,?,?,?)`)
       .run(
         uuidv4(),
-        application.id,
+        appId,
         session.id,
         session.student_id,
         carrierId,
+        letterId,
         t.type,
         new Date(t.ts).toISOString()
       );
   }
-  console.log(`[followups] Заплановано ${triggers.length} тригерів для заявки ${application.number_seq}`);
+  const label = application?.number_seq || letterId.slice(0, 8);
+  console.log(`[followups] Заплановано ${triggers.length} тригерів для ${label}`);
 }
 
-// Скасовує всі тригери для заявки (коли заявка надіслана)
 function cancelFollowups({ db, applicationId }) {
   const result = db.prepare(
     'UPDATE application_followups SET cancelled=1 WHERE application_id=? AND fired=0 AND cancelled=0'
   ).run(applicationId);
   if (result.changes > 0) {
-    console.log(`[followups] Скасовано ${result.changes} тригерів для заявки ${applicationId.slice(0, 8)}`);
+    console.log(`[followups] Скасовано ${result.changes} тригерів для ${String(applicationId).slice(0, 12)}`);
   }
 }
 
-// Виконує всі тригери що настали — викликається cron'ом
+function cancelFollowupsForDeal({ db, sessionId, letterId, carrierId }) {
+  db.prepare(`
+    UPDATE application_followups SET cancelled=1
+    WHERE session_id=? AND carrier_id=? AND letter_id=? AND fired=0 AND cancelled=0
+  `).run(sessionId, carrierId, letterId);
+}
+
+function isApplicationSent(db, followup) {
+  if (isSyntheticAppId(followup.application_id)) {
+    const op = db.prepare(`
+      SELECT application_sent FROM order_progress
+      WHERE session_id=? AND letter_id=?
+    `).get(followup.session_id, followup.letter_id);
+    return !!op?.application_sent;
+  }
+  const app = db.prepare('SELECT sent_to_carrier_at FROM applications WHERE id=?').get(followup.application_id);
+  return !!app?.sent_to_carrier_at;
+}
+
 function processPendingFollowups({ db }) {
   const now = new Date().toISOString();
   const pending = db.prepare(`
@@ -231,25 +190,14 @@ function processPendingFollowups({ db }) {
 
   if (pending.length === 0) return 0;
 
-  console.log(`[followups] Обробляю ${pending.length} тригерів...`);
-
   let processed = 0;
   for (const f of pending) {
     try {
-      // Перевіряємо чи заявка ще не надіслана
-      const app = db.prepare('SELECT id, sent_to_carrier_at FROM applications WHERE id=?').get(f.application_id);
-      if (!app) {
-        // Заявка зникла - скасовуємо
-        db.prepare('UPDATE application_followups SET cancelled=1 WHERE id=?').run(f.id);
-        continue;
-      }
-      if (app.sent_to_carrier_at) {
-        // Заявка вже надіслана - скасовуємо тригер
+      if (isApplicationSent(db, f)) {
         db.prepare('UPDATE application_followups SET cancelled=1 WHERE id=?').run(f.id);
         continue;
       }
 
-      // Обираємо текст по типу
       let text;
       switch (f.trigger_type) {
         case '1hour': text = pickRandomText(TEXTS_1HOUR); break;
@@ -258,7 +206,6 @@ function processPendingFollowups({ db }) {
         default: text = 'Очікую заявку.';
       }
 
-      // Додаємо повідомлення в carrier_chats
       const chat = db.prepare('SELECT * FROM carrier_chats WHERE session_id=? AND carrier_id=?')
         .get(f.session_id, f.carrier_id);
 
@@ -272,7 +219,7 @@ function processPendingFollowups({ db }) {
 
       if (chat) {
         let messages = [];
-        try { messages = JSON.parse(chat.messages || '[]'); } catch(e){}
+        try { messages = JSON.parse(chat.messages || '[]'); } catch (e) {}
         messages.push(newMsg);
         db.prepare("UPDATE carrier_chats SET messages=?, updated_at=datetime('now') WHERE id=?")
           .run(JSON.stringify(messages), chat.id);
@@ -281,7 +228,6 @@ function processPendingFollowups({ db }) {
           .run(uuidv4(), f.session_id, f.carrier_id, JSON.stringify([newMsg]), 'confirmed');
       }
 
-      // Відмічаємо тригер як виконаний
       db.prepare('UPDATE application_followups SET fired=1, fired_at=? WHERE id=?').run(now, f.id);
       processed++;
     } catch (e) {
@@ -289,16 +235,13 @@ function processPendingFollowups({ db }) {
     }
   }
 
-  console.log(`[followups] Опрацьовано ${processed} тригерів`);
+  if (processed) console.log(`[followups] Опрацьовано ${processed} тригерів`);
   return processed;
 }
 
-// AI-розбір відповіді студента на нагадування — Q2
-// Якщо студент написав "зараз / трохи пізніше / готую" — паузимо тригери на N годин
 async function handleStudentReplyToFollowup({ db, sessionId, carrierId, studentText }) {
   if (!studentText || studentText.length < 3) return;
 
-  // Знаходимо активні тригери цього перевізника
   const activeFollowups = db.prepare(`
     SELECT * FROM application_followups
     WHERE session_id=? AND carrier_id=? AND fired=0 AND cancelled=0
@@ -307,35 +250,26 @@ async function handleStudentReplyToFollowup({ db, sessionId, carrierId, studentT
 
   if (activeFollowups.length === 0) return;
 
-  // Прості евристики (без AI поки)
-  // "зараз / зара / через годину / в обід / після обіду / трохи пізніше / готую / роблю / надішлю /
-  //  хвилинку / 5 хв / маленьку хвилину" — позитивна відповідь, паузимо
-  // "не їдемо / скасовую / не їду / відмова" — скасовуємо всі тригери (рейс відмінений)
   const text = studentText.toLowerCase();
-
-  const cancelKeywords = /не\s*ї[ду][емо]*|скасов|відмов|не\s*буде|пройди|пропуст/;
-  const delayKeywords = /зара[з]?|готу[єюя]|надішл|через\s*\d?\s*(годину|хв|хвил)|трохи\s*пізніше|пізніше|пізно|сьогодні|завтра|пожд|хвилин|готов[ао]/;
+  const cancelKeywords = /не\s*ї[ду][емо]*|скасов|відмов|не\s*буде|пропуст/;
+  const delayKeywords = /зара[з]?|готу[єюя]|надішл|через\s*\d?\s*(годину|хв|хвил)|трохи\s*пізніше|пізніше|сьогодні|завтра|хвилин|готов[ао]/;
 
   if (cancelKeywords.test(text)) {
-    // Скасовуємо всі тригери — рейс відмінений
-    db.prepare('UPDATE application_followups SET cancelled=1 WHERE session_id=? AND carrier_id=? AND fired=0').run(sessionId, carrierId);
-    console.log(`[followups] Скасовано тригери (рейс відмінений студентом) для carrier ${carrierId.slice(0,8)}`);
+    db.prepare('UPDATE application_followups SET cancelled=1 WHERE session_id=? AND carrier_id=? AND fired=0')
+      .run(sessionId, carrierId);
   } else if (delayKeywords.test(text)) {
-    // Паузимо тригери на 4 симуляційні години (= 6 реальних хв)
-    const SIM_HOUR_MS = (36 * 60 * 1000) / 24; // ~1.5 хв
-    const pauseUntilMs = Date.now() + SIM_HOUR_MS * 4;
+    const pauseUntilMs = Date.now() + simTime.SIM_HOUR_MS_REAL * 4;
     db.prepare(`
       UPDATE application_followups SET paused_until=?
       WHERE session_id=? AND carrier_id=? AND fired=0 AND cancelled=0
     `).run(new Date(pauseUntilMs).toISOString(), sessionId, carrierId);
-    console.log(`[followups] Паузнуто тригери на 4 сим. години для carrier ${carrierId.slice(0,8)}`);
   }
-  // Якщо ні те, ні те — нічого не робимо, тригери йдуть за графіком
 }
 
 module.exports = {
   scheduleFollowups,
   cancelFollowups,
+  cancelFollowupsForDeal,
   processPendingFollowups,
   handleStudentReplyToFollowup,
   TEXTS_1HOUR,

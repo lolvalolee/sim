@@ -23,6 +23,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const scenariosLib = require('./incident-scenarios');
 const documentChecker = require('./document-checker');
+const simTime = require('./sim-time');
 
 // Один сим-час = 10 хв реального (день 120хв = 12 сим-год 9:00-21:00)
 // Збігається з CFG.dayDuration=120 у simulator.html
@@ -151,196 +152,129 @@ function scheduleDateMismatchIncidents({
 // ────────────────────────────────────────────────────────────
 // Планування початкових інцидентів при підтвердженні угоди
 // ────────────────────────────────────────────────────────────
-function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationId, scenarioId, carrierChatId, loadDateIso, distToBorder, distAfterBorder }) {
+function shiftIncidentSimHours(sessionId, letterId, types, addHours) {
+  if (!types?.length || !addHours) return;
+  const placeholders = types.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT id, payload_json FROM incidents
+    WHERE session_id=? AND letter_id=? AND state='pending' AND type IN (${placeholders})
+  `).all(sessionId, letterId, ...types);
+  for (const row of rows) {
+    let payload = {};
+    try { payload = JSON.parse(row.payload_json || '{}'); } catch (e) {}
+    payload.target_sim_hour_abs = (payload.target_sim_hour_abs || 0) + addHours;
+    payload.target_sim_day = Math.floor(payload.target_sim_hour_abs / 12) + 1;
+    db.prepare('UPDATE incidents SET payload_json=? WHERE id=?').run(JSON.stringify(payload), row.id);
+  }
+}
+
+function scheduleInitialIncidents({
+  sessionId, studentId, letterId, applicationId, scenarioId, carrierChatId,
+  loadDateDmy, loadDateIso, distToBorder, distAfterBorder,
+}) {
   if (!sessionId || !studentId || !letterId) {
     console.warn('[incident-sched] scheduleInitialIncidents: missing params');
     return;
   }
+  const inc = scenariosLib.SIM_INTERVALS;
   const scenario = scenarioId || 1;
 
-  // Інтервали на основі реальних відстаней (з ODS Симулятор_1_1)
-  // Якщо відстані не задані — фолбек на старі фіксовані значення
-  const hoursToBorder = distToBorder ? kmToSimHours(distToBorder) : 24;
-  const hoursAfterBorder = distAfterBorder ? kmToSimHours(distAfterBorder) : 24;
+  const hoursToBorder = distToBorder ? kmToSimHours(distToBorder) : inc.loaded_to_at_border;
+  const hoursAfterBorder = distAfterBorder ? kmToSimHours(distAfterBorder) : inc.at_border_to_arrived_terminal;
 
-  // Базовий час відліку — або дата завантаження (loadDateIso), або зараз
-  let loadingStartedAt;
-  if (loadDateIso) {
-    try {
-      const dt = new Date(loadDateIso);
-      if (!isNaN(dt.getTime())) {
-        loadingStartedAt = dt.toISOString();
-      }
-    } catch (e) {}
-  }
-  if (!loadingStartedAt) {
-    // Якщо немає дати завантаження — за 6 год симуляції
-    loadingStartedAt = nowPlus(simHoursToMs(6));
-  } else if (new Date(loadingStartedAt).getTime() < Date.now()) {
-    // Якщо дата вже минула — ставимо через 2 год симуляції
-    loadingStartedAt = nowPlus(simHoursToMs(2));
-  }
-
-  // A (сим-час): абсолютна сим-година завантаження від старту сесії.
-  // 12 сим-год = 1 день. loadSimHourAbs = (loadSimDay-1)*12 (завантаження зранку дня).
   const sess = db.prepare('SELECT start_date FROM sessions WHERE id=?').get(sessionId);
-  let loadSimDay = 1;
-  try {
-    if (sess && sess.start_date && loadDateIso) {
-      const [sd, sm, sy] = sess.start_date.split('.').map(Number);
-      const startD = new Date(sy, sm - 1, sd);
-      const loadD = new Date(loadDateIso);
-      if (!isNaN(loadD.getTime())) {
-        loadSimDay = Math.max(1, Math.round((loadD - startD) / 86400000) + 1);
-      }
-    }
-  } catch (e) {}
-  const loadSimHourAbs = (loadSimDay - 1) * 12; // абсолютна сим-година завантаження
+  const loadDmy = loadDateDmy || (loadDateIso ? loadDateIso.slice(0, 10).split('-').reverse().join('.') : null);
+  const loadSimDay = loadDmy && sess?.start_date ? dmyToSimDay(sess.start_date, loadDmy) : 1;
+  const loadSimHourAbs = (loadSimDay - 1) * 12;
 
-  // Загальна функція додавання інциденту.
-  function add(type, baseTime, deltaHours, payload = {}) {
+  let cumHours = 0;
+  const nowIso = new Date().toISOString();
+
+  function insertStep(type, hourAbsFromLoad, payload = {}) {
+    const hourAbs = loadSimHourAbs + hourAbsFromLoad;
+    const targetSimDay = loadSimDay + Math.floor(hourAbsFromLoad / 12);
     const id = uuidv4();
-    const scheduledAt = new Date(new Date(baseTime).getTime() + simHoursToMs(deltaHours)).toISOString();
-    // №3: target по абсолютній сим-годині — рахуємо скільки СИМ-ГОДИН від моменту
-    // завантаження до цього етапу (з реального інтервалу scheduledAt − loadingStartedAt).
-    // Так етапи рознесені в сим-часі і не вистрілюють усі разом.
-    let simHoursFromLoad = 0;
-    try {
-      const ms = new Date(scheduledAt).getTime() - new Date(loadingStartedAt).getTime();
-      simHoursFromLoad = Math.max(0, ms / simHoursToMs(1)); // реальні ms → сим-години
-    } catch (e) {}
-    const targetSimHourAbs = loadSimHourAbs + simHoursFromLoad;
-    const targetSimDay = loadSimDay + Math.floor(simHoursFromLoad / 12);
-    const payloadWithTarget = { ...payload, target_sim_day: targetSimDay, target_sim_hour_abs: targetSimHourAbs };
+    const payloadJson = JSON.stringify({
+      ...payload,
+      target_sim_day: targetSimDay,
+      target_sim_hour_abs: hourAbs,
+    });
     db.prepare(`
       INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id, type, state, scheduled_at, payload_json)
       VALUES (?,?,?,?,?,?,?,'pending',?,?)
-    `).run(id, sessionId, studentId, letterId, applicationId || null, scenario, type, scheduledAt, JSON.stringify(payloadWithTarget));
-    return { id, scheduledAt };
+    `).run(id, sessionId, studentId, letterId, applicationId || null, scenario, type, nowIso, payloadJson);
+    return { id, hourAbsFromLoad, hourAbs };
   }
 
-  // ─── ЛАНЦЮЖОК ПОДІЙ ─────────────────────
-  // 1) "Завантажились, виїжаємо" — через 2 год сим від loadingStartedAt
-  const loaded = add('loaded_ok', loadingStartedAt, inc.loading_started_to_loaded, { carrier_chat_id: carrierChatId });
+  function addStep(type, deltaHours, payload = {}) {
+    cumHours += deltaHours;
+    return insertStep(type, cumHours, payload);
+  }
 
-  // 2) Після завантаження — ЧЕРЕЗ ВІДСТАНЬ ДО КОРДОНУ — "на кордоні"
-  let atBorderType = 'at_border_clear'; // R1, R6, R8 — гладке
-  if ([2, 3, 5, 7].includes(scenario)) atBorderType = 'at_border_need_pd'; // R2,R3 ПД; R5,R7 теж з ПД
-  if ([4].includes(scenario)) atBorderType = 'at_border_clear'; // R4 — гладко, проблема буде на розвантаженні
-  if ([6].includes(scenario)) atBorderType = 'at_border_clear'; // R6 — гладко, проблема на терміналі
+  // ─── ЛАНЦЮЖОК ПОДІЙ (час — target_sim_hour_abs, не календар) ───
+  const loaded = addStep('loaded_ok', inc.loading_started_to_loaded, { carrier_chat_id: carrierChatId });
 
-  const atBorder = add(atBorderType, loaded.scheduledAt, hoursToBorder, {
+  let atBorderType = 'at_border_clear';
+  if ([2, 3, 5, 7].includes(scenario)) atBorderType = 'at_border_need_pd';
+  if ([4, 6].includes(scenario)) atBorderType = 'at_border_clear';
+
+  const atBorder = addStep(atBorderType, hoursToBorder, {
     carrier_chat_id: carrierChatId,
     next_step: 'arrived_terminal',
   });
 
-  // 3) Після кордону — ЧЕРЕЗ ВІДСТАНЬ ПІСЛЯ КОРДОНУ — "прибули на термінал"
-  const atTerminal = add('at_terminal', atBorder.scheduledAt, hoursAfterBorder, {
-    carrier_chat_id: carrierChatId,
-  });
+  const atTerminal = addStep('at_terminal', hoursAfterBorder, { carrier_chat_id: carrierChatId });
+  const askCert = addStep('client_ask_certificate', inc.arrived_terminal_to_ask_cert, {});
 
-  // 4) Замовник просить довідку — через 30 хв
-  const askCert = add('client_ask_certificate', atTerminal.scheduledAt, inc.arrived_terminal_to_ask_cert, {});
-
-  // 5) Прибуття на розвантаження — через 6 год сим (умовно: після того як студент надав довідку)
-  // У Деплої 13 — спрощено: тригер настає за часом, не за дією студента
   let atUnloadingType = 'at_unloading_arrived';
-  if (scenario === 4) atUnloadingType = 'at_unloading_wait'; // R4: склад не приймає
+  if (scenario === 4) atUnloadingType = 'at_unloading_wait';
 
-  const atUnloading = add(atUnloadingType, askCert.scheduledAt, inc.customs_done_to_unloading, {
-    carrier_chat_id: carrierChatId,
-  });
-
-  // 6) Розвантажились — через 4 год сим
-  const unloadingDone = add('unloading_done', atUnloading.scheduledAt, inc.unloading_to_done, {
-    carrier_chat_id: carrierChatId,
-  });
-
-  // 7) Замовник дякує — через 30 хв
-  add('client_delivery_confirmed', unloadingDone.scheduledAt, inc.done_to_client_thanks, {});
+  const atUnloading = addStep(atUnloadingType, inc.customs_done_to_unloading, { carrier_chat_id: carrierChatId });
+  const unloadingDone = addStep('unloading_done', inc.unloading_to_done, { carrier_chat_id: carrierChatId });
+  addStep('client_delivery_confirmed', inc.done_to_client_thanks, {});
 
   // ─── СЦЕНАРІЙ-СПЕЦИФІЧНІ ДОПОВНЕННЯ ───────
-  // R2: ПД-затримка без претензій
-  // R3: ПД-затримка + простій
   if ([2, 3].includes(scenario)) {
-    // Після at_border (запит ПД) — через 30 хв замовник пише "ПД буде завтра"
-    const pdTomorrow = add('client_pd_tomorrow', atBorder.scheduledAt, inc.at_border_to_client_pd_response, {});
-    // Через 24 год сим — замовник надсилає ПД
-    add('client_pd_sent', pdTomorrow.scheduledAt, inc.client_pd_response_to_pd_sent, {});
-    // R2: ще "перевізник чекає мирно" — через 15 хв після ПД-Tomorrow
+    const pdFromLoad = atBorder.hourAbsFromLoad + inc.at_border_to_client_pd_response;
+    insertStep('client_pd_tomorrow', pdFromLoad, {});
+    insertStep('client_pd_sent', pdFromLoad + inc.client_pd_response_to_pd_sent, {});
     if (scenario === 2) {
-      add('carrier_waits_calm', pdTomorrow.scheduledAt, 0.25, { carrier_chat_id: carrierChatId });
+      insertStep('carrier_waits_calm', pdFromLoad + 0.25, { carrier_chat_id: carrierChatId });
     }
-    // R3: через 12 год без ПД — перевізник вимагає простій
     if (scenario === 3) {
-      add('carrier_simple_demand', atBorder.scheduledAt, inc.pd_requested_to_simple_demand, {
+      insertStep('carrier_simple_demand', atBorder.hourAbsFromLoad + inc.pd_requested_to_simple_demand, {
         carrier_chat_id: carrierChatId,
-        amount: 50, // €50/добу
+        amount: 50,
       });
     }
   }
 
-  // R4: М'якша реакція після затримки розвантаження
   if (scenario === 4) {
-    // Замовник погрожує штрафом — за день до прибуття на термінал
-    add('client_threat_fine', atTerminal.scheduledAt, -2, {});
-    // Після розвантаження — м'яко
-    add('client_no_fine_actually', unloadingDone.scheduledAt, inc.delivery_to_no_fine, {});
+    insertStep('client_threat_fine', atTerminal.hourAbsFromLoad - 2, {});
+    insertStep('client_no_fine_actually', unloadingDone.hourAbsFromLoad + inc.delivery_to_no_fine, {});
   }
 
-  // R5: Зрив рейсу — замовник скасовує за день до завантаження
   if (scenario === 5) {
-    // ВАЖЛИВО: цей інцидент скасовує всі наступні якщо студент НЕ повідомить
-    // ПОКИ ЩО — тільки текст пишемо
-    const cancelScheduled = new Date(new Date(loadingStartedAt).getTime() - simHoursToMs(12)).toISOString();
-    const cancelId = uuidv4();
-    db.prepare(`
-      INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id, type, state, scheduled_at, payload_json)
-      VALUES (?,?,?,?,?,?,?,'pending',?,?)
-    `).run(cancelId, sessionId, studentId, letterId, applicationId || null, scenario,
-      'client_cancel_order', cancelScheduled, JSON.stringify({ is_breaking: true }));
+    insertStep('client_cancel_order', -12, { is_breaking: true });
   }
 
-  // R6: Розмитнення без простоїв
-  // Перевізник пише що термінал затримує + замовник підтверджує
-  // ВАЖЛИВО: зсуваємо наступні події (unloading тощо) на +24год сим бо розмитнення затягнулось
   if (scenario === 6) {
-    add('carrier_customs_delay', atTerminal.scheduledAt, 1, { carrier_chat_id: carrierChatId });
-    add('client_customs_will_delay', atTerminal.scheduledAt, 1.5, {});
-    // Зсуваємо at_unloading, unloading_done, client_delivery_confirmed +24год
-    const shiftSeconds = Math.round(simHoursToMs(24) / 1000);
-    db.prepare(`
-      UPDATE incidents SET scheduled_at = datetime(scheduled_at, '+' || ? || ' seconds')
-      WHERE letter_id=? AND state='pending'
-      AND type IN ('at_unloading_arrived','at_unloading_wait','unloading_done','client_delivery_confirmed')
-    `).run(shiftSeconds, letterId);
+    insertStep('carrier_customs_delay', atTerminal.hourAbsFromLoad + 1, { carrier_chat_id: carrierChatId });
+    insertStep('client_customs_will_delay', atTerminal.hourAbsFromLoad + 1.5, {});
+    shiftIncidentSimHours(sessionId, letterId,
+      ['at_unloading_arrived', 'at_unloading_wait', 'unloading_done', 'client_delivery_confirmed'], 24);
   }
 
-  // R7: Розмитнення + простої
-  // Як R6 + перевізник вимагає €50/добу простою
   if (scenario === 7) {
-    add('carrier_customs_delay', atTerminal.scheduledAt, 1, { carrier_chat_id: carrierChatId });
-    // Простій-вимога — створюється з demand_amount щоб торг знав суму
-    const simpleId = uuidv4();
-    const simpleScheduled = new Date(new Date(atTerminal.scheduledAt).getTime()
-      + simHoursToMs(inc.arrived_terminal_to_customs_simple)).toISOString();
-    db.prepare(`
-      INSERT INTO incidents (id, session_id, student_id, letter_id, application_id, scenario_id,
-                              type, state, scheduled_at, payload_json, demand_amount)
-      VALUES (?,?,?,?,?,?,?,'pending',?,?,?)
-    `).run(simpleId, sessionId, studentId, letterId, applicationId || null, scenario,
-      'carrier_customs_simple_demand', simpleScheduled,
-      JSON.stringify({ carrier_chat_id: carrierChatId, amount: 50 }), 50);
-    // Зсуваємо наступні події +48год сим (2 доби простою)
-    const shiftSeconds = Math.round(simHoursToMs(48) / 1000);
-    db.prepare(`
-      UPDATE incidents SET scheduled_at = datetime(scheduled_at, '+' || ? || ' seconds')
-      WHERE letter_id=? AND state='pending'
-      AND type IN ('at_unloading_arrived','at_unloading_wait','unloading_done','client_delivery_confirmed')
-    `).run(shiftSeconds, letterId);
+    insertStep('carrier_customs_delay', atTerminal.hourAbsFromLoad + 1, { carrier_chat_id: carrierChatId });
+    insertStep('carrier_customs_simple_demand', atTerminal.hourAbsFromLoad + inc.arrived_terminal_to_customs_simple, {
+      carrier_chat_id: carrierChatId,
+      amount: 50,
+    });
+    shiftIncidentSimHours(sessionId, letterId,
+      ['at_unloading_arrived', 'at_unloading_wait', 'unloading_done', 'client_delivery_confirmed'], 48);
   }
 
-  // R3: Затримка ПД + простій — додаємо demand_amount до раніше створеного інциденту
   if (scenario === 3) {
     db.prepare(`
       UPDATE incidents SET demand_amount=50
@@ -348,13 +282,11 @@ function scheduleInitialIncidents({ sessionId, studentId, letterId, applicationI
     `).run(sessionId, letterId);
   }
 
-  // R8: помилка в документах (EXW)
   if (scenario === 8) {
-    // Замовник пише про помилку після того як отримав довідку
-    add('client_docs_error_exw', askCert.scheduledAt, inc.cert_sent_to_docs_error, {});
+    insertStep('client_docs_error_exw', askCert.hourAbsFromLoad + inc.cert_sent_to_docs_error, {});
   }
 
-  console.log(`[incident-sched] R${scenario}: заплановано інциденти для letter=${letterId.slice(0,8)}`);
+  console.log(`[incident-sched] R${scenario}: заплановано інциденти для letter=${letterId.slice(0, 8)} (load sim-день ${loadSimDay})`);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -601,17 +533,14 @@ function runDueIncidents(sessionIdFilter) {
     // Якщо студент ще не дійшов — НЕ стріляємо. Це рознесло етапи рейсу в часі
     // (раніше всі вистрілювали разом, бо звіряли лише день).
     let payload = {}; try { payload = JSON.parse(inc.payload_json || '{}'); } catch(e){}
-    const SIM_HOUR_MS_REAL = 10 * 60 * 1000; // 1 сим-год = 10 хв реальних
-    const DAY_MIN_REAL = 120; // 120 хв реальних = 1 сим-день = 12 сим-год
-    const curDay = session.timer_day || 1;
-    const hourInDay = Math.min(12, Math.floor((session.timer_ms || 0) % (DAY_MIN_REAL*60*1000) / SIM_HOUR_MS_REAL));
-    const curSimHourAbs = (curDay - 1) * 12 + hourInDay;
+    const curSimHourAbs = simTime.timerMsToSimHourAbs(session.timer_ms || 0);
+    const curDay = simTime.timerMsToParts(session.timer_ms || 0).timer_day;
     if (payload.target_sim_hour_abs != null) {
       if (curSimHourAbs < payload.target_sim_hour_abs) {
-        continue; // студент ще не дійшов до сим-години події — чекаємо
+        continue;
       }
     } else if (payload.target_sim_day != null) {
-      if (curDay < payload.target_sim_day) continue; // fallback для старих інцидентів
+      if (curDay < payload.target_sim_day) continue;
     }
 
     // Не «завантажились» раніше дати завантаження перевізника
@@ -743,6 +672,7 @@ let cronTimer = null;
 function startCron(intervalMs = 60 * 1000) { // щохвилини
   if (cronTimer) clearInterval(cronTimer);
   cronTimer = setInterval(() => {
+    try { simTime.syncActiveSessions(); } catch (e) { console.error('[incident-cron] sync:', e.message); }
     try { runDueIncidents(); } catch (e) { console.error('[incident-cron]', e.message); }
     try { runDueDocumentChecks(); } catch (e) { console.error('[doc-check-cron]', e.message); }
   }, intervalMs);

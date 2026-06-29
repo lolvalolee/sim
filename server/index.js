@@ -85,6 +85,10 @@ try {
 
   setInterval(() => {
     try {
+      const simTime = require('./utils/sim-time');
+      simTime.syncActiveSessions();
+    } catch (e) { /* ignore */ }
+    try {
       followupScheduler.processPendingFollowups({ db });
     } catch (e) {
       console.error('[followup-cron] error:', e.message);

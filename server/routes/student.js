@@ -1383,23 +1383,23 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
   // Якщо approve — плануємо followup-тригери "де заявка"
   // Тільки якщо є activна заявка для цього letter
   if (isApprove) {
+    let activeApp = null;
     try {
-      const activeApp = db.prepare(`
+      activeApp = db.prepare(`
         SELECT * FROM applications
         WHERE session_id=? AND letter_id=? AND sent_to_carrier_at IS NULL
         ORDER BY created_at DESC LIMIT 1
       `).get(session.id, letterId);
 
-      if (activeApp) {
-        followupScheduler.scheduleFollowups({
-          db,
-          session,
-          application: activeApp,
-          carrierId,
-          sessionStartDateStr: session.start_date,
-          loadDateStr: date,
-        });
-      }
+      followupScheduler.scheduleFollowups({
+        db,
+        session,
+        application: activeApp || null,
+        letterId,
+        carrierId,
+        sessionStartDateStr: session.start_date,
+        loadDateStr: date,
+      })
       // Якщо заявки ще нема — followups запланються коли студент її створить
       // (можна додати окремо в POST /applications, але поки що тільки тут)
     } catch (e) {
@@ -1417,18 +1417,14 @@ router.post('/chats/:carrierId/confirm-carrier', STU, async (req, res) => {
         WHERE session_id=? AND letter_id=? AND state IN ('pending','triggered')
       `).get(session.id, letterId);
       if (alreadyPlanned.cnt === 0 && chatForCarrier && letterScenario) {
-        // Конвертуємо date з формату DD.MM.YYYY в ISO
-        let loadDateIso = null;
-        const m = (date || '').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-        if (m) loadDateIso = `${m[3]}-${m[2]}-${m[1]}T09:00:00.000Z`;
         incidentScheduler.scheduleInitialIncidents({
           sessionId: session.id,
           studentId: req.user.id,
           letterId,
-          applicationId: null, // ще нема заявки в момент підтвердження
+          applicationId: activeApp?.id || null,
           scenarioId: letterScenario.scenario_id,
           carrierChatId: chatForCarrier.id,
-          loadDateIso,
+          loadDateDmy: date,
           distToBorder: letterScenario.dist_to_border,
           distAfterBorder: letterScenario.dist_after_border,
         });
@@ -1710,6 +1706,7 @@ router.post('/applications', STU, (req, res) => {
         db,
         session,
         application: justCreated,
+        letterId: body.letter_id || letter?.id,
         carrierId: body.carrier_id,
         sessionStartDateStr: session.start_date,
         loadDateStr: body.load_date,
@@ -2075,8 +2072,13 @@ router.post('/applications/:id/send-to-carrier', STU, (req, res) => {
     WHERE id=?`)
     .run(now, targetCarrierId, msgId, app.id);
 
-  // Скасовуємо всі попередні followups для цієї заявки
+  // Скасовуємо всі попередні followups для цієї заявки / рейсу
   followupScheduler.cancelFollowups({ db, applicationId: app.id });
+  if (app.letter_id && targetCarrierId) {
+    followupScheduler.cancelFollowupsForDeal({
+      db, sessionId: session.id, letterId: app.letter_id, carrierId: targetCarrierId,
+    });
+  }
 
   // Записуємо подію
   if (app.letter_id) {
