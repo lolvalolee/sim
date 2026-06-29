@@ -847,14 +847,20 @@ function studentNegotiateClient({ sessionId, letterId, amount }) {
   const newInc = db.prepare(`SELECT * FROM incidents WHERE id=?`).get(newId);
   fireIncident(newInc);
 
-  // Resume point
+  // Resume point — окремі типи для звіту лектору
+  const resumeByDecision = {
+    refused: { type: 'client_simple_refused', impact: 0 },
+    partial: { type: 'client_simple_partial', impact: 1 },
+    agreed: { type: 'client_simple_agreed', impact: 2 },
+  };
+  const rp = resumeByDecision[clientDecision] || { type: 'informed_client_about_simple', impact: 1 };
   addResumePoint({
     sessionId: incident.session_id,
     studentId: incident.student_id,
     letterId: incident.letter_id,
     applicationId: incident.application_id,
-    type: 'informed_client_about_simple',
-    impact: 1,
+    type: rp.type,
+    impact: rp.impact,
     context: { decision: clientDecision, amount },
   });
 

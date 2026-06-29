@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db');
+const sessionProfit = require('../utils/session-profit');
 
 const LEC = requireAuth(['lecturer','superadmin']);
 
@@ -402,21 +403,15 @@ router.get('/students/:studentId/resume', LEC, (req, res) => {
 
   const totalScore = enriched.reduce((s, p) => s + p.impact, 0);
 
-  const profitData = db.prepare(`
-    SELECT
-      SUM(COALESCE(client_freight,0)) AS revenue,
-      SUM(COALESCE(carrier_freight,0)) AS carrier_paid,
-      SUM(COALESCE(simple_paid_by_student,0)) AS simples_self
-    FROM order_progress WHERE session_id=?
-  `).get(session.id);
-  const margin = (profitData?.revenue || 0) - (profitData?.carrier_paid || 0) - (profitData?.simples_self || 0);
+  const profitBlock = sessionProfit.computeSessionProfit(session.id);
 
   res.json({
     exists: true,
     session_id: session.id,
     total_score: totalScore,
     total_points: enriched.length,
-    margin,
+    margin: profitBlock.net,
+    profit: profitBlock,
     points: enriched,
   });
 });

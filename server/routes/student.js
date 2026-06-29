@@ -10,6 +10,7 @@ const incidentScenarios = require('../utils/incident-scenarios');
 const documentChecker = require('../utils/document-checker');
 const routeMatcher = require('../utils/route-matcher');
 const simTime = require('../utils/sim-time');
+const sessionProfit = require('../utils/session-profit');
 
 const STU = requireAuth(['student']);
 
@@ -141,6 +142,95 @@ function assignAppearDays(letterIds, assignmentId) {
     updDay.run(p.day, p.half, id);
   });
   console.log(`[scenarios] Хвилі листів: 4+2+2 (assignment), n=${letterIds.length}`);
+}
+
+function freightRefForLetterId(letterId) {
+  const letter = db.prepare('SELECT id, freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(letterId);
+  return routeMatcher.freightRefForLetter(db, letter);
+}
+
+/** Антишахрайство: межі торгу ref±300 (клієнт), ref±500 (збереження ставки перевізника) */
+function validateNegoOffer(letterId, offer, role) {
+  if (offer == null || offer === '') return { ok: true };
+  const n = Number(offer);
+  if (!Number.isFinite(n)) return { ok: false, error: 'invalid_offer' };
+  const fref = freightRefForLetterId(letterId);
+  if (!fref || fref <= 0) return { ok: true };
+  if (role === 'client') {
+    if (n > fref + 300) return { ok: false, error: 'offer_above_ceiling', message: 'Ціна вище допустимої межі ref+300' };
+    if (n < fref - 300) return { ok: false, error: 'offer_below_floor' };
+  }
+  if (role === 'carrier' && (n < fref - 500 || n > fref + 500)) {
+    return { ok: false, error: 'offer_out_of_range' };
+  }
+  return { ok: true };
+}
+
+function pickExchangeResponders(session, { route, vehicle_type, assignmentLetters }) {
+  let dirsNeeded = [];
+  let baseFreight = 0;
+  let matchedLetter = null;
+  let resolvedLetterId = null;
+
+  try {
+    const found = routeMatcher.matchLetterByRoute(route, assignmentLetters);
+    if (found) {
+      dirsNeeded = routeMatcher.parseDirs(found);
+      baseFreight = routeMatcher.freightRefForLetter(db, found);
+      matchedLetter = found;
+      resolvedLetterId = found.id;
+    }
+  } catch (e) {}
+
+  if (!matchedLetter) return { error: 'route_no_match', dirsNeeded, baseFreight, resolvedLetterId, responders: [] };
+
+  const exchangeCarriers = db.prepare(`
+    SELECT id, name, person, phone, dirs, vehicle_types, reliability, availability, personality, nationality
+    FROM carriers WHERE active=1 AND COALESCE(for_exchange,0)=1
+  `).all();
+
+  const vt = (vehicle_type || 'Тент').toLowerCase().split(' ')[0];
+  const matching = exchangeCarriers.filter(c => {
+    let cdirs = []; try { cdirs = JSON.parse(c.dirs || '[]'); } catch (e) {}
+    let ctypes = []; try { ctypes = JSON.parse(c.vehicle_types || '[]'); } catch (e) {}
+    const dirOk = dirsNeeded.length > 0 && routeMatcher.carrierMatchesLetterDirs(cdirs, dirsNeeded);
+    const typeOk = ctypes.some(t => t.toLowerCase().includes(vt) || vt.includes(t.toLowerCase()));
+    return dirOk && typeOk;
+  });
+
+  if (matching.length === 0) {
+    return { dirsNeeded, baseFreight, resolvedLetterId, responders: [] };
+  }
+
+  const shuffled = matching.sort(() => Math.random() - 0.5);
+  const count = Math.min(shuffled.length, 1 + Math.floor(Math.random() * 4));
+  const picks = shuffled.slice(0, count);
+
+  const responders = picks.map((c, i) => {
+    const givesPrice = i < 2;
+    const pers = c.personality || 'local';
+    let topUp = 75;
+    if (['local', 'flaky', 'unreliable'].includes(pers)) topUp = 50;
+    else if (['tough', 'aggressive', 'pushy', 'bargainer'].includes(pers)) topUp = 100;
+    const startPrice = baseFreight > 0 ? Math.round((baseFreight + topUp) / 50) * 50 : 0;
+    const readiness = Math.random() < 0.4 ? 'ready' : 'interested';
+    return {
+      carrier_id: c.id,
+      name: c.name,
+      person: c.person,
+      phone: c.phone,
+      dirs: c.dirs,
+      vehicle_types: c.vehicle_types,
+      personality: pers,
+      gives_price: givesPrice,
+      start_price: startPrice,
+      freight_ref: baseFreight || null,
+      readiness,
+      wave: i < 2 ? 1 : 2,
+    };
+  });
+
+  return { dirsNeeded, baseFreight, resolvedLetterId, responders };
 }
 
 function maybeScheduleDateMismatch(session, letterId) {
@@ -275,6 +365,8 @@ router.get('/session', STU, (req, res) => {
   const carrierChats = db.prepare('SELECT * FROM carrier_chats WHERE session_id=?').all(session.id);
   const orderProgress = db.prepare('SELECT * FROM order_progress WHERE session_id=?').all(session.id);
 
+  const profitBlock = sessionProfit.recomputeAndStore(session.id);
+
   res.json({
     session: {
       id: session.id,
@@ -287,7 +379,7 @@ router.get('/session', STU, (req, res) => {
       paused: clock?.paused ?? !!session.paused,
       auto_paused: clock?.auto_paused ?? !!session.auto_paused,
       start_date: session.start_date,
-      profit: session.profit,
+      profit: profitBlock.net,
       rates: JSON.parse(session.rates),
       version: session.version || '',
       idle_pause_min: group.idle_pause_min != null ? group.idle_pause_min : null,
@@ -354,12 +446,10 @@ router.post('/session/save', STU, (req, res) => {
 
   simTime.syncSessionTime(session.id, { heartbeat: true });
 
-  if (profit != null) {
-    db.prepare('UPDATE sessions SET profit=? WHERE id=?').run(profit || 0, session.id);
-  }
+  const profitBlock = sessionProfit.recomputeAndStore(session.id);
 
   const clock = simTime.getSessionClock(session.id);
-  res.json({ ok: true, clock });
+  res.json({ ok: true, clock, profit: profitBlock.net });
 });
 
 // ── EMAIL THREAD ──────────────────────────────────────────────
@@ -562,7 +652,6 @@ router.post('/chats/:carrierId/cancel-deal', STU, (req, res) => {
             VALUES (?,?,?,?,?,?,?)`)
             .run(uuidv4(), session.id, op.letter_id, 'student_cancel_fine', FINE,
                  `Штраф €${FINE} за скасування менш ніж за 24 год до завантаження`, carrier?.name || '');
-          db.prepare('UPDATE sessions SET profit = COALESCE(profit,0) - ? WHERE id=?').run(FINE, session.id);
           fined = true;
           try {
             incidentScheduler.addResumePoint({
@@ -573,6 +662,10 @@ router.post('/chats/:carrierId/cancel-deal', STU, (req, res) => {
         }
       } catch(e){}
     }
+  }
+
+  if (fined) {
+    try { sessionProfit.recomputeAndStore(session.id); } catch (e) {}
   }
 
   console.log(`[cancel-deal] рейс ${op.letter_id} звільнено від ${carrierId}, штраф=${fined}`);
@@ -765,12 +858,10 @@ router.post('/orders/:letterId', STU, (req, res) => {
            carrier_plate||null, carrier_driver||null);
   }
 
-  // Update profit (з урахуванням простоїв оплачених студентом)
-  const orders = db.prepare('SELECT client_freight, carrier_freight, simple_paid_by_student FROM order_progress WHERE session_id=?').all(session.id);
-  const profit = orders.reduce((sum, o) => sum + ((o.client_freight||0) - (o.carrier_freight||0) - (o.simple_paid_by_student||0)), 0);
-  db.prepare('UPDATE sessions SET profit=? WHERE id=?').run(profit, session.id);
+  // Update profit (order_progress + order_charges)
+  const profitBlock = sessionProfit.recomputeAndStore(session.id);
 
-  res.json({ ok: true, profit });
+  res.json({ ok: true, profit: profitBlock.net });
 });
 
 // ── AI PROXY ──────────────────────────────────────────────────
@@ -1802,7 +1893,15 @@ router.patch('/applications/:id', STU, (req, res) => {
       .get(session.id, letterId);
   }
   if (body.client_id) client = db.prepare('SELECT * FROM clients WHERE id=?').get(body.client_id);
-  if (body.carrier_id) carrier = db.prepare('SELECT * FROM carriers WHERE id=?').get(body.carrier_id);
+  if (body.carrier_id) {
+    carrier = db.prepare('SELECT id, name FROM carriers WHERE id=?').get(body.carrier_id);
+    if (!carrier) {
+      return res.status(400).json({
+        error: 'invalid_carrier',
+        message: 'Оберіть перевізника зі списку (клік по підказці)',
+      });
+    }
+  }
 
   // Якщо немає letter — пробуємо знайти за client_id у поточному assignment
   if (!letter && body.client_id) {
@@ -2223,6 +2322,9 @@ router.post('/orders/:letterId/simple-resolve', STU, (req, res) => {
     decision,
     amount: parseFloat(amount) || 0,
   });
+  if (result.ok) {
+    try { sessionProfit.recomputeAndStore(session.id); } catch (e) {}
+  }
   res.json(result);
 });
 
@@ -2281,6 +2383,14 @@ router.patch('/orders/:letterId/nego', STU, (req, res) => {
   if (!session) return res.status(404).json({ error: 'No session' });
   const { carrier_nego_offer, client_nego_offer, carrier_id } = req.body || {};
   try {
+    if (client_nego_offer != null) {
+      const v = validateNegoOffer(req.params.letterId, client_nego_offer, 'client');
+      if (!v.ok) return res.status(400).json(v);
+    }
+    if (carrier_nego_offer != null) {
+      const v = validateNegoOffer(req.params.letterId, carrier_nego_offer, 'carrier');
+      if (!v.ok) return res.status(400).json(v);
+    }
     const op = db.prepare('SELECT id FROM order_progress WHERE session_id=? AND letter_id=?')
       .get(session.id, req.params.letterId);
     if (op) {
@@ -2394,25 +2504,18 @@ router.get('/resume', STU, (req, res) => {
     byLetter[p.letter_id].points.push(p);
   }
 
-  // Прибуток + простої з order_progress
-  const profitData = db.prepare(`
-    SELECT
-      SUM(COALESCE(client_freight,0)) AS revenue,
-      SUM(COALESCE(carrier_freight,0)) AS carrier_paid,
-      SUM(COALESCE(simple_paid_by_student,0)) AS simples_self,
-      SUM(COALESCE(simple_paid_by_client,0)) AS simples_client
-    FROM order_progress WHERE session_id=?
-  `).get(session.id);
+  const profitBlock = sessionProfit.computeSessionProfit(session.id);
 
   res.json({
     total_score: totalScore,
     total_points: enriched.length,
     profit: {
-      revenue: profitData?.revenue || 0,
-      carrier_paid: profitData?.carrier_paid || 0,
-      simples_paid_self: profitData?.simples_self || 0,
-      simples_paid_by_client: profitData?.simples_client || 0,
-      net: (profitData?.revenue || 0) - (profitData?.carrier_paid || 0) - (profitData?.simples_self || 0),
+      revenue: profitBlock.revenue,
+      carrier_paid: profitBlock.carrier_paid,
+      simples_paid_self: profitBlock.simples_self,
+      simples_paid_by_client: profitBlock.simples_client,
+      charges_total: profitBlock.charges_total,
+      net: profitBlock.net,
     },
     by_letter: Object.values(byLetter),
     points: enriched,
@@ -2473,14 +2576,8 @@ router.get('/resume/analysis', STU, async (req, res) => {
     (typeCounts['cert_repeated_error_exw'] || 0) * 25
   ));
 
-  const profitData = db.prepare(`
-    SELECT
-      SUM(COALESCE(client_freight,0)) AS revenue,
-      SUM(COALESCE(carrier_freight,0)) AS carrier_paid,
-      SUM(COALESCE(simple_paid_by_student,0)) AS simples_self
-    FROM order_progress WHERE session_id=?
-  `).get(session.id);
-  const margin = (profitData?.revenue || 0) - (profitData?.carrier_paid || 0) - (profitData?.simples_self || 0);
+  const profitBlock = sessionProfit.computeSessionProfit(session.id);
+  const margin = profitBlock.net;
   // Мета — €1000 маржі
   const result = Math.max(0, Math.min(100, Math.round((margin / 1000) * 100)));
 
@@ -2506,14 +2603,8 @@ router.post('/exchange/post', STU, (req, res) => {
   const session = getSession(req.user.id);
   if (!session) return res.status(404).json({ error: 'No session' });
 
-  const { route, vehicle_type, weight, volume, load_date, notes } = req.body;
+  const { route, vehicle_type, weight, volume, load_date, notes, cargo_id: existingCargoId } = req.body;
   if (!route) return res.status(400).json({ error: 'route_required' });
-
-  // Матчинг маршруту лише до листів набору студента (студент вводить дані сам)
-  let dirsNeeded = [];
-  let baseFreight = 0;
-  let matchedLetter = null;
-  let resolvedLetterId = null;
 
   const assignment = session.assignment_id
     ? db.prepare('SELECT letter_ids FROM assignments WHERE id=?').get(session.assignment_id)
@@ -2525,97 +2616,57 @@ router.post('/exchange/post', STU, (req, res) => {
     .map(id => db.prepare('SELECT id, dirs, load_address, unload_address, freight_amount, carrier_range_min, carrier_range_max FROM letters WHERE id=?').get(id))
     .filter(Boolean);
 
-  try {
-    const found = routeMatcher.matchLetterByRoute(route, assignmentLetters);
-    if (found) {
-      dirsNeeded = routeMatcher.parseDirs(found);
-      baseFreight = routeMatcher.freightRefForLetter(db, found);
-      matchedLetter = found;
-      resolvedLetterId = found.id;
-    }
-  } catch (e) {}
-
-  if (!matchedLetter) {
+  const picked = pickExchangeResponders(session, { route, vehicle_type, assignmentLetters });
+  if (picked.error === 'route_no_match') {
     return res.status(400).json({
       error: 'route_no_match',
       message: 'Маршрут не збігається з жодним рейсом з ваших листів. Вкажіть міста завантаження та розвантаження (напр. Суми → Краків).',
     });
   }
 
-  const cargoId = uuidv4();
-  try {
-    db.prepare(`
-      INSERT INTO cargo_board (id, session_id, student_id, route, vehicle_type, weight, volume, load_date, notes, status, letter_id)
-      VALUES (?,?,?,?,?,?,?,?,?,'active',?)
-    `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '', resolvedLetterId);
-  } catch (e) {
-    console.error('cargo_board insert:', e.message);
+  const resolvedLetterId = picked.resolvedLetterId;
+  let cargoId = existingCargoId;
+  let isReschedule = false;
+
+  if (cargoId) {
+    const row = db.prepare('SELECT id FROM cargo_board WHERE id=? AND session_id=? AND status=?')
+      .get(cargoId, session.id, 'active');
+    if (row) {
+      isReschedule = true;
+      db.prepare(`UPDATE cargo_board SET route=?, vehicle_type=?, weight=?, volume=?, load_date=?, notes=?, letter_id=? WHERE id=?`)
+        .run(route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '', resolvedLetterId, cargoId);
+    } else {
+      cargoId = null;
+    }
   }
 
-  // Підбираємо біржових перевізників (for_exchange=1)
-  const exchangeCarriers = db.prepare(`
-    SELECT id, name, person, phone, dirs, vehicle_types, reliability, availability, personality, nationality
-    FROM carriers WHERE active=1 AND COALESCE(for_exchange,0)=1
-  `).all();
-
-  // Фільтр: перевізник покриває всі країни маршруту листа + тип ТЗ
-  const vt = (vehicle_type || 'Тент').toLowerCase().split(' ')[0];
-  const matching = exchangeCarriers.filter(c => {
-    let cdirs = []; try { cdirs = JSON.parse(c.dirs || '[]'); } catch(e){}
-    let ctypes = []; try { ctypes = JSON.parse(c.vehicle_types || '[]'); } catch(e){}
-    const dirOk = dirsNeeded.length > 0 && routeMatcher.carrierMatchesLetterDirs(cdirs, dirsNeeded);
-    const typeOk = ctypes.some(t => t.toLowerCase().includes(vt) || vt.includes(t.toLowerCase()));
-    return dirOk && typeOk;
-  });
-
-  if (matching.length === 0) {
-    return res.json({ ok: true, cargo_id: cargoId, responders: [] });
+  if (!cargoId) {
+    cargoId = uuidv4();
+    try {
+      db.prepare(`
+        INSERT INTO cargo_board (id, session_id, student_id, route, vehicle_type, weight, volume, load_date, notes, status, letter_id)
+        VALUES (?,?,?,?,?,?,?,?,?,'active',?)
+      `).run(cargoId, session.id, req.user.id, route, vehicle_type || 'Тент', weight || '', volume || '', load_date || '', notes || '', resolvedLetterId);
+    } catch (e) {
+      console.error('cargo_board insert:', e.message);
+    }
   }
 
-  // Перемішуємо і беремо 1-4
-  const shuffled = matching.sort(() => Math.random() - 0.5);
-  const count = Math.min(shuffled.length, 1 + Math.floor(Math.random() * 4)); // 1-4
-  const picks = shuffled.slice(0, count);
+  const responders = picked.responders;
+  if (responders.length === 0) {
+    return res.json({ ok: true, cargo_id: cargoId, letter_id: resolvedLetterId || null, responders: [] });
+  }
 
-  // Призначаємо ролі і ціни. Орієнтир (baseFreight) визначено вище — з листа або
-  // за маршрутом. start_price ТІЛЬКИ в коридорі ref … ref+100 (не довільний —
-  // раніше offset давав 3500 при орієнтирі ~1700).
-  const responders = picks.map((c, i) => {
-    const givesPrice = i < 2; // перші 2 дають ціну, решта питають
-    const pers = c.personality || 'local';
-    // Перша ставка перевізника: трохи вище орієнтиру (як він і хоче — заробити).
-    // tough — ближче до +100, local — ближче до ref. Завжди в межах ref … ref+100.
-    let topUp = 100;
-    if (['local','flaky','unreliable'].includes(pers)) topUp = 50;
-    else if (['tough','aggressive','pushy','bargainer'].includes(pers)) topUp = 100;
-    else topUp = 75;
-    const startPrice = baseFreight > 0 ? Math.round((baseFreight + topUp) / 50) * 50 : 0;
-    const readiness = Math.random() < 0.4 ? 'ready' : 'interested';
-    return {
-      carrier_id: c.id,
-      name: c.name,
-      person: c.person,
-      phone: c.phone,
-      dirs: c.dirs,
-      vehicle_types: c.vehicle_types,
-      personality: pers,
-      gives_price: givesPrice,
-      start_price: startPrice,
-      freight_ref: baseFreight || null, // №біржа: орієнтир для меж торгу на фронті
-      readiness,
-      wave: i < 2 ? 1 : 2, // перша хвиля 1-2, друга решта
-    };
-  });
-
-  // Resume point: студент скористався біржею
-  try {
-    incidentScheduler.addResumePoint({
-      sessionId: session.id, studentId: req.user.id,
-      letterId: resolvedLetterId || null,
-      type: 'used_exchange', impact: 0,
-      context: { route, responders: responders.length },
-    });
-  } catch(e){}
+  if (!isReschedule) {
+    try {
+      incidentScheduler.addResumePoint({
+        sessionId: session.id, studentId: req.user.id,
+        letterId: resolvedLetterId || null,
+        type: 'used_exchange', impact: 0,
+        context: { route, responders: responders.length },
+      });
+    } catch (e) {}
+  }
 
   res.json({ ok: true, cargo_id: cargoId, letter_id: resolvedLetterId || null, responders });
 });

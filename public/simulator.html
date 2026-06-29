@@ -2474,18 +2474,34 @@ function updateBadges(){
 }
 
 function updateProfit(){
-  let p=0;
-  S.orders.forEach(o=>{
-    if(o.clientFreightAgreed&&o.carrierFreightAgreed) p+=o.clientFreightAgreed-o.carrierFreightAgreed;
+  let p = 0;
+  S.orders.forEach(o => {
+    const cf = o.clientFreightAgreed;
+    const rf = o.carrierFreightAgreed;
+    if (cf != null && rf != null) {
+      p += cf - rf - (o.simplePaidByStudent || 0);
+    }
   });
-  S.profit=p;
-  const pct=Math.min(100,Math.round(p/1000*100));
-  const el=document.getElementById('sb-profit-val');
-  if(el){el.textContent=`€${p.toLocaleString('uk')}`;el.className='pb-val'+(p>=1000?' ok':'');}
-  const bar=document.getElementById('sb-profit-fill');
-  if(bar) bar.style.width=pct+'%';
-  const pctEl=document.getElementById('pb-pct');
-  if(pctEl) pctEl.textContent=pct+'%';
+  const charges = (_chargesCache || []).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  p -= charges;
+  S.profit = p;
+  const pct = Math.min(100, Math.round(p / 1000 * 100));
+  const el = document.getElementById('sb-profit-val');
+  if (el) { el.textContent = `€${p.toLocaleString('uk')}`; el.className = 'pb-val' + (p >= 1000 ? ' ok' : ''); }
+  const bar = document.getElementById('sb-profit-fill');
+  if (bar) bar.style.width = pct + '%';
+  const pctEl = document.getElementById('pb-pct');
+  if (pctEl) pctEl.textContent = pct + '%';
+}
+
+function freightRefFromLetter(letter) {
+  const v2ref = letter.v2 && letter.v2.freight_ref;
+  if (v2ref) return v2ref;
+  if (letter.freight_amount) return letter.freight_amount;
+  const min = letter.freight_min || letter.carrier_range_min;
+  const max = letter.freight_max || letter.carrier_range_max;
+  if (min && max) return Math.round((min + max) / 2);
+  return null;
 }
 
 // Стан вибраного дня в календарі (для показу курсу)
@@ -2578,7 +2594,7 @@ function updateCalendar(){
 
   // Лічильник днів унизу
   const cnt=document.getElementById('sb-cal-counter');
-  if(cnt) cnt.innerHTML=`<strong>День ${S.timerDay}</strong> з 5`;
+  if(cnt) cnt.innerHTML=`<strong>День ${S.timerDay}</strong> з ${CFG.totalDays || 8}`;
 
   // Курс — за замовчуванням показуємо ПОТОЧНИЙ день симуляції
   if(CAL_SELECTED_DAY_IDX===null){
@@ -4459,6 +4475,7 @@ let _afCarrierSearchTimer = null;
 async function onAfCarrierSearch(query){
   if (_afCarrierSearchTimer) clearTimeout(_afCarrierSearchTimer);
   query = (query || '').trim();
+  onAfCarrierInputChange();
   const dropdown = document.getElementById('af-carrier-dropdown');
   if (!dropdown) return;
 
@@ -4561,6 +4578,30 @@ function renderAfCarrierResults(results, query){
     `;
   }).join('');
   dropdown.classList.remove('hidden');
+}
+
+function onAfCarrierInputChange() {
+  const hidden = document.getElementById('af-carrier');
+  const input = document.getElementById('af-carrier-input');
+  if (!hidden || !input || !hidden.value) return;
+  const c = (S.carriers || []).find(x => x.id === hidden.value);
+  if (c && input.value.trim() !== (c.name || '').trim()) hidden.value = '';
+}
+
+async function reloadEmailThreads(letterId) {
+  const token = localStorage.getItem('docaa_token');
+  if (!token) return;
+  const ids = letterId ? [letterId] : (S.orders || []).map(o => o.id);
+  for (const lid of ids) {
+    try {
+      const r = await fetch(`/api/student/threads/${lid}`, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) continue;
+      const data = await r.json();
+      const em = (S.emails || []).find(e => e.orderId === lid);
+      if (em) em.replies = data.messages || [];
+    } catch (e) {}
+  }
+  if (S.module === 'inbox' && typeof renderInbox === 'function') renderInbox();
 }
 
 function selectAfCarrier(carrierId, carrierName){
@@ -5794,7 +5835,7 @@ function showApplicationForm(){
                        data-carrier-id="${d.carrier_id || ''}"
                        value="${d.carrier_id ? escapeHtml((carriersList.find(c => c.id === d.carrier_id)?.name) || '') : ''}"
                        placeholder="Натисніть і виберіть або почніть писати"
-                       oninput="onAfCarrierSearch(this.value)"
+                       oninput="onAfCarrierInputChange();onAfCarrierSearch(this.value)"
                        onfocus="onAfCarrierSearch(this.value)"
                        autocomplete="off">
                 <input type="hidden" id="af-carrier" value="${d.carrier_id || ''}">
@@ -7807,6 +7848,9 @@ async function renderResume(){
     pd_not_forwarded: 'Не переслав ПД',
     informed_carrier_about_cancel: 'Повідомив перевізника про скасування',
     informed_client_about_simple: 'Повідомив замовника про простій',
+    client_simple_refused: 'Замовник відмовив оплачувати простій',
+    client_simple_partial: 'Замовник частково погодив простій',
+    client_simple_agreed: 'Замовник погодив оплату простою',
     simple_avoided: 'Відмовив у простоях',
     simple_compromise: 'Знизив суму простоїв',
     simple_paid_self: 'Взяв простій на себе',
@@ -8106,6 +8150,7 @@ function editCargo(i){ openAddCargo(i); }
 function deleteCargo(i){
   if(!confirm('Видалити вантаж з біржі?')) return;
   const cargo = S.cargoBoard[i];
+  if (cargo?.cargoId) cancelExchangeSchedule(cargo.cargoId);
   S.cargoBoard.splice(i,1);
   renderExchangeList();
   // №6: видаляємо на сервері за стабільним cargoId (інакше reload повертав пост)
@@ -8145,11 +8190,46 @@ function updateCargo(i){
 // видалення через DELETE /exchange/:cargoId. Стабільні id, без розсинхрону.
 function saveCargoBoardToServer(){ /* deprecated — синхронізація через post/delete */ }
 
+const _exchangeSched = {};
+function cancelExchangeSchedule(cargoId) {
+  const e = _exchangeSched[cargoId];
+  if (e) {
+    e.timeouts.forEach(t => clearTimeout(t));
+    delete _exchangeSched[cargoId];
+  }
+}
+function simMinutesUntilDayHalf(targetDay, targetHalf) {
+  const dayStart = CFG.dayStartHour ?? 9;
+  const afternoon = CFG.afternoonSimHour ?? 15;
+  const curDay = S.timerDay || 1;
+  const curHour = S.simHour != null ? S.simHour : dayStart;
+  const curMin = S.simMin || 0;
+  const minsPerDay = 12 * 60;
+  const curAbs = (curDay - 1) * minsPerDay + Math.max(0, (curHour - dayStart)) * 60 + curMin;
+  const targetHour = targetHalf === 2 ? afternoon : dayStart;
+  const targetAbs = (targetDay - 1) * minsPerDay + Math.max(0, (targetHour - dayStart)) * 60;
+  return Math.max(5, targetAbs - curAbs);
+}
+function scheduleExchangeDelay(cargoId, cb, simMin) {
+  if (!_exchangeSched[cargoId]) _exchangeSched[cargoId] = { gen: 1, timeouts: [] };
+  const gen = _exchangeSched[cargoId].gen;
+  const tid = setTimeout(() => {
+    if (_exchangeSched[cargoId]?.gen !== gen) return;
+    cb();
+  }, simMinToRealMs(simMin));
+  _exchangeSched[cargoId].timeouts.push(tid);
+}
+
 // AI biржові перевізники відгукуються на пост (підбір на сервері)
 async function scheduleCarrierFromExchange(cargoIdx){
   const cargo=S.cargoBoard?.[cargoIdx]; if(!cargo) return;
   const token=localStorage.getItem('docaa_token');
   const localCargoId = cargo.cargoId;
+
+  cancelExchangeSchedule(localCargoId);
+  _exchangeSched[localCargoId] = { gen: ((_exchangeSched[localCargoId]?.gen) || 0) + 1, timeouts: [] };
+
+  const serverCargoId = cargo.cargoId && !String(cargo.cargoId).startsWith('cb_') ? cargo.cargoId : null;
 
   try {
     const resp = await fetch('/api/student/exchange/post', {
@@ -8162,6 +8242,7 @@ async function scheduleCarrierFromExchange(cargoIdx){
         volume: cargo.volume,
         load_date: cargo.load_date,
         notes: cargo.notes,
+        cargo_id: serverCargoId,
       }),
     });
     if(!resp.ok){
@@ -8200,18 +8281,22 @@ async function scheduleCarrierFromExchange(cargoIdx){
       }
     });
 
-    // Хвилі: wave 1 одразу (з затримкою 15-40 сим-хв), wave 2 пізніше
-    const cargoId = cargo.cargoId; // №4: стабільний id для перевірки актуальності
+    // Хвилі: wave1 — 15–40 сим-хв; wave2 — ранок дня 2 (якщо ще д1), інакше 40–90 сим-хв
+    const trackCargoId = data.cargo_id || S.cargoBoard[cargoIdx]?.cargoId || localCargoId;
     data.responders.forEach(r => {
-      const baseDelay = r.wave===1 ? (15+Math.random()*25) : (40+Math.random()*50); // сим-хв
-      const realMs = simMinToRealMs(baseDelay);
-      setTimeout(()=>{
-        // №4: пост ще існує і активний? (шукаємо за cargoId, не за індексом —
-        // після видалення/зсуву індекси не валідні, інакше пише по неактуальному)
-        const stillThere = (S.cargoBoard||[]).find(c => c.cargoId === cargoId && c.status==='active');
-        if(!stillThere) return;
-        initExchangeResponder(r, cargo);
-      }, realMs);
+      let baseDelay;
+      if (r.wave === 1) {
+        baseDelay = 15 + Math.random() * 25;
+      } else if ((S.timerDay || 1) < 2) {
+        baseDelay = simMinutesUntilDayHalf(2, 1) + Math.random() * 20;
+      } else {
+        baseDelay = 40 + Math.random() * 50;
+      }
+      scheduleExchangeDelay(trackCargoId, () => {
+        const fresh = (S.cargoBoard || []).find(c => c.cargoId === trackCargoId && c.status === 'active');
+        if (!fresh) return;
+        initExchangeResponder(r, fresh);
+      }, baseDelay);
     });
   } catch(e){}
 }
@@ -8243,11 +8328,13 @@ async function initExchangeResponder(responder, cargo){
       }
     }
     try {
-      const token=localStorage.getItem('docaa_token');
-      fetch(`/api/student/chats/${cid}/lock`,{method:'PATCH',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
-        body:JSON.stringify({letter_id:lockId})}).catch(()=>{});
-    } catch(e){}
+      const token = localStorage.getItem('docaa_token');
+      await fetch(`/api/student/chats/${cid}/lock`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ letter_id: lockId }),
+      });
+    } catch (e) {}
   }
   const ordCtx = lockId ? S.orders.find(o => o.id === lockId) : null;
   const sys = buildCarrierSys(carrier, {
@@ -10027,20 +10114,21 @@ async function loadSessionFromServer(token){
   S.rates=data.session.rates||DEFAULT_RATES.slice();
   S.sessionId=data.session.id;
   S.sessionVersion=data.session.version||'';
-  S.startDate=new Date();
   S.serverClockAt=Date.now();
 
-  // Очищення СТАРИХ чернеток (з попередніх сесій/студентів) і показ актуальних
+  // Parse start_date string DD.MM.YYYY (без тимчасового «сьогодні»)
+  if (data.session.start_date) {
+    const parts = data.session.start_date.split('.');
+    if (parts.length === 3) {
+      S.startDate = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+    }
+  }
+  if (!S.startDate || isNaN(S.startDate.getTime())) S.startDate = new Date();
+
   try {
     cleanupOldDrafts();
     refreshDraftBars();
-  } catch(e){}
-
-  // Parse start_date string DD.MM.YYYY
-  const parts=data.session.start_date.split('.');
-  if(parts.length===3){
-    S.startDate=new Date(parseInt(parts[2]),parseInt(parts[1])-1,parseInt(parts[0]));
-  }
+  } catch (e) {}
 
   // Build orders from server letters
   S.orders=data.letters.map(letter=>{
@@ -10077,6 +10165,7 @@ async function loadSessionFromServer(token){
       clientAgreedDate: op.client_agreed_date || null,
       carrierAgreedPrice: op.carrier_agreed_price || null,
       carrierAgreedDate: op.carrier_agreed_date || null,
+      simplePaidByStudent: op.simple_paid_by_student || 0,
       // Жорсткі дані з листа (deplo 10) — AI замовника використовує
       fromCity: letter.from_city || null,
       toCity: letter.to_city || null,
@@ -10101,7 +10190,7 @@ async function loadSessionFromServer(token){
       taskHint: (letter.v2 && letter.v2.hidden_task) || letter.task_hint || '',
       difficultyLevel: (letter.v2 && letter.v2.difficulty_v2) || letter.difficulty_level || '',
       vehicleRequired: (letter.v2 && letter.v2.vehicle_required) || letter.vehicle || '',
-      freightRef: (letter.v2 && letter.v2.freight_ref) || letter.freight_amount || null,
+      freightRef: freightRefFromLetter(letter),
       willCancel: false,
       incoterms: letter.incoterms||'',
       scenario: letter.scenario||'agree',
@@ -10226,10 +10315,12 @@ async function loadSessionFromServer(token){
     timer_day: S.timerDay,
     sim_hour: S.simHour,
     sim_min: S.simMin,
-    sim_date: addDays(S.startDate, S.timerDay - 1),
+    sim_date: data.session.sim_date || addDays(S.startDate, S.timerDay - 1),
     paused: S.paused,
     auto_paused: S.autoPaused,
   });
+  if (typeof checkCharges === 'function') checkCharges().then(() => updateProfit()).catch(() => updateProfit());
+  else updateProfit();
   if (S.paused) {
     document.getElementById('timer-dot')?.classList.add('paused');
     updatePauseBtn();
@@ -10507,6 +10598,7 @@ async function ackCharge(chargeId) {
   // Оновити профіт і таблицю заявок (⚠)
   if (typeof refreshHeader === 'function') try { refreshHeader(); } catch(e){}
   if (typeof redrawApplicationsTable === 'function') try { redrawApplicationsTable(); } catch(e){}
+  if (typeof updateProfit === 'function') updateProfit();
 }
 
 function chargesForLetter(letterId) {
@@ -10701,6 +10793,7 @@ async function simpleNegotiateClient(letterId, amount) {
     if (data.ok) {
       const labelMap = { refused: 'відмовив', partial: 'часткова згода', agreed: 'погоджується' };
       notify(`Замовник: ${labelMap[data.client_decision] || data.client_decision}`, 'info');
+      if (typeof reloadEmailThreads === 'function') await reloadEmailThreads(letterId);
       setTimeout(() => openSimpleModal(letterId), 300);
     } else {
       notify(data.error || 'Помилка', 'err');
